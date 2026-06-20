@@ -348,6 +348,7 @@ use crate::{
     monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_bundle_runtime::State as MoneroL2PqBridgeExitCanonicalUserEscapeSecurityReviewSignoffBundleRuntimeState,
     monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_execution_manifest_runtime::State as MoneroL2PqBridgeExitCanonicalUserEscapeSecurityReviewSignoffExecutionManifestRuntimeState,
     monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime::State as MoneroL2PqBridgeExitCanonicalUserEscapeSecurityReviewReleaseGovernanceGateRuntimeState,
+    monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime::State as MoneroL2PqBridgeExitCanonicalUserEscapeSecurityReviewReleaseHoldUnholdDrillRuntimeState,
     monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime::State as MoneroL2PqBridgeExitCanonicalUserEscapeSecurityReviewSignoffReviewerReceiptGateRuntimeState,
     monero_l2_pq_bridge_exit_monero_lock_reorg_fixture_casebook_runtime::State as MoneroL2PqBridgeExitMoneroLockReorgFixtureCasebookRuntimeState,
     monero_l2_pq_bridge_exit_pq_watcher_quorum_fixture_runtime::State as MoneroL2PqBridgeExitPqWatcherQuorumFixtureRuntimeState,
@@ -3864,6 +3865,8 @@ pub struct DevnetRunner {
         MoneroL2PqBridgeExitCanonicalUserEscapeSecurityReviewSignoffExecutionManifestRuntimeState,
     pub monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime:
         MoneroL2PqBridgeExitCanonicalUserEscapeSecurityReviewReleaseGovernanceGateRuntimeState,
+    pub monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime:
+        MoneroL2PqBridgeExitCanonicalUserEscapeSecurityReviewReleaseHoldUnholdDrillRuntimeState,
     pub monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime:
         MoneroL2PqBridgeExitCanonicalUserEscapeSecurityReviewSignoffReviewerReceiptGateRuntimeState,
     pub monero_l2_pq_bridge_exit_monero_lock_reorg_fixture_casebook_runtime:
@@ -6340,6 +6343,8 @@ impl DevnetRunner {
             crate::monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_execution_manifest_runtime::devnet();
         let monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime =
             crate::monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime::devnet();
+        let monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime =
+            crate::monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime::devnet();
         let monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime =
             crate::monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime::devnet();
         let monero_l2_pq_bridge_exit_monero_lock_reorg_fixture_casebook_runtime =
@@ -7800,6 +7805,7 @@ impl DevnetRunner {
             monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_bundle_runtime,
             monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_execution_manifest_runtime,
             monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime,
+            monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime,
             monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime,
             monero_l2_pq_bridge_exit_monero_lock_reorg_fixture_casebook_runtime,
             monero_l2_pq_bridge_exit_pq_watcher_quorum_fixture_runtime,
@@ -20762,6 +20768,7 @@ impl DevnetRunner {
                 "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_bundle_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_bundle_runtime.state_root(),
                 "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_execution_manifest_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_execution_manifest_runtime.state_root(),
                 "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime.state_root(),
+                "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime.state_root(),
                 "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime.state_root(),
                 "monero_l2_pq_bridge_exit_monero_lock_reorg_fixture_casebook_runtime_state_root": self.monero_l2_pq_bridge_exit_monero_lock_reorg_fixture_casebook_runtime.state_root(),
                 "monero_l2_pq_bridge_exit_pq_watcher_quorum_fixture_runtime_state_root": self.monero_l2_pq_bridge_exit_pq_watcher_quorum_fixture_runtime.state_root(),
@@ -22653,6 +22660,7 @@ impl DevnetRunner {
             "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_bundle_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_bundle_runtime.state_root(),
             "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_execution_manifest_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_execution_manifest_runtime.state_root(),
             "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime.state_root(),
+            "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime.state_root(),
             "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime.state_root(),
             "monero_l2_pq_bridge_exit_monero_lock_reorg_fixture_casebook_runtime_state_root": self.monero_l2_pq_bridge_exit_monero_lock_reorg_fixture_casebook_runtime.state_root(),
             "monero_l2_pq_bridge_exit_pq_watcher_quorum_fixture_runtime_state_root": self.monero_l2_pq_bridge_exit_pq_watcher_quorum_fixture_runtime.state_root(),
@@ -24930,6 +24938,8 @@ impl DevnetRunner {
             "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_execution_manifest_runtime_state": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_execution_manifest_runtime.public_record(),
             "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime.state_root(),
             "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime_state": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_governance_gate_runtime.public_record(),
+            "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime.state_root(),
+            "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime_state": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime.public_record(),
             "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime_state_root": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime.state_root(),
             "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime_state": self.monero_l2_pq_bridge_exit_canonical_user_escape_security_review_signoff_reviewer_receipt_gate_runtime.public_record(),
             "monero_l2_pq_bridge_exit_monero_lock_reorg_fixture_casebook_runtime_state_root": self.monero_l2_pq_bridge_exit_monero_lock_reorg_fixture_casebook_runtime.state_root(),
