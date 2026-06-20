@@ -1,0 +1,1465 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::{
+    hash::{domain_hash, merkle_root, HashPart},
+    CHAIN_ID,
+};
+
+pub type Result<T> = std::result::Result<T, String>;
+pub type PrivateL2PqConfidentialMlDsaExitNullifierSlashingAppealRuntimeResult<T> = Result<T>;
+pub type Runtime = State;
+
+pub const PRIVATE_L2_PQ_CONFIDENTIAL_ML_DSA_EXIT_NULLIFIER_SLASHING_APPEAL_RUNTIME_PROTOCOL_VERSION: &str =
+    "nebula-private-l2-pq-confidential-ml-dsa-exit-nullifier-slashing-appeal-runtime-v1";
+pub const PROTOCOL_VERSION: &str =
+    PRIVATE_L2_PQ_CONFIDENTIAL_ML_DSA_EXIT_NULLIFIER_SLASHING_APPEAL_RUNTIME_PROTOCOL_VERSION;
+pub const SCHEMA_VERSION: u64 = 1;
+pub const HASH_SUITE: &str = "SHAKE256-domain-separated-canonical-json";
+pub const ML_DSA_EXIT_NULLIFIER_SLASHING_SUITE: &str = "ml-dsa-exit-nullifier-slashing-appeal-v1";
+pub const PQ_RECEIPT_COMMITMENT_SUITE: &str = "ml-dsa-pq-confidential-exit-receipt-commitment-v1";
+pub const SLASHING_APPEAL_WINDOW_SUITE: &str = "ml-dsa-exit-nullifier-slashing-appeal-window-v1";
+pub const APPEAL_BOND_SUITE: &str = "ml-dsa-confidential-appeal-bond-escrow-v1";
+pub const LOW_FEE_APPEAL_BATCH_SUITE: &str =
+    "low-fee-ml-dsa-exit-nullifier-slashing-appeal-batch-v1";
+pub const PRIVATE_RECORD_API_SUITE: &str =
+    "privacy-preserving-ml-dsa-slashing-appeal-public-record-state-root-v1";
+pub const DEVNET_HEIGHT: u64 = 8_704_000;
+pub const DEVNET_EPOCH: u64 = 36_240;
+pub const DEVNET_SLOT: u64 = 432;
+pub const DEFAULT_MIN_PQ_SECURITY_BITS: u16 = 256;
+pub const DEFAULT_ML_DSA_MODULE_RANK: u8 = 8;
+pub const DEFAULT_ML_DSA_ETA: u8 = 4;
+pub const DEFAULT_ML_DSA_OMEGA: u16 = 80;
+pub const DEFAULT_ML_DSA_SIGNATURE_BYTES_CAP: u16 = 4_627;
+pub const DEFAULT_NULLIFIER_BUCKETS: u32 = 196_608;
+pub const DEFAULT_APPEAL_WINDOW_SLOTS: u64 = 3_120;
+pub const DEFAULT_EVIDENCE_GRACE_SLOTS: u64 = 640;
+pub const DEFAULT_SETTLEMENT_DELAY_SLOTS: u64 = 1_440;
+pub const DEFAULT_RECEIPT_RETENTION_EPOCHS: u64 = 48;
+pub const DEFAULT_EXIT_BOND_ATOMIC: u64 = 30_000_000_000;
+pub const DEFAULT_APPEAL_BOND_ATOMIC: u64 = 2_100_000_000;
+pub const DEFAULT_SUCCESS_REWARD_BPS: u16 = 1_500;
+pub const DEFAULT_SLASHING_RESTORATION_BPS: u16 = 8_500;
+pub const DEFAULT_LOW_FEE_BATCH_LIMIT: u16 = 1_024;
+pub const DEFAULT_MIN_BATCH_SIZE: u16 = 2;
+pub const DEFAULT_MAX_BATCH_FEE_MICRO_UNITS: u64 = 95;
+pub const DEFAULT_EPOCH_BUCKET_TARGET_EXITS: u64 = 40_960;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitNullifierStatus {
+    Pending,
+    ReceiptCommitted,
+    AppealWindowOpen,
+    Appealed,
+    Restored,
+    Upheld,
+    Finalized,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptStatus {
+    Committed,
+    Windowed,
+    Appealed,
+    Superseded,
+    Finalized,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppealKind {
+    DuplicateExitNullifier,
+    InvalidMlDsaSignatureOpening,
+    MlDsaChallengeDigestMismatch,
+    ReceiptCommitmentMismatch,
+    SlashingSetOmission,
+    AppealStateRootInconsistency,
+    AppealWindowViolation,
+}
+
+impl AppealKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DuplicateExitNullifier => "duplicate_exit_nullifier",
+            Self::InvalidMlDsaSignatureOpening => "invalid_ml_dsa_signature_opening",
+            Self::MlDsaChallengeDigestMismatch => "ml_dsa_challenge_digest_mismatch",
+            Self::ReceiptCommitmentMismatch => "receipt_commitment_mismatch",
+            Self::SlashingSetOmission => "slashing_set_omission",
+            Self::AppealStateRootInconsistency => "appeal_state_root_inconsistency",
+            Self::AppealWindowViolation => "appeal_window_violation",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppealStatus {
+    Submitted,
+    EvidenceAnchored,
+    Accepted,
+    Rejected,
+    Batched,
+    Settled,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchStatus {
+    Collecting,
+    Posted,
+    Settled,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Config {
+    pub chain_id: String,
+    pub network: String,
+    pub protocol_version: String,
+    pub schema_version: u64,
+    pub hash_suite: String,
+    pub ml_dsa_exit_nullifier_slashing_suite: String,
+    pub pq_receipt_commitment_suite: String,
+    pub appeal_window_suite: String,
+    pub appeal_bond_suite: String,
+    pub low_fee_appeal_batch_suite: String,
+    pub private_record_api_suite: String,
+    pub min_pq_security_bits: u16,
+    pub ml_dsa_module_rank: u8,
+    pub ml_dsa_parameter_set: u8,
+    pub ml_dsa_hint_weight: u16,
+    pub ml_dsa_signature_bytes_cap: u16,
+    pub nullifier_buckets: u32,
+    pub appeal_window_slots: u64,
+    pub evidence_grace_slots: u64,
+    pub settlement_delay_slots: u64,
+    pub receipt_retention_epochs: u64,
+    pub exit_bond_atomic: u64,
+    pub appeal_bond_atomic: u64,
+    pub success_reward_bps: u16,
+    pub slashing_restoration_bps: u16,
+    pub low_fee_batch_limit: u16,
+    pub min_batch_size: u16,
+    pub max_batch_fee_micro_units: u64,
+    pub epoch_bucket_target_exits: u64,
+    pub pq_receipt_commitments_required: bool,
+    pub ml_dsa_signature_openings_required: bool,
+    pub appeal_windows_required: bool,
+    pub appeal_bonds_required: bool,
+    pub low_fee_batching_enabled: bool,
+    pub privacy_preserving_public_records_required: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::devnet()
+    }
+}
+
+impl Config {
+    pub fn devnet() -> Self {
+        Self {
+            chain_id: CHAIN_ID.to_string(),
+            network: "nebula-private-l2-devnet".to_string(),
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            schema_version: SCHEMA_VERSION,
+            hash_suite: HASH_SUITE.to_string(),
+            ml_dsa_exit_nullifier_slashing_suite: ML_DSA_EXIT_NULLIFIER_SLASHING_SUITE.to_string(),
+            pq_receipt_commitment_suite: PQ_RECEIPT_COMMITMENT_SUITE.to_string(),
+            appeal_window_suite: SLASHING_APPEAL_WINDOW_SUITE.to_string(),
+            appeal_bond_suite: APPEAL_BOND_SUITE.to_string(),
+            low_fee_appeal_batch_suite: LOW_FEE_APPEAL_BATCH_SUITE.to_string(),
+            private_record_api_suite: PRIVATE_RECORD_API_SUITE.to_string(),
+            min_pq_security_bits: DEFAULT_MIN_PQ_SECURITY_BITS,
+            ml_dsa_module_rank: DEFAULT_ML_DSA_MODULE_RANK,
+            ml_dsa_parameter_set: DEFAULT_ML_DSA_ETA,
+            ml_dsa_hint_weight: DEFAULT_ML_DSA_OMEGA,
+            ml_dsa_signature_bytes_cap: DEFAULT_ML_DSA_SIGNATURE_BYTES_CAP,
+            nullifier_buckets: DEFAULT_NULLIFIER_BUCKETS,
+            appeal_window_slots: DEFAULT_APPEAL_WINDOW_SLOTS,
+            evidence_grace_slots: DEFAULT_EVIDENCE_GRACE_SLOTS,
+            settlement_delay_slots: DEFAULT_SETTLEMENT_DELAY_SLOTS,
+            receipt_retention_epochs: DEFAULT_RECEIPT_RETENTION_EPOCHS,
+            exit_bond_atomic: DEFAULT_EXIT_BOND_ATOMIC,
+            appeal_bond_atomic: DEFAULT_APPEAL_BOND_ATOMIC,
+            success_reward_bps: DEFAULT_SUCCESS_REWARD_BPS,
+            slashing_restoration_bps: DEFAULT_SLASHING_RESTORATION_BPS,
+            low_fee_batch_limit: DEFAULT_LOW_FEE_BATCH_LIMIT,
+            min_batch_size: DEFAULT_MIN_BATCH_SIZE,
+            max_batch_fee_micro_units: DEFAULT_MAX_BATCH_FEE_MICRO_UNITS,
+            epoch_bucket_target_exits: DEFAULT_EPOCH_BUCKET_TARGET_EXITS,
+            pq_receipt_commitments_required: true,
+            ml_dsa_signature_openings_required: true,
+            appeal_windows_required: true,
+            appeal_bonds_required: true,
+            low_fee_batching_enabled: true,
+            privacy_preserving_public_records_required: true,
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.min_pq_security_bits < DEFAULT_MIN_PQ_SECURITY_BITS {
+            return Err("pq security bits below ml-dsa appeal minimum".to_string());
+        }
+        if self.ml_dsa_module_rank < 4 || self.ml_dsa_parameter_set == 0 {
+            return Err("invalid ml-dsa module-lattice parameter schedule".to_string());
+        }
+        if self.ml_dsa_hint_weight == 0 || self.ml_dsa_signature_bytes_cap < 2_400 {
+            return Err("invalid ml-dsa hint or signature policy".to_string());
+        }
+        if self.nullifier_buckets == 0 || self.epoch_bucket_target_exits == 0 {
+            return Err("nullifier buckets and epoch target exits must be positive".to_string());
+        }
+        if self.appeal_window_slots == 0
+            || self.evidence_grace_slots == 0
+            || self.settlement_delay_slots == 0
+        {
+            return Err("ml-dsa appeal windows must be positive".to_string());
+        }
+        if self.evidence_grace_slots > self.appeal_window_slots {
+            return Err("evidence grace cannot exceed appeal window".to_string());
+        }
+        if self.exit_bond_atomic == 0 || self.appeal_bond_atomic == 0 {
+            return Err("ml-dsa appeal bonds must be positive".to_string());
+        }
+        if self.appeal_bond_atomic >= self.exit_bond_atomic {
+            return Err("appeal bond must be smaller than exit bond".to_string());
+        }
+        if u32::from(self.success_reward_bps) + u32::from(self.slashing_restoration_bps) != 10_000 {
+            return Err("ml-dsa appeal restoration basis points must sum to 10000".to_string());
+        }
+        if self.low_fee_batch_limit == 0
+            || self.min_batch_size == 0
+            || self.min_batch_size > self.low_fee_batch_limit
+            || self.max_batch_fee_micro_units == 0
+        {
+            return Err("invalid low-fee ml-dsa appeal batching policy".to_string());
+        }
+        if !self.pq_receipt_commitments_required
+            || !self.ml_dsa_signature_openings_required
+            || !self.appeal_windows_required
+            || !self.appeal_bonds_required
+            || !self.privacy_preserving_public_records_required
+        {
+            return Err(
+                "ml-dsa privacy, receipt, window, and bond gates are mandatory".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Counters {
+    pub exit_nullifier_entries: u64,
+    pub pq_receipt_commitments: u64,
+    pub appeal_windows: u64,
+    pub ml_dsa_appeals: u64,
+    pub appeal_evidence: u64,
+    pub low_fee_appeal_batches: u64,
+    pub pending_nullifiers: u64,
+    pub appealed_nullifiers: u64,
+    pub restored_nullifiers: u64,
+    pub upheld_nullifiers: u64,
+    pub finalized_nullifiers: u64,
+    pub total_exit_bond_atomic: u64,
+    pub total_appeal_bond_atomic: u64,
+    pub total_reward_atomic: u64,
+    pub total_batch_fee_micro_units: u64,
+    pub total_batched_appeals: u64,
+}
+
+impl Counters {}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Roots {
+    pub exit_nullifier_entry_root: String,
+    pub pq_receipt_commitment_root: String,
+    pub appeal_window_root: String,
+    pub ml_dsa_appeal_root: String,
+    pub appeal_evidence_root: String,
+    pub low_fee_appeal_batch_root: String,
+    pub private_accounting_root: String,
+    pub public_record_root: String,
+    pub state_root: String,
+}
+
+impl Roots {}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExitNullifierEntryInput {
+    pub account_commitment: String,
+    pub exit_nullifier: String,
+    pub ml_dsa_public_root: String,
+    pub nullifier_bucket_root: String,
+    pub encrypted_destination_root: String,
+    pub nullifier_bucket: u32,
+    pub epoch: u64,
+    pub requested_slot: u64,
+    pub exit_bond_atomic: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PqReceiptCommitmentInput {
+    pub exit_entry_id: String,
+    pub receipt_commitment_root: String,
+    pub ml_dsa_signature_commitment_root: String,
+    pub encrypted_receipt_payload_root: String,
+    pub receipt_nullifier: String,
+    pub observed_state_root: String,
+    pub committed_slot: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AppealWindowInput {
+    pub exit_entry_id: String,
+    pub receipt_id: String,
+    pub nullifier_bucket: u32,
+    pub nullifier_set_root: String,
+    pub pq_receipt_set_root: String,
+    pub state_root: String,
+    pub opened_slot: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MlDsaAppealInput {
+    pub window_id: String,
+    pub appellant_commitment: String,
+    pub appeal_kind: AppealKind,
+    pub ml_dsa_parameter: u8,
+    pub coefficient_vector_index: u64,
+    pub appealed_nullifier_commitment: String,
+    pub evidence_commitment_root: String,
+    pub appeal_bond_atomic: u64,
+    pub opened_slot: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AppealEvidenceInput {
+    pub appeal_id: String,
+    pub ml_dsa_signature_opening_root: String,
+    pub challenge_digest_root: String,
+    pub signature_transcript_root: String,
+    pub nullifier_membership_witness_root: String,
+    pub receipt_opening_root: String,
+    pub state_transition_witness_root: String,
+    pub accepted: bool,
+    pub anchored_slot: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LowFeeAppealBatchInput {
+    pub sequencer_commitment: String,
+    pub appeal_ids: BTreeSet<String>,
+    pub aggregation_root: String,
+    pub fee_sponsor_commitment: String,
+    pub batch_fee_micro_units: u64,
+    pub posted_slot: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExitNullifierEntry {
+    pub exit_entry_id: String,
+    pub account_commitment: String,
+    pub exit_nullifier: String,
+    pub ml_dsa_public_root: String,
+    pub nullifier_bucket_root: String,
+    pub encrypted_destination_root: String,
+    pub nullifier_bucket: u32,
+    pub epoch: u64,
+    pub requested_slot: u64,
+    pub appeal_open_slot: u64,
+    pub appeal_close_slot: u64,
+    pub finality_slot: u64,
+    pub exit_bond_atomic: u64,
+    pub reward_locked_atomic: u64,
+    pub status: ExitNullifierStatus,
+}
+
+impl ExitNullifierEntry {
+    pub fn from_input(config: &Config, input: ExitNullifierEntryInput) -> Result<Self> {
+        require_non_empty(&[
+            (&input.account_commitment, "account commitment"),
+            (&input.exit_nullifier, "exit nullifier"),
+            (&input.ml_dsa_public_root, "ml-dsa public root"),
+            (&input.nullifier_bucket_root, "nullifier bucket root"),
+            (
+                &input.encrypted_destination_root,
+                "encrypted destination root",
+            ),
+        ])?;
+        if input.nullifier_bucket >= config.nullifier_buckets {
+            return Err("nullifier bucket exceeds configured bucket count".to_string());
+        }
+        if input.exit_bond_atomic < config.appeal_bond_atomic
+            || input.exit_bond_atomic > config.exit_bond_atomic
+        {
+            return Err("exit bond amount outside ml-dsa appeal policy".to_string());
+        }
+        let exit_entry_id = deterministic_id(
+            "exit-nullifier-entry",
+            &[
+                HashPart::Str(&input.account_commitment),
+                HashPart::Str(&input.exit_nullifier),
+                HashPart::Str(&input.ml_dsa_public_root),
+                HashPart::U64(u64::from(input.nullifier_bucket)),
+                HashPart::U64(input.epoch),
+                HashPart::U64(input.requested_slot),
+            ],
+        );
+        let appeal_open_slot = input.requested_slot;
+        let appeal_close_slot = appeal_open_slot + config.appeal_window_slots;
+        Ok(Self {
+            exit_entry_id,
+            account_commitment: input.account_commitment,
+            exit_nullifier: input.exit_nullifier,
+            ml_dsa_public_root: input.ml_dsa_public_root,
+            nullifier_bucket_root: input.nullifier_bucket_root,
+            encrypted_destination_root: input.encrypted_destination_root,
+            nullifier_bucket: input.nullifier_bucket,
+            epoch: input.epoch,
+            requested_slot: input.requested_slot,
+            appeal_open_slot,
+            appeal_close_slot,
+            finality_slot: appeal_close_slot + config.settlement_delay_slots,
+            exit_bond_atomic: input.exit_bond_atomic,
+            reward_locked_atomic: 0,
+            status: ExitNullifierStatus::Pending,
+        })
+    }
+
+    pub fn public_record(&self) -> Value {
+        json!(self)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PqReceiptCommitment {
+    pub receipt_id: String,
+    pub exit_entry_id: String,
+    pub receipt_commitment_root: String,
+    pub ml_dsa_signature_commitment_root: String,
+    pub encrypted_receipt_payload_root: String,
+    pub receipt_nullifier: String,
+    pub observed_state_root: String,
+    pub receipt_state_root: String,
+    pub committed_slot: u64,
+    pub retained_until_epoch: u64,
+    pub pq_security_bits: u16,
+    pub status: ReceiptStatus,
+}
+
+impl PqReceiptCommitment {
+    pub fn from_input(
+        config: &Config,
+        epoch: u64,
+        input: PqReceiptCommitmentInput,
+    ) -> Result<Self> {
+        require_non_empty(&[
+            (&input.exit_entry_id, "exit entry id"),
+            (&input.receipt_commitment_root, "receipt commitment root"),
+            (
+                &input.ml_dsa_signature_commitment_root,
+                "ml-dsa signature commitment root",
+            ),
+            (
+                &input.encrypted_receipt_payload_root,
+                "encrypted receipt payload root",
+            ),
+            (&input.receipt_nullifier, "receipt nullifier"),
+            (&input.observed_state_root, "observed state root"),
+        ])?;
+        let receipt_id = deterministic_id(
+            "pq-receipt-commitment",
+            &[
+                HashPart::Str(&input.exit_entry_id),
+                HashPart::Str(&input.receipt_commitment_root),
+                HashPart::Str(&input.ml_dsa_signature_commitment_root),
+                HashPart::Str(&input.receipt_nullifier),
+                HashPart::U64(input.committed_slot),
+            ],
+        );
+        let receipt_state_root = value_root(
+            "pq-receipt-state",
+            &json!({
+                "receipt_id": receipt_id,
+                "receipt_commitment_root": input.receipt_commitment_root,
+                "ml_dsa_signature_commitment_root": input.ml_dsa_signature_commitment_root,
+                "encrypted_receipt_payload_root": input.encrypted_receipt_payload_root,
+                "observed_state_root": input.observed_state_root,
+            }),
+        );
+        Ok(Self {
+            receipt_id,
+            exit_entry_id: input.exit_entry_id,
+            receipt_commitment_root: input.receipt_commitment_root,
+            ml_dsa_signature_commitment_root: input.ml_dsa_signature_commitment_root,
+            encrypted_receipt_payload_root: input.encrypted_receipt_payload_root,
+            receipt_nullifier: input.receipt_nullifier,
+            observed_state_root: input.observed_state_root,
+            receipt_state_root,
+            committed_slot: input.committed_slot,
+            retained_until_epoch: epoch + config.receipt_retention_epochs,
+            pq_security_bits: config.min_pq_security_bits,
+            status: ReceiptStatus::Committed,
+        })
+    }
+
+    pub fn public_record(&self) -> Value {
+        json!(self)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AppealWindow {
+    pub window_id: String,
+    pub exit_entry_id: String,
+    pub receipt_id: String,
+    pub nullifier_bucket: u32,
+    pub nullifier_set_root: String,
+    pub pq_receipt_set_root: String,
+    pub state_root: String,
+    pub window_open_slot: u64,
+    pub window_close_slot: u64,
+    pub evidence_deadline_slot: u64,
+    pub settlement_slot: u64,
+    pub status: ExitNullifierStatus,
+}
+
+impl AppealWindow {
+    pub fn from_input(config: &Config, input: AppealWindowInput) -> Result<Self> {
+        require_non_empty(&[
+            (&input.exit_entry_id, "exit entry id"),
+            (&input.receipt_id, "receipt id"),
+            (&input.nullifier_set_root, "nullifier set root"),
+            (&input.pq_receipt_set_root, "pq receipt set root"),
+            (&input.state_root, "state root"),
+        ])?;
+        if input.nullifier_bucket >= config.nullifier_buckets {
+            return Err("nullifier bucket exceeds configured bucket count".to_string());
+        }
+        let window_id = deterministic_id(
+            "appeal-window",
+            &[
+                HashPart::Str(&input.exit_entry_id),
+                HashPart::Str(&input.receipt_id),
+                HashPart::U64(u64::from(input.nullifier_bucket)),
+                HashPart::Str(&input.nullifier_set_root),
+                HashPart::Str(&input.pq_receipt_set_root),
+            ],
+        );
+        let window_close_slot = input.opened_slot + config.appeal_window_slots;
+        Ok(Self {
+            window_id,
+            exit_entry_id: input.exit_entry_id,
+            receipt_id: input.receipt_id,
+            nullifier_bucket: input.nullifier_bucket,
+            nullifier_set_root: input.nullifier_set_root,
+            pq_receipt_set_root: input.pq_receipt_set_root,
+            state_root: input.state_root,
+            window_open_slot: input.opened_slot,
+            window_close_slot,
+            evidence_deadline_slot: window_close_slot + config.evidence_grace_slots,
+            settlement_slot: window_close_slot + config.settlement_delay_slots,
+            status: ExitNullifierStatus::AppealWindowOpen,
+        })
+    }
+
+    pub fn public_record(&self) -> Value {
+        json!(self)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MlDsaAppeal {
+    pub appeal_id: String,
+    pub window_id: String,
+    pub exit_entry_id: String,
+    pub receipt_id: String,
+    pub appellant_commitment: String,
+    pub appeal_kind: AppealKind,
+    pub ml_dsa_parameter: u8,
+    pub coefficient_vector_index: u64,
+    pub appealed_nullifier_commitment: String,
+    pub evidence_commitment_root: String,
+    pub appeal_bond_atomic: u64,
+    pub reward_atomic: u64,
+    pub opened_slot: u64,
+    pub batch_id: Option<String>,
+    pub status: AppealStatus,
+}
+
+impl MlDsaAppeal {
+    pub fn from_input(
+        config: &Config,
+        windows: &BTreeMap<String, AppealWindow>,
+        input: MlDsaAppealInput,
+    ) -> Result<Self> {
+        require_non_empty(&[
+            (&input.window_id, "window id"),
+            (&input.appellant_commitment, "appellant commitment"),
+            (
+                &input.appealed_nullifier_commitment,
+                "appealed nullifier commitment",
+            ),
+            (&input.evidence_commitment_root, "evidence commitment root"),
+        ])?;
+        if input.ml_dsa_parameter >= config.ml_dsa_parameter_set {
+            return Err("ml-dsa layer exceeds configured layer count".to_string());
+        }
+        if input.appeal_bond_atomic < config.appeal_bond_atomic {
+            return Err("appeal bond below configured minimum".to_string());
+        }
+        let window = windows
+            .get(&input.window_id)
+            .ok_or_else(|| "unknown ml-dsa appeal window".to_string())?;
+        if input.opened_slot < window.window_open_slot
+            || input.opened_slot > window.window_close_slot
+        {
+            return Err("ml-dsa appeal opened outside appeal window".to_string());
+        }
+        let appeal_id = deterministic_id(
+            "ml-dsa-appeal",
+            &[
+                HashPart::Str(&input.window_id),
+                HashPart::Str(&input.appellant_commitment),
+                HashPart::Str(input.appeal_kind.as_str()),
+                HashPart::U64(u64::from(input.ml_dsa_parameter)),
+                HashPart::U64(input.coefficient_vector_index),
+                HashPart::Str(&input.appealed_nullifier_commitment),
+                HashPart::U64(input.opened_slot),
+            ],
+        );
+        let reward_atomic =
+            input.appeal_bond_atomic * u64::from(config.success_reward_bps) / 10_000;
+        Ok(Self {
+            appeal_id,
+            window_id: input.window_id,
+            exit_entry_id: window.exit_entry_id.clone(),
+            receipt_id: window.receipt_id.clone(),
+            appellant_commitment: input.appellant_commitment,
+            appeal_kind: input.appeal_kind,
+            ml_dsa_parameter: input.ml_dsa_parameter,
+            coefficient_vector_index: input.coefficient_vector_index,
+            appealed_nullifier_commitment: input.appealed_nullifier_commitment,
+            evidence_commitment_root: input.evidence_commitment_root,
+            appeal_bond_atomic: input.appeal_bond_atomic,
+            reward_atomic,
+            opened_slot: input.opened_slot,
+            batch_id: None,
+            status: AppealStatus::Submitted,
+        })
+    }
+
+    pub fn public_record(&self) -> Value {
+        json!(self)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AppealEvidence {
+    pub evidence_id: String,
+    pub appeal_id: String,
+    pub ml_dsa_signature_opening_root: String,
+    pub challenge_digest_root: String,
+    pub signature_transcript_root: String,
+    pub nullifier_membership_witness_root: String,
+    pub receipt_opening_root: String,
+    pub state_transition_witness_root: String,
+    pub accepted: bool,
+    pub anchored_slot: u64,
+    pub evidence_state_root: String,
+}
+
+impl AppealEvidence {
+    pub fn from_input(
+        windows: &BTreeMap<String, AppealWindow>,
+        appeals: &BTreeMap<String, MlDsaAppeal>,
+        input: AppealEvidenceInput,
+    ) -> Result<Self> {
+        require_non_empty(&[
+            (&input.appeal_id, "appeal id"),
+            (
+                &input.ml_dsa_signature_opening_root,
+                "ml-dsa signature opening root",
+            ),
+            (&input.challenge_digest_root, "challenge digest root"),
+            (
+                &input.signature_transcript_root,
+                "signature transcript root",
+            ),
+            (
+                &input.nullifier_membership_witness_root,
+                "nullifier membership witness root",
+            ),
+            (&input.receipt_opening_root, "receipt opening root"),
+            (
+                &input.state_transition_witness_root,
+                "state transition witness root",
+            ),
+        ])?;
+        let appeal = appeals
+            .get(&input.appeal_id)
+            .ok_or_else(|| "unknown ml-dsa appeal".to_string())?;
+        let window = windows
+            .get(&appeal.window_id)
+            .ok_or_else(|| "ml-dsa appeal lost window reference".to_string())?;
+        if input.anchored_slot > window.evidence_deadline_slot {
+            return Err("ml-dsa appeal evidence anchored after deadline".to_string());
+        }
+        let evidence_id = deterministic_id(
+            "appeal-evidence",
+            &[
+                HashPart::Str(&input.appeal_id),
+                HashPart::Str(&input.ml_dsa_signature_opening_root),
+                HashPart::Str(&input.challenge_digest_root),
+                HashPart::Str(&input.receipt_opening_root),
+                HashPart::U64(input.anchored_slot),
+            ],
+        );
+        let evidence_state_root = value_root(
+            "appeal-evidence-state",
+            &json!({
+                "evidence_id": evidence_id,
+                "appeal_id": input.appeal_id,
+                "ml_dsa_signature_opening_root": input.ml_dsa_signature_opening_root,
+                "challenge_digest_root": input.challenge_digest_root,
+                "signature_transcript_root": input.signature_transcript_root,
+                "nullifier_membership_witness_root": input.nullifier_membership_witness_root,
+                "receipt_opening_root": input.receipt_opening_root,
+                "state_transition_witness_root": input.state_transition_witness_root,
+                "accepted": input.accepted,
+            }),
+        );
+        Ok(Self {
+            evidence_id,
+            appeal_id: input.appeal_id,
+            ml_dsa_signature_opening_root: input.ml_dsa_signature_opening_root,
+            challenge_digest_root: input.challenge_digest_root,
+            signature_transcript_root: input.signature_transcript_root,
+            nullifier_membership_witness_root: input.nullifier_membership_witness_root,
+            receipt_opening_root: input.receipt_opening_root,
+            state_transition_witness_root: input.state_transition_witness_root,
+            accepted: input.accepted,
+            anchored_slot: input.anchored_slot,
+            evidence_state_root,
+        })
+    }
+
+    pub fn public_record(&self) -> Value {
+        json!(self)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LowFeeAppealBatch {
+    pub batch_id: String,
+    pub sequencer_commitment: String,
+    pub appeal_ids: BTreeSet<String>,
+    pub aggregation_root: String,
+    pub fee_sponsor_commitment: String,
+    pub batch_fee_micro_units: u64,
+    pub posted_slot: u64,
+    pub appeal_count: u16,
+    pub status: BatchStatus,
+}
+
+impl LowFeeAppealBatch {
+    pub fn from_input(
+        config: &Config,
+        appeals: &BTreeMap<String, MlDsaAppeal>,
+        input: LowFeeAppealBatchInput,
+    ) -> Result<Self> {
+        require_non_empty(&[
+            (&input.sequencer_commitment, "sequencer commitment"),
+            (&input.aggregation_root, "aggregation root"),
+            (&input.fee_sponsor_commitment, "fee sponsor commitment"),
+        ])?;
+        let appeal_count = input.appeal_ids.len();
+        if appeal_count < usize::from(config.min_batch_size)
+            || appeal_count > usize::from(config.low_fee_batch_limit)
+        {
+            return Err("ml-dsa appeal batch size outside configured policy".to_string());
+        }
+        if input.batch_fee_micro_units > config.max_batch_fee_micro_units {
+            return Err("ml-dsa appeal batch fee exceeds low-fee cap".to_string());
+        }
+        for appeal_id in &input.appeal_ids {
+            let appeal = appeals
+                .get(appeal_id)
+                .ok_or_else(|| "unknown appeal in low-fee batch".to_string())?;
+            if !matches!(appeal.status, AppealStatus::Accepted) {
+                return Err("only accepted appeals can enter low-fee batch".to_string());
+            }
+        }
+        let batch_id = deterministic_id(
+            "low-fee-appeal-batch",
+            &[
+                HashPart::Str(&input.sequencer_commitment),
+                HashPart::Str(&input.aggregation_root),
+                HashPart::Str(&input.fee_sponsor_commitment),
+                HashPart::U64(appeal_count as u64),
+                HashPart::U64(input.posted_slot),
+            ],
+        );
+        Ok(Self {
+            batch_id,
+            sequencer_commitment: input.sequencer_commitment,
+            appeal_ids: input.appeal_ids,
+            aggregation_root: input.aggregation_root,
+            fee_sponsor_commitment: input.fee_sponsor_commitment,
+            batch_fee_micro_units: input.batch_fee_micro_units,
+            posted_slot: input.posted_slot,
+            appeal_count: appeal_count as u16,
+            status: BatchStatus::Posted,
+        })
+    }
+
+    pub fn public_record(&self) -> Value {
+        json!(self)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct State {
+    pub config: Config,
+    pub height: u64,
+    pub epoch: u64,
+    pub slot: u64,
+    pub counters: Counters,
+    pub roots: Roots,
+    pub exit_nullifier_entries: BTreeMap<String, ExitNullifierEntry>,
+    pub pq_receipt_commitments: BTreeMap<String, PqReceiptCommitment>,
+    pub appeal_windows: BTreeMap<String, AppealWindow>,
+    pub ml_dsa_appeals: BTreeMap<String, MlDsaAppeal>,
+    pub appeal_evidence: BTreeMap<String, AppealEvidence>,
+    pub low_fee_appeal_batches: BTreeMap<String, LowFeeAppealBatch>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self::devnet()
+    }
+}
+
+impl State {
+    pub fn devnet() -> Self {
+        let mut state = Self::empty_devnet();
+        state.seed_devnet();
+        state
+    }
+
+    pub fn with_config(config: Config, height: u64, epoch: u64, slot: u64) -> Result<Self> {
+        config.validate()?;
+        let mut state = Self {
+            config,
+            height,
+            epoch,
+            slot,
+            counters: Counters::default(),
+            roots: Roots::default(),
+            exit_nullifier_entries: BTreeMap::new(),
+            pq_receipt_commitments: BTreeMap::new(),
+            appeal_windows: BTreeMap::new(),
+            ml_dsa_appeals: BTreeMap::new(),
+            appeal_evidence: BTreeMap::new(),
+            low_fee_appeal_batches: BTreeMap::new(),
+        };
+        state.refresh();
+        Ok(state)
+    }
+
+    pub fn register_exit_nullifier_entry(
+        &mut self,
+        input: ExitNullifierEntryInput,
+    ) -> Result<String> {
+        let entry = ExitNullifierEntry::from_input(&self.config, input)?;
+        if self
+            .exit_nullifier_entries
+            .contains_key(&entry.exit_entry_id)
+        {
+            return Err("ml-dsa exit nullifier entry already exists".to_string());
+        }
+        let entry_id = entry.exit_entry_id.clone();
+        self.exit_nullifier_entries.insert(entry_id.clone(), entry);
+        self.refresh();
+        Ok(entry_id)
+    }
+
+    pub fn commit_pq_receipt(&mut self, input: PqReceiptCommitmentInput) -> Result<String> {
+        let receipt = PqReceiptCommitment::from_input(&self.config, self.epoch, input)?;
+        if self
+            .pq_receipt_commitments
+            .contains_key(&receipt.receipt_id)
+        {
+            return Err("ml-dsa pq receipt commitment already exists".to_string());
+        }
+        let entry = self
+            .exit_nullifier_entries
+            .get_mut(&receipt.exit_entry_id)
+            .ok_or_else(|| "unknown exit nullifier entry for pq receipt".to_string())?;
+        entry.status = ExitNullifierStatus::ReceiptCommitted;
+        let receipt_id = receipt.receipt_id.clone();
+        self.pq_receipt_commitments
+            .insert(receipt_id.clone(), receipt);
+        self.refresh();
+        Ok(receipt_id)
+    }
+
+    pub fn open_appeal_window(&mut self, input: AppealWindowInput) -> Result<String> {
+        let window = AppealWindow::from_input(&self.config, input)?;
+        if self.appeal_windows.contains_key(&window.window_id) {
+            return Err("ml-dsa appeal window already exists".to_string());
+        }
+        let entry = self
+            .exit_nullifier_entries
+            .get_mut(&window.exit_entry_id)
+            .ok_or_else(|| "unknown exit nullifier entry for appeal window".to_string())?;
+        let receipt = self
+            .pq_receipt_commitments
+            .get_mut(&window.receipt_id)
+            .ok_or_else(|| "unknown pq receipt for appeal window".to_string())?;
+        if receipt.exit_entry_id != window.exit_entry_id {
+            return Err("pq receipt does not belong to exit nullifier entry".to_string());
+        }
+        if entry.nullifier_bucket != window.nullifier_bucket {
+            return Err("appeal window bucket does not match exit entry".to_string());
+        }
+        entry.status = ExitNullifierStatus::AppealWindowOpen;
+        receipt.status = ReceiptStatus::Windowed;
+        let window_id = window.window_id.clone();
+        self.appeal_windows.insert(window_id.clone(), window);
+        self.refresh();
+        Ok(window_id)
+    }
+
+    pub fn submit_ml_dsa_appeal(&mut self, input: MlDsaAppealInput) -> Result<String> {
+        let appeal = MlDsaAppeal::from_input(&self.config, &self.appeal_windows, input)?;
+        if self.ml_dsa_appeals.contains_key(&appeal.appeal_id) {
+            return Err("ml-dsa appeal already exists".to_string());
+        }
+        if let Some(entry) = self.exit_nullifier_entries.get_mut(&appeal.exit_entry_id) {
+            entry.status = ExitNullifierStatus::Appealed;
+            entry.reward_locked_atomic = entry
+                .reward_locked_atomic
+                .saturating_add(appeal.reward_atomic);
+        }
+        if let Some(receipt) = self.pq_receipt_commitments.get_mut(&appeal.receipt_id) {
+            receipt.status = ReceiptStatus::Appealed;
+        }
+        if let Some(window) = self.appeal_windows.get_mut(&appeal.window_id) {
+            window.status = ExitNullifierStatus::Appealed;
+        }
+        let appeal_id = appeal.appeal_id.clone();
+        self.ml_dsa_appeals.insert(appeal_id.clone(), appeal);
+        self.refresh();
+        Ok(appeal_id)
+    }
+
+    pub fn anchor_appeal_evidence(&mut self, input: AppealEvidenceInput) -> Result<String> {
+        let evidence =
+            AppealEvidence::from_input(&self.appeal_windows, &self.ml_dsa_appeals, input)?;
+        if self.appeal_evidence.contains_key(&evidence.evidence_id) {
+            return Err("ml-dsa appeal evidence already exists".to_string());
+        }
+        {
+            let appeal = self
+                .ml_dsa_appeals
+                .get_mut(&evidence.appeal_id)
+                .ok_or_else(|| "unknown ml-dsa appeal for evidence".to_string())?;
+            appeal.status = if evidence.accepted {
+                AppealStatus::Accepted
+            } else {
+                AppealStatus::Rejected
+            };
+        }
+        let appeal = self
+            .ml_dsa_appeals
+            .get(&evidence.appeal_id)
+            .ok_or_else(|| "ml-dsa evidence lost appeal reference".to_string())?;
+        if evidence.accepted {
+            if let Some(entry) = self.exit_nullifier_entries.get_mut(&appeal.exit_entry_id) {
+                entry.status = ExitNullifierStatus::Restored;
+            }
+            if let Some(receipt) = self.pq_receipt_commitments.get_mut(&appeal.receipt_id) {
+                receipt.status = ReceiptStatus::Superseded;
+            }
+            if let Some(window) = self.appeal_windows.get_mut(&appeal.window_id) {
+                window.status = ExitNullifierStatus::Restored;
+            }
+        } else if let Some(entry) = self.exit_nullifier_entries.get_mut(&appeal.exit_entry_id) {
+            entry.status = ExitNullifierStatus::Upheld;
+        }
+        let evidence_id = evidence.evidence_id.clone();
+        self.appeal_evidence.insert(evidence_id.clone(), evidence);
+        self.refresh();
+        Ok(evidence_id)
+    }
+
+    pub fn post_low_fee_appeal_batch(&mut self, input: LowFeeAppealBatchInput) -> Result<String> {
+        let batch = LowFeeAppealBatch::from_input(&self.config, &self.ml_dsa_appeals, input)?;
+        if self.low_fee_appeal_batches.contains_key(&batch.batch_id) {
+            return Err("low-fee ml-dsa appeal batch already exists".to_string());
+        }
+        for appeal_id in &batch.appeal_ids {
+            if let Some(appeal) = self.ml_dsa_appeals.get_mut(appeal_id) {
+                appeal.status = AppealStatus::Batched;
+                appeal.batch_id = Some(batch.batch_id.clone());
+            }
+        }
+        let batch_id = batch.batch_id.clone();
+        self.low_fee_appeal_batches.insert(batch_id.clone(), batch);
+        self.refresh();
+        Ok(batch_id)
+    }
+
+    pub fn settle_low_fee_appeal_batch(&mut self, batch_id: &str) -> Result<()> {
+        let batch = self
+            .low_fee_appeal_batches
+            .get_mut(batch_id)
+            .ok_or_else(|| "unknown low-fee ml-dsa appeal batch".to_string())?;
+        batch.status = BatchStatus::Settled;
+        for appeal_id in &batch.appeal_ids {
+            if let Some(appeal) = self.ml_dsa_appeals.get_mut(appeal_id) {
+                appeal.status = AppealStatus::Settled;
+                if let Some(entry) = self.exit_nullifier_entries.get_mut(&appeal.exit_entry_id) {
+                    if entry.status == ExitNullifierStatus::Restored {
+                        entry.reward_locked_atomic = entry
+                            .reward_locked_atomic
+                            .saturating_sub(appeal.reward_atomic);
+                    }
+                }
+            }
+        }
+        self.refresh();
+        Ok(())
+    }
+
+    pub fn finalize_appeal_window(&mut self, window_id: &str, finalized_slot: u64) -> Result<()> {
+        let window = self
+            .appeal_windows
+            .get_mut(window_id)
+            .ok_or_else(|| "unknown ml-dsa appeal window".to_string())?;
+        if finalized_slot < window.settlement_slot {
+            return Err("ml-dsa appeal window cannot finalize before settlement".to_string());
+        }
+        let has_accepted_appeal = self.ml_dsa_appeals.values().any(|appeal| {
+            appeal.window_id == window.window_id
+                && matches!(
+                    appeal.status,
+                    AppealStatus::Accepted | AppealStatus::Batched | AppealStatus::Settled
+                )
+        });
+        if has_accepted_appeal {
+            return Err("ml-dsa appeal window has accepted appeal".to_string());
+        }
+        window.status = ExitNullifierStatus::Finalized;
+        if let Some(entry) = self.exit_nullifier_entries.get_mut(&window.exit_entry_id) {
+            entry.status = ExitNullifierStatus::Finalized;
+        }
+        if let Some(receipt) = self.pq_receipt_commitments.get_mut(&window.receipt_id) {
+            receipt.status = ReceiptStatus::Finalized;
+        }
+        self.refresh();
+        Ok(())
+    }
+
+    pub fn public_record(&self) -> Value {
+        public_record(self)
+    }
+
+    pub fn state_root(&self) -> String {
+        self.roots.state_root.clone()
+    }
+
+    fn seed_devnet(&mut self) {
+        let mut appeal_ids = BTreeSet::new();
+        for index in 0_u64..8 {
+            let exit_entry_id = self
+                .register_exit_nullifier_entry(ExitNullifierEntryInput {
+                    account_commitment: sample_root("account-commitment", index),
+                    exit_nullifier: sample_root("exit-nullifier", index),
+                    ml_dsa_public_root: sample_root("ml-dsa-public-root", index),
+                    nullifier_bucket_root: sample_root("nullifier-bucket-root", index),
+                    encrypted_destination_root: sample_root("encrypted-destination", index),
+                    nullifier_bucket: (index as u32) % self.config.nullifier_buckets,
+                    epoch: self.epoch,
+                    requested_slot: self.slot + index * 8,
+                    exit_bond_atomic: self.config.exit_bond_atomic,
+                })
+                .expect("devnet ml-dsa exit nullifier entry must register");
+            let receipt_id = self
+                .commit_pq_receipt(PqReceiptCommitmentInput {
+                    exit_entry_id: exit_entry_id.clone(),
+                    receipt_commitment_root: sample_root("pq-receipt-commitment", index),
+                    ml_dsa_signature_commitment_root: sample_root(
+                        "ml-dsa-signature-commitment",
+                        index,
+                    ),
+                    encrypted_receipt_payload_root: sample_root("encrypted-receipt", index),
+                    receipt_nullifier: sample_root("receipt-nullifier", index),
+                    observed_state_root: sample_root("observed-state-root", index),
+                    committed_slot: self.slot + index * 8 + 1,
+                })
+                .expect("devnet ml-dsa pq receipt must commit");
+            let window_id = self
+                .open_appeal_window(AppealWindowInput {
+                    exit_entry_id: exit_entry_id.clone(),
+                    receipt_id: receipt_id.clone(),
+                    nullifier_bucket: (index as u32) % self.config.nullifier_buckets,
+                    nullifier_set_root: sample_root("nullifier-set-root", index),
+                    pq_receipt_set_root: sample_root("pq-receipt-set-root", index),
+                    state_root: sample_root("appeal-window-state", index),
+                    opened_slot: self.slot + index * 8 + 2,
+                })
+                .expect("devnet ml-dsa appeal window must open");
+            if index % 2 == 0 {
+                let appeal_id = self
+                    .submit_ml_dsa_appeal(MlDsaAppealInput {
+                        window_id,
+                        appellant_commitment: sample_root("appellant", index),
+                        appeal_kind: match index {
+                            0 => AppealKind::DuplicateExitNullifier,
+                            2 => AppealKind::InvalidMlDsaSignatureOpening,
+                            4 => AppealKind::ReceiptCommitmentMismatch,
+                            _ => AppealKind::AppealStateRootInconsistency,
+                        },
+                        ml_dsa_parameter: (index as u8) % self.config.ml_dsa_parameter_set,
+                        coefficient_vector_index: index * 19,
+                        appealed_nullifier_commitment: sample_root("appealed-nullifier", index),
+                        evidence_commitment_root: sample_root("evidence-commitment", index),
+                        appeal_bond_atomic: self.config.appeal_bond_atomic,
+                        opened_slot: self.slot + index * 8 + 9,
+                    })
+                    .expect("devnet ml-dsa appeal must submit");
+                self.anchor_appeal_evidence(AppealEvidenceInput {
+                    appeal_id: appeal_id.clone(),
+                    ml_dsa_signature_opening_root: sample_root("ml-dsa-signature-opening", index),
+                    challenge_digest_root: sample_root("challenge-digest", index),
+                    signature_transcript_root: sample_root("signature-transcript", index),
+                    nullifier_membership_witness_root: sample_root("nullifier-membership", index),
+                    receipt_opening_root: sample_root("receipt-opening", index),
+                    state_transition_witness_root: sample_root("state-transition-witness", index),
+                    accepted: index != 4,
+                    anchored_slot: self.slot + index * 8 + 20,
+                })
+                .expect("devnet ml-dsa appeal evidence must anchor");
+                if index != 4 {
+                    appeal_ids.insert(appeal_id);
+                }
+            }
+        }
+        if appeal_ids.len() >= usize::from(self.config.min_batch_size) {
+            let batch_id = self
+                .post_low_fee_appeal_batch(LowFeeAppealBatchInput {
+                    sequencer_commitment: sample_root("appeal-batch-sequencer", 0),
+                    appeal_ids,
+                    aggregation_root: sample_root("appeal-batch-aggregation", 0),
+                    fee_sponsor_commitment: sample_root("batch-fee-sponsor", 0),
+                    batch_fee_micro_units: self.config.max_batch_fee_micro_units / 2,
+                    posted_slot: self.slot + 256,
+                })
+                .expect("devnet low-fee ml-dsa appeal batch must post");
+            self.settle_low_fee_appeal_batch(&batch_id)
+                .expect("devnet low-fee ml-dsa appeal batch must settle");
+        }
+        self.refresh();
+    }
+
+    fn refresh(&mut self) {
+        self.counters = Counters {
+            exit_nullifier_entries: self.exit_nullifier_entries.len() as u64,
+            pq_receipt_commitments: self.pq_receipt_commitments.len() as u64,
+            appeal_windows: self.appeal_windows.len() as u64,
+            ml_dsa_appeals: self.ml_dsa_appeals.len() as u64,
+            appeal_evidence: self.appeal_evidence.len() as u64,
+            low_fee_appeal_batches: self.low_fee_appeal_batches.len() as u64,
+            pending_nullifiers: self
+                .exit_nullifier_entries
+                .values()
+                .filter(|entry| {
+                    matches!(
+                        entry.status,
+                        ExitNullifierStatus::Pending
+                            | ExitNullifierStatus::ReceiptCommitted
+                            | ExitNullifierStatus::AppealWindowOpen
+                    )
+                })
+                .count() as u64,
+            appealed_nullifiers: self
+                .exit_nullifier_entries
+                .values()
+                .filter(|entry| entry.status == ExitNullifierStatus::Appealed)
+                .count() as u64,
+            restored_nullifiers: self
+                .exit_nullifier_entries
+                .values()
+                .filter(|entry| entry.status == ExitNullifierStatus::Restored)
+                .count() as u64,
+            upheld_nullifiers: self
+                .exit_nullifier_entries
+                .values()
+                .filter(|entry| entry.status == ExitNullifierStatus::Upheld)
+                .count() as u64,
+            finalized_nullifiers: self
+                .exit_nullifier_entries
+                .values()
+                .filter(|entry| entry.status == ExitNullifierStatus::Finalized)
+                .count() as u64,
+            total_exit_bond_atomic: self
+                .exit_nullifier_entries
+                .values()
+                .map(|entry| entry.exit_bond_atomic)
+                .sum(),
+            total_appeal_bond_atomic: self
+                .ml_dsa_appeals
+                .values()
+                .map(|appeal| appeal.appeal_bond_atomic)
+                .sum(),
+            total_reward_atomic: self
+                .ml_dsa_appeals
+                .values()
+                .filter(|appeal| {
+                    matches!(
+                        appeal.status,
+                        AppealStatus::Accepted | AppealStatus::Batched | AppealStatus::Settled
+                    )
+                })
+                .map(|appeal| appeal.reward_atomic)
+                .sum(),
+            total_batch_fee_micro_units: self
+                .low_fee_appeal_batches
+                .values()
+                .map(|batch| batch.batch_fee_micro_units)
+                .sum(),
+            total_batched_appeals: self
+                .low_fee_appeal_batches
+                .values()
+                .map(|batch| batch.appeal_ids.len() as u64)
+                .sum(),
+        };
+        self.roots = self.compute_roots();
+    }
+
+    fn compute_roots(&self) -> Roots {
+        let exit_nullifier_entry_root = record_root(
+            "exit-nullifier-entries",
+            self.exit_nullifier_entries
+                .values()
+                .map(ExitNullifierEntry::public_record)
+                .collect(),
+        );
+        let pq_receipt_commitment_root = record_root(
+            "pq-receipt-commitments",
+            self.pq_receipt_commitments
+                .values()
+                .map(PqReceiptCommitment::public_record)
+                .collect(),
+        );
+        let appeal_window_root = record_root(
+            "appeal-windows",
+            self.appeal_windows
+                .values()
+                .map(AppealWindow::public_record)
+                .collect(),
+        );
+        let ml_dsa_appeal_root = record_root(
+            "ml-dsa-appeals",
+            self.ml_dsa_appeals
+                .values()
+                .map(MlDsaAppeal::public_record)
+                .collect(),
+        );
+        let appeal_evidence_root = record_root(
+            "appeal-evidence",
+            self.appeal_evidence
+                .values()
+                .map(AppealEvidence::public_record)
+                .collect(),
+        );
+        let low_fee_appeal_batch_root = record_root(
+            "low-fee-appeal-batches",
+            self.low_fee_appeal_batches
+                .values()
+                .map(LowFeeAppealBatch::public_record)
+                .collect(),
+        );
+        let private_accounting_root = value_root(
+            "private-accounting",
+            &json!({
+                "exit_nullifier_entry_root": exit_nullifier_entry_root,
+                "pq_receipt_commitment_root": pq_receipt_commitment_root,
+                "appeal_window_root": appeal_window_root,
+                "ml_dsa_appeal_root": ml_dsa_appeal_root,
+                "appeal_evidence_root": appeal_evidence_root,
+                "low_fee_appeal_batch_root": low_fee_appeal_batch_root,
+                "redacted_totals": json!(self.counters),
+            }),
+        );
+        let public_record_root = value_root(
+            "public-record",
+            &json!({
+                "config": json!(self.config),
+                "counters": json!(self.counters),
+                "exit_nullifier_entry_root": exit_nullifier_entry_root,
+                "pq_receipt_commitment_root": pq_receipt_commitment_root,
+                "appeal_window_root": appeal_window_root,
+                "ml_dsa_appeal_root": ml_dsa_appeal_root,
+                "appeal_evidence_root": appeal_evidence_root,
+                "low_fee_appeal_batch_root": low_fee_appeal_batch_root,
+                "private_accounting_root": private_accounting_root,
+            }),
+        );
+        let state_root = domain_hash(
+            "PRIVATE-L2-PQ-CONFIDENTIAL-ML-DSA-EXIT-NULLIFIER-APPEAL-STATE",
+            &[
+                HashPart::Json(&json!(self.config)),
+                HashPart::Json(&json!(self.counters)),
+                HashPart::Str(&exit_nullifier_entry_root),
+                HashPart::Str(&pq_receipt_commitment_root),
+                HashPart::Str(&appeal_window_root),
+                HashPart::Str(&ml_dsa_appeal_root),
+                HashPart::Str(&appeal_evidence_root),
+                HashPart::Str(&low_fee_appeal_batch_root),
+                HashPart::Str(&private_accounting_root),
+                HashPart::Str(&public_record_root),
+                HashPart::U64(self.height),
+                HashPart::U64(self.epoch),
+                HashPart::U64(self.slot),
+            ],
+            32,
+        );
+        Roots {
+            exit_nullifier_entry_root,
+            pq_receipt_commitment_root,
+            appeal_window_root,
+            ml_dsa_appeal_root,
+            appeal_evidence_root,
+            low_fee_appeal_batch_root,
+            private_accounting_root,
+            public_record_root,
+            state_root,
+        }
+    }
+
+    fn empty_devnet() -> Self {
+        Self {
+            config: Config::devnet(),
+            height: DEVNET_HEIGHT,
+            epoch: DEVNET_EPOCH,
+            slot: DEVNET_SLOT,
+            counters: Counters::default(),
+            roots: Roots::default(),
+            exit_nullifier_entries: BTreeMap::new(),
+            pq_receipt_commitments: BTreeMap::new(),
+            appeal_windows: BTreeMap::new(),
+            ml_dsa_appeals: BTreeMap::new(),
+            appeal_evidence: BTreeMap::new(),
+            low_fee_appeal_batches: BTreeMap::new(),
+        }
+    }
+}
+
+pub fn devnet() -> State {
+    State::devnet()
+}
+
+pub fn public_record(state: &State) -> Value {
+    json!({
+        "protocol_version": PROTOCOL_VERSION,
+        "schema_version": SCHEMA_VERSION,
+        "height": state.height,
+        "epoch": state.epoch,
+        "slot": state.slot,
+        "hash_suite": HASH_SUITE,
+        "ml_dsa_exit_nullifier_slashing_suite": ML_DSA_EXIT_NULLIFIER_SLASHING_SUITE,
+        "pq_receipt_commitment_suite": PQ_RECEIPT_COMMITMENT_SUITE,
+        "appeal_window_suite": SLASHING_APPEAL_WINDOW_SUITE,
+        "appeal_bond_suite": APPEAL_BOND_SUITE,
+        "low_fee_appeal_batch_suite": LOW_FEE_APPEAL_BATCH_SUITE,
+        "private_record_api_suite": PRIVATE_RECORD_API_SUITE,
+        "config": json!(state.config),
+        "counters": json!(state.counters),
+        "roots": json!(state.roots),
+        "exit_nullifier_entries": state
+            .exit_nullifier_entries
+            .values()
+            .map(ExitNullifierEntry::public_record)
+            .collect::<Vec<_>>(),
+        "pq_receipt_commitments": state
+            .pq_receipt_commitments
+            .values()
+            .map(PqReceiptCommitment::public_record)
+            .collect::<Vec<_>>(),
+        "appeal_windows": state
+            .appeal_windows
+            .values()
+            .map(AppealWindow::public_record)
+            .collect::<Vec<_>>(),
+        "ml_dsa_appeals": state
+            .ml_dsa_appeals
+            .values()
+            .map(MlDsaAppeal::public_record)
+            .collect::<Vec<_>>(),
+        "appeal_evidence": state
+            .appeal_evidence
+            .values()
+            .map(AppealEvidence::public_record)
+            .collect::<Vec<_>>(),
+        "low_fee_appeal_batches": state
+            .low_fee_appeal_batches
+            .values()
+            .map(LowFeeAppealBatch::public_record)
+            .collect::<Vec<_>>(),
+        "state_root": state.state_root(),
+    })
+}
+
+pub fn state_root(state: &State) -> String {
+    state.state_root()
+}
+
+pub fn deterministic_id(domain: &str, parts: &[HashPart<'_>]) -> String {
+    domain_hash(
+        &format!("PRIVATE-L2-PQ-CONFIDENTIAL-ML-DSA-EXIT-NULLIFIER-APPEAL-{domain}-ID"),
+        parts,
+        24,
+    )
+}
+
+pub fn sample_root(label: &str, index: u64) -> String {
+    domain_hash(
+        "PRIVATE-L2-PQ-CONFIDENTIAL-ML-DSA-EXIT-NULLIFIER-APPEAL-DEVNET-SAMPLE",
+        &[HashPart::Str(label), HashPart::U64(index)],
+        32,
+    )
+}
+
+pub fn value_root(domain: &str, value: &Value) -> String {
+    domain_hash(
+        &format!("PRIVATE-L2-PQ-CONFIDENTIAL-ML-DSA-EXIT-NULLIFIER-APPEAL-{domain}"),
+        &[HashPart::Json(value)],
+        32,
+    )
+}
+
+pub fn record_root(domain: &str, mut values: Vec<Value>) -> String {
+    values.sort_by_key(|value| value.to_string());
+    merkle_root(
+        &format!("PRIVATE-L2-PQ-CONFIDENTIAL-ML-DSA-EXIT-NULLIFIER-APPEAL-{domain}"),
+        &values,
+    )
+}
+
+fn require_non_empty(values: &[(&String, &str)]) -> Result<()> {
+    for (value, label) in values {
+        if value.is_empty() {
+            return Err(format!("{label} must be non-empty"));
+        }
+    }
+    Ok(())
+}
