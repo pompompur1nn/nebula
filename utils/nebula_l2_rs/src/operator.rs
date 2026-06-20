@@ -1660,6 +1660,10 @@ impl OperatorState {
                     .to_string(),
             ),
             OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_safety_answer_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
                 "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_release_hold_unhold_drill_runtime"
                     .to_string(),
             ),
@@ -5393,6 +5397,10 @@ impl OperatorState {
             ),
             OperatorComponentKind::Custom(
                 "monero_l2_pq_bridge_exit_canonical_user_escape_security_review_final_release_acceptance_execution_receipt_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_safety_answer_runtime"
                     .to_string(),
             ),
             OperatorComponentKind::Custom(
