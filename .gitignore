@@ -124,6 +124,8 @@ __pycache__/
 # Rust / generated build output
 target/
 **/target/
+*.rlib
+*.rmeta
 
 # Local L2 progress panel and generated dashboards
 utils/l2_progress_panel/
@@ -131,9 +133,27 @@ utils/l2_progress_panel/
 # Frontend/package build output
 node_modules/
 **/node_modules/
+build/
+**/build/
 dist/
 **/dist/
 out/
 **/out/
 coverage/
 **/coverage/
+.next/
+**/.next/
+.nuxt/
+**/.nuxt/
+.svelte-kit/
+**/.svelte-kit/
+.vite/
+**/.vite/
+.parcel-cache/
+**/.parcel-cache/
+.turbo/
+**/.turbo/
+playwright-report/
+**/playwright-report/
+test-results/
+**/test-results/
