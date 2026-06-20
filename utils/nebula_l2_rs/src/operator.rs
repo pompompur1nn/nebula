@@ -1772,6 +1772,34 @@ impl OperatorState {
                     .to_string(),
             ),
             OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_compile_runtime_receipt_quorum_release_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_custody_wallet_watchtower_release_consensus_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_privacy_budget_release_regression_guard_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_pq_rotation_release_activation_guard_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_reserve_liquidity_release_slo_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_live_receipt_cross_domain_root_aggregator_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_release_policy_manifest_binding_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
                 "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_challenge_window_monitor_runtime"
                     .to_string(),
             ),
@@ -5657,6 +5685,34 @@ impl OperatorState {
             ),
             OperatorComponentKind::Custom(
                 "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_heavy_gate_evidence_replacement_manifest_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_compile_runtime_receipt_quorum_release_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_custody_wallet_watchtower_release_consensus_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_privacy_budget_release_regression_guard_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_pq_rotation_release_activation_guard_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_reserve_liquidity_release_slo_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_live_receipt_cross_domain_root_aggregator_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_release_policy_manifest_binding_runtime"
                     .to_string(),
             ),
             OperatorComponentKind::Custom(
