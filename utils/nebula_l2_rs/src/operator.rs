@@ -2087,6 +2087,34 @@ impl OperatorState {
                     .to_string(),
             ),
             OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_compile_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_runtime_replay_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_audit_security_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_bridge_custody_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_wallet_watchtower_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_pq_reserve_privacy_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_final_transcript_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
                 "monero_l2_pq_bridge_exit_canonical_user_escape_answer_vertical_slice_force_exit_package_challenge_window_monitor_runtime"
                     .to_string(),
             ),
@@ -6287,6 +6315,34 @@ impl OperatorState {
                     .to_string(),
             ),            OperatorComponentKind::Custom(
                 "monero_l2_pq_bridge_exit_force_exit_wave88_release_captain_go_no_go_replay_drill_transcript_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_compile_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_runtime_replay_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_audit_security_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_bridge_custody_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_wallet_watchtower_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_pq_reserve_privacy_gate_runtime"
+                    .to_string(),
+            ),
+            OperatorComponentKind::Custom(
+                "monero_l2_pq_bridge_exit_force_exit_wave89_release_captain_no_go_evidence_archive_final_transcript_runtime"
                     .to_string(),
             ),
             OperatorComponentKind::Custom(
