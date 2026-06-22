@@ -7746,6 +7746,12 @@ fn public_deployment_capture_audit(
         invalid_probe_observer_region_indexes,
         duplicate_probe_observer_ids,
         duplicate_probe_observer_keys,
+        unsigned_probe_observer_indexes,
+        unverified_probe_observer_indexes,
+        invalid_probe_observer_signature_verification_indexes,
+        probe_observer_signatures_present,
+        probe_observer_signatures_verified,
+        probe_observer_signature_verifications_valid,
         observer_quorum_threshold_valid,
         observer_quorum_reachable,
         observer_regions_valid,
@@ -7844,6 +7850,14 @@ fn public_deployment_capture_audit(
                     duplicate_public_probe_observer_field_values(&value, "observer_id");
                 let duplicate_observer_keys =
                     duplicate_public_probe_observer_field_values(&value, "observer_key_root");
+                let (
+                    unsigned_observer_indexes,
+                    unverified_observer_indexes,
+                    invalid_signature_verification_indexes,
+                ) = public_probe_observer_signature_audit_indexes(&value);
+                let signatures_present = unsigned_observer_indexes.is_empty();
+                let signatures_verified = unverified_observer_indexes.is_empty();
+                let signature_verifications_valid = invalid_signature_verification_indexes.is_empty();
                 let observer_quorum_threshold =
                     value.get("observer_quorum_threshold").and_then(Value::as_u64);
                 let quorum_threshold_valid = match value.get("observer_quorum_threshold") {
@@ -7911,6 +7925,12 @@ fn public_deployment_capture_audit(
                     invalid_observer_region_indexes,
                     duplicate_observer_ids,
                     duplicate_observer_keys,
+                    unsigned_observer_indexes,
+                    unverified_observer_indexes,
+                    invalid_signature_verification_indexes,
+                    signatures_present,
+                    signatures_verified,
+                    signature_verifications_valid,
                     quorum_threshold_valid,
                     quorum_reachable,
                     observer_regions_valid,
@@ -7955,6 +7975,12 @@ fn public_deployment_capture_audit(
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                true,
+                true,
+                true,
                 true,
                 true,
                 true,
@@ -7986,6 +8012,9 @@ fn public_deployment_capture_audit(
         && capture_time_window_valid
         && capture_time_current
         && deployment_run_id_valid
+        && probe_observer_signatures_present
+        && probe_observer_signatures_verified
+        && probe_observer_signature_verifications_valid
         && observer_quorum_threshold_valid
         && observer_quorum_reachable
         && observer_regions_valid
@@ -8032,6 +8061,15 @@ fn public_deployment_capture_audit(
     }
     if !deployment_run_id_valid {
         structural_failed_checks.push("deployment_run_id_valid".to_string());
+    }
+    if !probe_observer_signatures_present {
+        structural_failed_checks.push("probe_observer_signatures_present".to_string());
+    }
+    if !probe_observer_signatures_verified {
+        structural_failed_checks.push("probe_observer_signatures_verified".to_string());
+    }
+    if !probe_observer_signature_verifications_valid {
+        structural_failed_checks.push("probe_observer_signature_verifications_valid".to_string());
     }
     if !observer_quorum_threshold_valid {
         structural_failed_checks.push("observer_quorum_threshold_valid".to_string());
@@ -8151,6 +8189,14 @@ fn public_deployment_capture_audit(
     audit["invalid_probe_observer_region_indexes"] = json!(invalid_probe_observer_region_indexes);
     audit["duplicate_probe_observer_ids"] = json!(duplicate_probe_observer_ids);
     audit["duplicate_probe_observer_keys"] = json!(duplicate_probe_observer_keys);
+    audit["unsigned_probe_observer_indexes"] = json!(unsigned_probe_observer_indexes);
+    audit["unverified_probe_observer_indexes"] = json!(unverified_probe_observer_indexes);
+    audit["invalid_probe_observer_signature_verification_indexes"] =
+        json!(invalid_probe_observer_signature_verification_indexes);
+    audit["probe_observer_signatures_present"] = json!(probe_observer_signatures_present);
+    audit["probe_observer_signatures_verified"] = json!(probe_observer_signatures_verified);
+    audit["probe_observer_signature_verifications_valid"] =
+        json!(probe_observer_signature_verifications_valid);
     audit["observer_quorum_threshold_valid"] = json!(observer_quorum_threshold_valid);
     audit["observer_quorum_reachable"] = json!(observer_quorum_reachable);
     audit["observer_regions_valid"] = json!(observer_regions_valid);
@@ -8182,6 +8228,40 @@ fn invalid_public_probe_observer_region_indexes(value: &Value) -> Vec<u64> {
                 .then_some(index as u64)
         })
         .collect()
+}
+
+fn public_probe_observer_signature_audit_indexes(value: &Value) -> (Vec<u64>, Vec<u64>, Vec<u64>) {
+    let Some(observers) = value.get("probe_observers").and_then(Value::as_array) else {
+        return (Vec::new(), Vec::new(), Vec::new());
+    };
+    let mut unsigned = Vec::new();
+    let mut unverified = Vec::new();
+    let mut invalid_verification = Vec::new();
+    for (index, observer) in observers.iter().enumerate() {
+        let index = index as u64;
+        if !observer
+            .get("pq_signature_root")
+            .and_then(Value::as_str)
+            .is_some_and(is_hex_root)
+        {
+            unsigned.push(index);
+        }
+        if observer.get("signature_verified").and_then(Value::as_bool) != Some(true) {
+            unverified.push(index);
+        }
+        let verification_valid = observer
+            .get("signature_verification")
+            .and_then(Value::as_object)
+            .is_some_and(|verification| {
+                verification.get("status").and_then(Value::as_str) == Some("valid")
+                    && verification.get("signature_verified").and_then(Value::as_bool)
+                        == Some(true)
+            });
+        if !verification_valid {
+            invalid_verification.push(index);
+        }
+    }
+    (unsigned, unverified, invalid_verification)
 }
 
 fn duplicate_public_probe_observer_field_values(value: &Value, field: &str) -> Vec<String> {
@@ -25795,6 +25875,56 @@ mod tests {
             .as_array()
             .expect("structural failed checks")
             .contains(&json!("observer_key_uniqueness_valid")));
+        let _ = fs::remove_file(capture_path);
+    }
+
+    #[test]
+    fn public_deployment_capture_audit_reports_unsigned_probe_observers() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let mut capture: Value =
+            serde_json::from_str(&valid_public_deployment_capture(&base_summary))
+                .expect("deployment capture json");
+        capture["probe_observers"][0]
+            .as_object_mut()
+            .expect("observer object")
+            .remove("pq_signature_root");
+        capture["probe_observers"][1]["signature_verified"] = json!(false);
+        capture["probe_observers"][1]["signature_verification"]["signature_verified"] =
+            json!(false);
+        let capture_path = write_public_deployment_evidence(&capture.to_string());
+        let audit = public_deployment_capture_audit(&capture_path, &base_summary)
+            .expect("audit unsigned observer capture");
+        assert_eq!(audit["structural_ready"], false);
+        assert_eq!(audit["strict_verifier_passed"], false);
+        assert_eq!(audit["strict_verifier_error"], Value::Null);
+        assert_eq!(audit["probe_observer_signatures_present"], false);
+        assert_eq!(audit["probe_observer_signatures_verified"], false);
+        assert_eq!(
+            audit["probe_observer_signature_verifications_valid"],
+            false
+        );
+        assert_eq!(audit["unsigned_probe_observer_indexes"], json!([0]));
+        assert_eq!(audit["unverified_probe_observer_indexes"], json!([1]));
+        assert_eq!(
+            audit["invalid_probe_observer_signature_verification_indexes"],
+            json!([1])
+        );
+        assert!(audit["structural_failed_checks"]
+            .as_array()
+            .expect("structural failed checks")
+            .contains(&json!("probe_observer_signatures_present")));
+        assert!(audit["structural_failed_checks"]
+            .as_array()
+            .expect("structural failed checks")
+            .contains(&json!("probe_observer_signatures_verified")));
+        assert!(audit["structural_failed_checks"]
+            .as_array()
+            .expect("structural failed checks")
+            .contains(&json!("probe_observer_signature_verifications_valid")));
         let _ = fs::remove_file(capture_path);
     }
 
