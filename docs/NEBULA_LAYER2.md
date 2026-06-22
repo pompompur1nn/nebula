@@ -3235,16 +3235,18 @@ real XMR.
 - A public launch package export gives operators one rooted directory handoff
   before capture starts. It contains the public status manifest, bootstrap
   profile template, typed deployment runbook, launch artifact manifest, launch
-  bundle, schema v5 deployment evidence template, deployment capture plan, and a
-  `nebula-public-launch-package` manifest. The package manifest binds each
-  filename, root field, artifact root, record root, package `artifact_set_root`,
-  release-candidate manifest id, and no-mainnet-custody boundary so deployment
-  automation can reject stale, swapped, or cross-run handoff files before public
-  endpoint evidence is assembled. When combined with the export step in the
-  same runner invocation, `--verify-public-launch-package` recomputes each
-  package artifact and the package manifest root against the current
-  release-candidate summary, failing on stale, tampered, swapped, or cross-run
-  package directories before public evidence capture begins.
+  bundle, local launch-readiness report, schema v5 deployment evidence
+  template, deployment capture plan, and a `nebula-public-launch-package`
+  manifest. The package manifest binds each filename, root field, artifact
+  root, record root, required-before-capture flag, operator-fill flag, package
+  `artifact_set_root`, release-candidate manifest id, and no-mainnet-custody
+  boundary so deployment automation can reject stale, swapped, cross-run, or
+  metadata-tampered handoff files before public endpoint evidence is assembled.
+  When combined with the export step in the same runner invocation,
+  `--verify-public-launch-package` recomputes each package artifact and the
+  package manifest root against the current release-candidate summary, failing
+  on stale, tampered, swapped, cross-run, or shape-tampered package directories
+  before public evidence capture begins.
 - A local operator-only public launch readiness report export gives CI a
   standalone `nebula-public-launch-readiness-report` with the launch level,
   blocker ids, remediation commands, public status/bundle/capture-plan roots,

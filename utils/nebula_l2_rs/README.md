@@ -405,16 +405,18 @@ report is not a public deployment attestation and has both
 `--mainnet-readiness` and writes the full redacted public-alpha handoff set into
 one directory: public status manifest, bootstrap profile template, typed
 deployment runbook, launch artifact manifest, launch bundle, schema v5
-deployment evidence template, deployment capture plan, and a
-`nebula-public-launch-package` manifest. The package manifest records each
-filename, root field, artifact root, and record root under an
-`artifact_set_root`, so deployment automation can detect stale, swapped, or
-cross-run files before filling public probe evidence.
+local launch-readiness report, deployment evidence template, deployment capture
+plan, and a `nebula-public-launch-package` manifest. The package manifest
+records each filename, root field, artifact root, record root,
+required-before-capture flag, and operator-fill flag under an
+`artifact_set_root`, so deployment automation can detect stale, swapped,
+cross-run, or metadata-tampered files before filling public probe evidence.
 `--verify-public-launch-package path\to\package-dir` reruns those checks against
 the current release-candidate summary, so CI should combine it with the export
 step for the same runner invocation. It recomputes every artifact and package
-root, and fails if the directory contains stale, tampered, swapped, or cross-run
-handoff files.
+root, verifies package-only/public-alpha boundaries and per-artifact
+capture/operator-fill flags, and fails if the directory contains stale,
+tampered, swapped, or cross-run handoff files.
 
 `--write-public-deployment-evidence-template path\to\deployment-template.json`
 also requires `--mainnet-readiness` and writes the schema v5 worksheet that a

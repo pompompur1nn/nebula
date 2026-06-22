@@ -116,7 +116,7 @@ const REQUIRED_PUBLIC_DEPLOYMENT_PROBE_ROOT_FIELDS: [&str; 12] = [
     "reset_runbook_probe_root",
     "private_summary_probe_root",
 ];
-const PUBLIC_LAUNCH_PACKAGE_ARTIFACTS: [(&str, &str, &str); 7] = [
+const PUBLIC_LAUNCH_PACKAGE_ARTIFACTS: [(&str, &str, &str); 8] = [
     (
         "public-status-manifest",
         "nebula-public-status.json",
@@ -141,6 +141,11 @@ const PUBLIC_LAUNCH_PACKAGE_ARTIFACTS: [(&str, &str, &str); 7] = [
         "public-launch-bundle",
         "nebula-public-launch-bundle.json",
         "public_launch_bundle_root",
+    ),
+    (
+        "public-launch-readiness-report",
+        "nebula-public-launch-readiness-report.json",
+        "public_launch_readiness_artifact_root",
     ),
     (
         "public-deployment-evidence-template",
@@ -7205,9 +7210,8 @@ fn write_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<(
             "file_name": file_name,
             "root_field": root_field,
             "root": artifact_root,
-            "required_before_public_capture": index < 5,
-            "operator_fill_required": *artifact_id == "public-deployment-evidence-template"
-                || *artifact_id == "public-deployment-capture-plan",
+            "required_before_public_capture": public_launch_package_required_before_capture(artifact_id),
+            "operator_fill_required": public_launch_package_operator_fill_required(artifact_id),
             "usable_as_public_deployment_evidence": false,
             "usable_as_mainnet_custody_approval": false,
             "artifact_record_root": record_root,
@@ -7290,6 +7294,18 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
         "public launch package testnet_id does not match this run",
     )?;
     ensure(
+        required_bool(&manifest, "public_alpha_only")? == true,
+        "public launch package must stay public-alpha only",
+    )?;
+    ensure(
+        required_bool(&manifest, "package_only")? == true,
+        "public launch package must be marked package_only",
+    )?;
+    ensure(
+        required_bool(&manifest, "operator_fill_required")? == true,
+        "public launch package must require operator-filled deployment evidence",
+    )?;
+    ensure(
         required_bool(&manifest, "usable_as_public_deployment_evidence")? == false,
         "public launch package must not claim to be deployment evidence",
     )?;
@@ -7307,6 +7323,10 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
     ensure(
         records.len() == PUBLIC_LAUNCH_PACKAGE_ARTIFACTS.len(),
         "public launch package artifact count mismatch",
+    )?;
+    ensure(
+        required_u64(&manifest, "artifact_count")? == PUBLIC_LAUNCH_PACKAGE_ARTIFACTS.len() as u64,
+        "public launch package artifact_count mismatch",
     )?;
 
     let mut record_roots = Vec::new();
@@ -7331,6 +7351,16 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
         ensure(
             record["root_field"].as_str() == Some(*root_field),
             "public launch package artifact root_field mismatch",
+        )?;
+        ensure(
+            record["required_before_public_capture"].as_bool()
+                == Some(public_launch_package_required_before_capture(artifact_id)),
+            "public launch package artifact capture requirement mismatch",
+        )?;
+        ensure(
+            record["operator_fill_required"].as_bool()
+                == Some(public_launch_package_operator_fill_required(artifact_id)),
+            "public launch package artifact operator-fill requirement mismatch",
         )?;
         ensure(
             record["usable_as_public_deployment_evidence"].as_bool() == Some(false),
@@ -7398,6 +7428,27 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
     )
 }
 
+fn public_launch_package_required_before_capture(artifact_id: &str) -> bool {
+    matches!(
+        artifact_id,
+        "public-status-manifest"
+            | "public-bootstrap-profile-template"
+            | "public-deployment-runbook"
+            | "public-launch-artifact-manifest"
+            | "public-launch-bundle"
+            | "public-launch-readiness-report"
+            | "public-deployment-evidence-template"
+            | "public-deployment-capture-plan"
+    )
+}
+
+fn public_launch_package_operator_fill_required(artifact_id: &str) -> bool {
+    matches!(
+        artifact_id,
+        "public-deployment-evidence-template" | "public-deployment-capture-plan"
+    )
+}
+
 fn public_launch_package_artifact_value(
     artifact_id: &str,
     summary: &TestnetSummary,
@@ -7408,6 +7459,7 @@ fn public_launch_package_artifact_value(
         "public-deployment-runbook" => Ok(public_deployment_runbook(summary)),
         "public-launch-artifact-manifest" => Ok(public_launch_artifact_manifest(summary)),
         "public-launch-bundle" => Ok(public_launch_bundle(summary)),
+        "public-launch-readiness-report" => Ok(public_launch_readiness_report_artifact(summary)),
         "public-deployment-evidence-template" => Ok(public_deployment_evidence_template(summary)),
         "public-deployment-capture-plan" => Ok(public_deployment_capture_plan(summary)),
         other => Err(format!("unknown public launch package artifact '{other}'")),
@@ -23444,6 +23496,10 @@ mod tests {
             ),
             ("public-launch-bundle", "nebula-public-launch-bundle.json"),
             (
+                "public-launch-readiness-report",
+                "nebula-public-launch-readiness-report.json",
+            ),
+            (
                 "public-deployment-evidence-template",
                 "nebula-public-deployment-template.json",
             ),
@@ -23469,6 +23525,11 @@ mod tests {
                     .as_str()
                     .expect("artifact record root")
             ));
+            assert_eq!(record["required_before_public_capture"], true);
+            assert_eq!(
+                record["operator_fill_required"],
+                public_launch_package_operator_fill_required(artifact_id)
+            );
             assert_eq!(record["usable_as_public_deployment_evidence"], false);
             assert_eq!(record["usable_as_mainnet_custody_approval"], false);
         }
@@ -23495,7 +23556,25 @@ mod tests {
                 .expect("read capture plan"),
         )
         .expect("capture plan json");
-        assert_eq!(artifacts[6]["root"], capture_plan["capture_plan_root"]);
+        assert_eq!(artifacts[7]["root"], capture_plan["capture_plan_root"]);
+        let readiness_report: Value = serde_json::from_slice(
+            &fs::read(package_dir.join("nebula-public-launch-readiness-report.json"))
+                .expect("read readiness report"),
+        )
+        .expect("readiness report json");
+        assert_eq!(
+            artifacts[5]["root"],
+            readiness_report["public_launch_readiness_artifact_root"]
+        );
+        assert_eq!(
+            readiness_report["kind"],
+            "nebula-public-launch-readiness-report"
+        );
+        assert_eq!(readiness_report["local_operator_only"], true);
+        assert_eq!(
+            readiness_report["usable_as_public_deployment_evidence"],
+            false
+        );
         verify_public_launch_package(&package_dir_string, &summary)
             .expect("package should verify against its source run");
         let _ = fs::remove_dir_all(package_dir);
@@ -23530,6 +23609,39 @@ mod tests {
         let error = verify_public_launch_package(&package_dir_string, &summary)
             .expect_err("tampered package should fail verification");
         assert!(error.contains("does not match this run") || error.contains("root mismatch"));
+        let _ = fs::remove_dir_all(package_dir);
+    }
+
+    #[test]
+    fn public_launch_package_verifier_rejects_manifest_shape_tampering() {
+        let counter = TEST_FILE_COUNTER.fetch_add(1, AtomicOrdering::SeqCst);
+        let package_dir = env::temp_dir().join(format!(
+            "nebula-public-launch-package-shape-{}",
+            root(&["test-public-launch-package-shape", &counter.to_string()])
+        ));
+        let package_dir_string = package_dir.to_string_lossy().into_owned();
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness cli should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_launch_package(&package_dir_string, &summary)
+            .expect("write public launch package");
+
+        let manifest_path = package_dir.join("nebula-public-launch-package.json");
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("read package manifest"))
+                .expect("package manifest json");
+        manifest["artifacts"][5]["required_before_public_capture"] = json!(false);
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("manifest json"),
+        )
+        .expect("write tampered package manifest");
+
+        let error = verify_public_launch_package(&package_dir_string, &summary)
+            .expect_err("tampered package manifest shape should fail verification");
+        assert!(error.contains("capture requirement mismatch"));
         let _ = fs::remove_dir_all(package_dir);
     }
 
