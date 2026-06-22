@@ -452,9 +452,10 @@ does not contain captured evidence and is not loadable as deployment evidence;
 instead it binds the launch bundle, public status manifest, bootstrap profile,
 typed public deployment runbook, launch artifact manifest, artifact-set, and
 package file-set roots plus the evidence-template root while listing the exact
-required capture fields, public surfaces, probe-root fields, freshness window,
-bootstrap node slots, operator commitments, TLS pin roles, the required typed
-public surface probe roles, observer quorum, a rooted ordered deployment
+required capture fields, public endpoint fields, public surfaces, probe-root
+fields, freshness window, bootstrap node slots, operator commitments, TLS pin
+roles, the required typed public surface probe roles, observer quorum, a rooted
+ordered deployment
 preflight checklist, and `deployment_run_id` propagation rule that the assembler
 will enforce. The plan publishes both `capture_contract_root` and
 `capture_plan_root`; a later filled
@@ -484,11 +485,11 @@ root-mismatched phase receipts.
 --write-public-deployment-capture-audit path\to\capture-audit.json` also
 requires `--mainnet-readiness` and writes a non-passing
 `nebula-public-deployment-capture-audit` report. The audit lists missing
-required capture fields, placeholder presence, sensitive key markers,
-public-forbidden key names, size/parseability checks, current capture-plan root
-matches, the expected package file-set root, package file-set root matches, and
-`structural_failed_checks`/`failed_checks` arrays with counts for CI routing, plus
-an `assembler_ready` boolean. It is diagnostic only:
+required capture fields, required public endpoint fields, placeholder presence,
+sensitive key markers, public-forbidden key names, size/parseability checks,
+current capture-plan root matches, the expected package file-set root, package
+file-set root matches, and `structural_failed_checks`/`failed_checks` arrays
+with counts for CI routing, plus an `assembler_ready` boolean. It is diagnostic only:
 `usable_as_public_deployment_evidence` is false, so it helps deployment CI
 repair incomplete captures without clearing the public launch gate. The audit
 separates cheap `structural_ready` checks from `strict_verifier_passed`; when a
