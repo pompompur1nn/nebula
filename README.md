@@ -3333,8 +3333,9 @@ real XMR.
   preflight or runbook receipts cannot clear the public launch gate. Deployment
   CI can run `--audit-public-deployment-capture` first to write a non-passing
   capture audit that lists missing fields, placeholders, sensitive markers,
-  public-forbidden keys, and current capture-plan root mismatches, then run
-  `--verify-public-deployment-capture` to dry-run the same assembler/verifier
+  public-forbidden keys, current capture-plan root mismatches, structural
+  readiness, strict verifier status, and the first nested verifier error, then
+  run `--verify-public-deployment-capture` to dry-run the same assembler/verifier
   path and feed the resulting temporary attestation into
   `--fail-on-public-launch-gaps` before writing the final public deployment
   artifact.

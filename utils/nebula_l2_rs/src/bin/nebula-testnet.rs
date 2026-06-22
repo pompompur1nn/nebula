@@ -7466,7 +7466,7 @@ fn public_deployment_capture_audit(
             ),
         };
     missing_required_fields.sort();
-    let assembler_ready = within_size_limit
+    let structural_ready = within_size_limit
         && parseable_json
         && top_level_object
         && missing_required_fields.is_empty()
@@ -7476,6 +7476,15 @@ fn public_deployment_capture_audit(
         && capture_plan_root_matches
         && capture_contract_root_matches
         && deployment_preflight_checklist_root_matches;
+    let (strict_verifier_passed, strict_verifier_error, strict_evidence_root) = if structural_ready {
+        match verify_public_deployment_capture(capture_path, summary) {
+            Ok(evidence) => (true, Value::Null, json!(evidence.evidence_root)),
+            Err(error) => (false, json!(error), Value::Null),
+        }
+    } else {
+        (false, Value::Null, Value::Null)
+    };
+    let assembler_ready = structural_ready && strict_verifier_passed;
     let mut audit = json!({
         "kind": "nebula-public-deployment-capture-audit",
         "schema_version": 1,
@@ -7506,9 +7515,15 @@ fn public_deployment_capture_audit(
         "capture_plan_root_matches": capture_plan_root_matches,
         "capture_contract_root_matches": capture_contract_root_matches,
         "deployment_preflight_checklist_root_matches": deployment_preflight_checklist_root_matches,
+        "structural_ready": structural_ready,
+        "strict_verifier_passed": strict_verifier_passed,
+        "strict_verifier_error": strict_verifier_error,
+        "strict_evidence_root": strict_evidence_root,
         "assembler_ready": assembler_ready,
         "next_step": if assembler_ready {
             "--verify-public-deployment-capture <capture.json> --fail-on-public-launch-gaps"
+        } else if structural_ready {
+            "repair the nested capture section reported by strict_verifier_error"
         } else {
             "fill missing fields, remove placeholders/sensitive markers, and bind the current capture plan roots"
         },
@@ -24019,6 +24034,9 @@ mod tests {
         assert_eq!(audit["usable_as_mainnet_custody_approval"], false);
         assert_eq!(audit["parseable_json"], true);
         assert_eq!(audit["top_level_object"], true);
+        assert_eq!(audit["structural_ready"], false);
+        assert_eq!(audit["strict_verifier_passed"], false);
+        assert_eq!(audit["strict_verifier_error"], Value::Null);
         assert_eq!(audit["assembler_ready"], false);
         let missing = audit["missing_required_fields"]
             .as_array()
@@ -24045,6 +24063,14 @@ mod tests {
         ));
         let audit = public_deployment_capture_audit(&capture_path, &base_summary)
             .expect("audit complete capture");
+        assert_eq!(audit["structural_ready"], true);
+        assert_eq!(audit["strict_verifier_passed"], true);
+        assert!(is_hex_root(
+            audit["strict_evidence_root"]
+                .as_str()
+                .expect("strict evidence root")
+        ));
+        assert_eq!(audit["strict_verifier_error"], Value::Null);
         assert_eq!(audit["assembler_ready"], true);
         assert_eq!(audit["placeholder_present"], false);
         assert_eq!(audit["capture_plan_root_matches"], true);
@@ -24060,6 +24086,31 @@ mod tests {
         assert!(is_hex_root(
             audit["capture_audit_root"].as_str().expect("audit root")
         ));
+        let _ = fs::remove_file(capture_path);
+    }
+
+    #[test]
+    fn public_deployment_capture_audit_reports_strict_verifier_failure() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let mut capture: Value =
+            serde_json::from_str(&valid_public_deployment_capture(&base_summary))
+                .expect("deployment capture json");
+        capture["health_probe"]["no_mainnet_custody"] = json!(false);
+        let capture_path = write_public_deployment_evidence(&capture.to_string());
+        let audit = public_deployment_capture_audit(&capture_path, &base_summary)
+            .expect("audit nested-invalid capture");
+        assert_eq!(audit["structural_ready"], true);
+        assert_eq!(audit["strict_verifier_passed"], false);
+        assert_eq!(audit["assembler_ready"], false);
+        assert!(audit["strict_verifier_error"]
+            .as_str()
+            .expect("strict verifier error")
+            .contains("health probe must assert no-mainnet-custody"));
+        assert_eq!(audit["strict_evidence_root"], Value::Null);
         let _ = fs::remove_file(capture_path);
     }
 
