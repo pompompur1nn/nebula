@@ -392,6 +392,15 @@ evidence can pass. The bundle is
 proxies to publish only the public status manifest, and is not a mainnet
 custody approval.
 
+`--write-public-launch-readiness-report path\to\launch-report.json` also
+requires `--mainnet-readiness` and writes a local operator-only
+`nebula-public-launch-readiness-report`. It archives the public launch gate
+level, blocker ids, remediation commands, public status/bundle/capture-plan
+roots, deployment evidence root if present, and its own artifact root. The
+report is not a public deployment attestation and has both
+`usable_as_public_deployment_evidence` and
+`usable_as_mainnet_custody_approval` set to false.
+
 `--write-public-launch-package path\to\package-dir` also requires
 `--mainnet-readiness` and writes the full redacted public-alpha handoff set into
 one directory: public status manifest, bootstrap profile template, typed
