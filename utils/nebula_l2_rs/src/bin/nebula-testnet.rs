@@ -1132,6 +1132,10 @@ struct PublicDeploymentReport {
     faucet_url_public: bool,
     reset_runbook_url_public: bool,
     tls_pins_bound: bool,
+    tls_spki_pin_root_bound: bool,
+    tls_endpoint_pin_set_root_bound: bool,
+    tls_endpoint_pin_count_sufficient: bool,
+    tls_required: bool,
     proxy_policy_verified: bool,
     bootstrap_nodes_bound: bool,
     live_probe_roots_bound: bool,
@@ -1161,6 +1165,9 @@ struct PublicDeploymentReport {
     incident_contact_url: Option<String>,
     faucet_url: Option<String>,
     reset_runbook_url: Option<String>,
+    tls_spki_pin_root: Option<String>,
+    tls_endpoint_pin_set_root: Option<String>,
+    tls_endpoint_pin_count: u64,
     preflight_receipt_bound: bool,
     deployment_preflight_receipt_root: Option<String>,
     deployment_preflight_phase_set_root: Option<String>,
@@ -5606,10 +5613,15 @@ impl Testnet {
             && incident_contact_url_public
             && faucet_url_public
             && reset_runbook_url_public;
-        let tls_pins_bound = is_hex_root(&evidence.tls_spki_pin_root)
-            && is_hex_root(&evidence.tls_endpoint_pin_set_root)
-            && evidence.tls_endpoint_pin_count >= 7
-            && evidence.tls_required;
+        let tls_spki_pin_root_bound = is_hex_root(&evidence.tls_spki_pin_root);
+        let tls_endpoint_pin_set_root_bound =
+            is_hex_root(&evidence.tls_endpoint_pin_set_root);
+        let tls_endpoint_pin_count_sufficient = evidence.tls_endpoint_pin_count >= 7;
+        let tls_required = evidence.tls_required;
+        let tls_pins_bound = tls_spki_pin_root_bound
+            && tls_endpoint_pin_set_root_bound
+            && tls_endpoint_pin_count_sufficient
+            && tls_required;
         let proxy_policy_verified = evidence.rate_limits_enforced
             && evidence.firewall_allows_public_only
             && evidence.no_private_summary_exposed
@@ -5724,6 +5736,10 @@ impl Testnet {
             faucet_url_public,
             reset_runbook_url_public,
             tls_pins_bound,
+            tls_spki_pin_root_bound,
+            tls_endpoint_pin_set_root_bound,
+            tls_endpoint_pin_count_sufficient,
+            tls_required,
             proxy_policy_verified,
             bootstrap_nodes_bound,
             live_probe_roots_bound,
@@ -5767,6 +5783,9 @@ impl Testnet {
             incident_contact_url: Some(evidence.incident_contact_url.clone()),
             faucet_url: Some(evidence.faucet_url.clone()),
             reset_runbook_url: Some(evidence.reset_runbook_url.clone()),
+            tls_spki_pin_root: Some(evidence.tls_spki_pin_root.clone()),
+            tls_endpoint_pin_set_root: Some(evidence.tls_endpoint_pin_set_root.clone()),
+            tls_endpoint_pin_count: evidence.tls_endpoint_pin_count,
             preflight_receipt_bound,
             deployment_preflight_receipt_root: Some(
                 evidence.deployment_preflight_receipt_root.clone(),
@@ -6693,6 +6712,10 @@ fn missing_public_deployment_report(manifest_id: &str) -> PublicDeploymentReport
         faucet_url_public: false,
         reset_runbook_url_public: false,
         tls_pins_bound: false,
+        tls_spki_pin_root_bound: false,
+        tls_endpoint_pin_set_root_bound: false,
+        tls_endpoint_pin_count_sufficient: false,
+        tls_required: false,
         proxy_policy_verified: false,
         bootstrap_nodes_bound: false,
         live_probe_roots_bound: false,
@@ -6722,6 +6745,9 @@ fn missing_public_deployment_report(manifest_id: &str) -> PublicDeploymentReport
         incident_contact_url: None,
         faucet_url: None,
         reset_runbook_url: None,
+        tls_spki_pin_root: None,
+        tls_endpoint_pin_set_root: None,
+        tls_endpoint_pin_count: 0,
         preflight_receipt_bound: false,
         deployment_preflight_receipt_root: None,
         deployment_preflight_phase_set_root: None,
@@ -7010,6 +7036,19 @@ fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<St
             report.reset_runbook_url_public,
         ),
         ("tls_pins_bound", report.tls_pins_bound),
+        (
+            "tls_spki_pin_root_bound",
+            report.tls_spki_pin_root_bound,
+        ),
+        (
+            "tls_endpoint_pin_set_root_bound",
+            report.tls_endpoint_pin_set_root_bound,
+        ),
+        (
+            "tls_endpoint_pin_count_sufficient",
+            report.tls_endpoint_pin_count_sufficient,
+        ),
+        ("tls_required", report.tls_required),
         ("proxy_policy_verified", report.proxy_policy_verified),
         ("bootstrap_nodes_bound", report.bootstrap_nodes_bound),
         ("live_probe_roots_bound", report.live_probe_roots_bound),
@@ -27663,6 +27702,28 @@ mod tests {
                 .expect("public p2p endpoint"),
             ""
         );
+        assert!(summary.public_deployment.tls_pins_bound);
+        assert!(summary.public_deployment.tls_spki_pin_root_bound);
+        assert!(summary.public_deployment.tls_endpoint_pin_set_root_bound);
+        assert!(summary
+            .public_deployment
+            .tls_endpoint_pin_count_sufficient);
+        assert!(summary.public_deployment.tls_required);
+        assert!(is_hex_root(
+            summary
+                .public_deployment
+                .tls_spki_pin_root
+                .as_deref()
+                .expect("tls spki pin root")
+        ));
+        assert!(is_hex_root(
+            summary
+                .public_deployment
+                .tls_endpoint_pin_set_root
+                .as_deref()
+                .expect("tls endpoint pin set root")
+        ));
+        assert!(summary.public_deployment.tls_endpoint_pin_count >= 7);
         assert!(summary.public_deployment.proxy_policy_verified);
         assert!(summary.public_deployment.preflight_receipt_bound);
         assert!(summary.public_deployment.runbook_receipt_bound);
@@ -30291,6 +30352,68 @@ mod tests {
             "incident_contact_url_public",
             "faucet_url_public",
             "reset_runbook_url_public",
+        ] {
+            assert!(
+                remediation
+                    .failed_subchecks
+                    .contains(&failed_subcheck.to_string()),
+                "missing failed subcheck {failed_subcheck}"
+            );
+        }
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_report_rejects_weak_tls_pin_set() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
+            &base_summary,
+        ));
+        let mut evidence =
+            load_public_deployment_evidence(&path).expect("public deployment evidence");
+        evidence.tls_spki_pin_root = "missing-tls-spki-pin-root".to_string();
+        evidence.tls_endpoint_pin_set_root = "missing-tls-endpoint-pin-set-root".to_string();
+        evidence.tls_endpoint_pin_count = 1;
+        evidence.tls_required = false;
+        base_testnet.cli.public_deployment_evidence = Some(evidence);
+        let summary = base_testnet.summary(Vec::new());
+        assert!(!summary.public_deployment.passed);
+        assert!(!summary.public_deployment.tls_pins_bound);
+        assert!(!summary.public_deployment.tls_spki_pin_root_bound);
+        assert!(!summary.public_deployment.tls_endpoint_pin_set_root_bound);
+        assert!(!summary
+            .public_deployment
+            .tls_endpoint_pin_count_sufficient);
+        assert!(!summary.public_deployment.tls_required);
+        assert_eq!(summary.public_deployment.tls_endpoint_pin_count, 1);
+        assert_eq!(
+            summary
+                .public_deployment
+                .tls_spki_pin_root
+                .as_deref()
+                .expect("tls spki pin root"),
+            "missing-tls-spki-pin-root"
+        );
+        assert_eq!(
+            summary.public_launch_readiness.blocking_gaps,
+            vec!["public-launch-deployment-attestation"]
+        );
+        let remediation = summary
+            .public_launch_readiness
+            .remediations
+            .iter()
+            .find(|remediation| remediation.blocker_id == "public-launch-deployment-attestation")
+            .expect("deployment remediation");
+        for failed_subcheck in [
+            "tls_pins_bound",
+            "tls_spki_pin_root_bound",
+            "tls_endpoint_pin_set_root_bound",
+            "tls_endpoint_pin_count_sufficient",
+            "tls_required",
         ] {
             assert!(
                 remediation
