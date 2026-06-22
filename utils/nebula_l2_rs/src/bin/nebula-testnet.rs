@@ -11203,6 +11203,7 @@ fn public_launch_bundle(summary: &TestnetSummary) -> Value {
         "template_only": true,
         "operator_fill_required": true,
         "public_alpha_only": true,
+        "usable_as_public_deployment_evidence": false,
         "usable_as_mainnet_custody_approval": false,
         "chain_id": CHAIN_ID,
         "version": VERSION,
@@ -12539,6 +12540,13 @@ fn ensure_public_launch_bundle_redacted(value: &Value) -> Result<(), String> {
     )?;
     ensure(
         value
+            .get("usable_as_public_deployment_evidence")
+            .and_then(Value::as_bool)
+            == Some(false),
+        "public launch bundle must not be accepted as deployment evidence",
+    )?;
+    ensure(
+        value
             .get("usable_as_mainnet_custody_approval")
             .and_then(Value::as_bool)
             == Some(false),
@@ -12602,6 +12610,16 @@ fn ensure_public_launch_bundle_redacted(value: &Value) -> Result<(), String> {
             .and_then(Value::as_bool)
             == Some(false),
         "public launch bundle must keep mainnet value readiness false",
+    )?;
+    let mut rootless_bundle = value.clone();
+    if let Some(map) = rootless_bundle.as_object_mut() {
+        map.remove("public_launch_bundle_root");
+    }
+    let expected_bundle_root = value_root("public-launch-bundle", &rootless_bundle);
+    ensure(
+        value.get("public_launch_bundle_root").and_then(Value::as_str)
+            == Some(expected_bundle_root.as_str()),
+        "public launch bundle root mismatch",
     )
 }
 
@@ -23729,6 +23747,7 @@ mod tests {
         assert_eq!(value["kind"], "nebula-public-testnet-launch-bundle");
         assert_eq!(value["template_only"], true);
         assert_eq!(value["operator_fill_required"], true);
+        assert_eq!(value["usable_as_public_deployment_evidence"], false);
         assert_eq!(value["usable_as_mainnet_custody_approval"], false);
         assert_eq!(
             value["source_roots"]["public_bootstrap_profile_report_root"],
@@ -23835,6 +23854,19 @@ mod tests {
                 .expect("bundle root")
         ));
         ensure_public_launch_bundle_redacted(&value).expect("redacted launch bundle");
+        let mut tampered = value.clone();
+        tampered["operator_fill_required"] = json!(false);
+        let error = ensure_public_launch_bundle_redacted(&tampered)
+            .expect_err("tampered launch bundle should fail redaction/root guard");
+        assert!(
+            error.contains("operator fill-in") || error.contains("public launch bundle root mismatch")
+        );
+        let mut root_tampered = value.clone();
+        root_tampered["public_launch_bundle_root"] =
+            json!(root(&["test-public-launch-bundle", "wrong-root"]));
+        let error = ensure_public_launch_bundle_redacted(&root_tampered)
+            .expect_err("root-tampered launch bundle should fail");
+        assert!(error.contains("public launch bundle root mismatch"));
         let _ = fs::remove_file(path);
     }
 

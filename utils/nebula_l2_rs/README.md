@@ -391,8 +391,9 @@ registry manifest requires exactly one independently verified
 ML-DSA-65-signed registry record per committed operator before deployment
 evidence can pass. The bundle is
 `template_only`, keeps public runner listeners disabled, requires deployment
-proxies to publish only the public status manifest, and is not a mainnet
-custody approval.
+proxies to publish only the public status manifest, is not public deployment
+evidence, is not a mainnet custody approval, and is root-recomputed by the
+bundle guard before export/package verification.
 
 `--write-public-launch-readiness-report path\to\launch-report.json` also
 requires `--mainnet-readiness` and writes a local operator-only

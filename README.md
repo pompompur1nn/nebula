@@ -3269,7 +3269,9 @@ real XMR.
   listeners or authorizing mainnet custody. The registry manifest
   requires exactly one independently verified ML-DSA-65-signed registry record
   per committed operator before deployment evidence can clear the public launch
-  gate.
+  gate. The bundle is explicitly unusable as public deployment evidence or
+  mainnet custody approval, and its guard recomputes the bundle root before
+  export or package verification.
 - Public deployment evidence templates give deployment automation a schema v5
   worksheet with the canonical public status manifest, launch bundle root,
   launch artifact manifest roots, package file-set root, typed public
