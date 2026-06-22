@@ -7623,9 +7623,19 @@ fn public_deployment_capture_audit(
         .map_err(|error| format!("failed to read public deployment capture: {error}"))?;
     let within_size_limit = bytes.len() <= MAX_PUBLIC_DEPLOYMENT_EVIDENCE_BYTES;
     let parse_result: Result<Value, _> = serde_json::from_slice(&bytes);
-    let (parseable_json, top_level_object, mut missing_required_fields, placeholder_present,
-        sensitive_markers_present, forbidden_keys_present, capture_plan_root_matches,
-        capture_contract_root_matches, deployment_preflight_checklist_root_matches) =
+    let (
+        parseable_json,
+        top_level_object,
+        mut missing_required_fields,
+        placeholder_present,
+        sensitive_markers_present,
+        forbidden_keys_present,
+        capture_plan_root_matches,
+        capture_contract_root_matches,
+        deployment_preflight_checklist_root_matches,
+        public_launch_package_file_set_root_matches,
+        expected_public_launch_package_file_set_root,
+    ) =
         match parse_result {
             Ok(value) => {
                 let missing = REQUIRED_PUBLIC_DEPLOYMENT_CAPTURE_FIELDS
@@ -7654,6 +7664,8 @@ fn public_deployment_capture_audit(
                     capture_plan["deployment_preflight"]["checklist_root"]
                         .as_str()
                         .unwrap_or_default();
+                let expected_package_file_set_root =
+                    public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id);
                 (
                     true,
                     value.is_object(),
@@ -7668,6 +7680,10 @@ fn public_deployment_capture_audit(
                     value.get("deployment_preflight_checklist_root")
                         .and_then(Value::as_str)
                         == Some(expected_preflight_checklist_root),
+                    value.get("public_launch_package_file_set_root")
+                        .and_then(Value::as_str)
+                        == Some(expected_package_file_set_root.as_str()),
+                    expected_package_file_set_root,
                 )
             }
             Err(_) => (
@@ -7683,6 +7699,8 @@ fn public_deployment_capture_audit(
                 false,
                 false,
                 false,
+                false,
+                public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id),
             ),
         };
     missing_required_fields.sort();
@@ -7695,7 +7713,8 @@ fn public_deployment_capture_audit(
         && forbidden_keys_present.is_empty()
         && capture_plan_root_matches
         && capture_contract_root_matches
-        && deployment_preflight_checklist_root_matches;
+        && deployment_preflight_checklist_root_matches
+        && public_launch_package_file_set_root_matches;
     let (strict_verifier_passed, strict_verifier_error, strict_evidence_root) = if structural_ready {
         match verify_public_deployment_capture(capture_path, summary) {
             Ok(evidence) => (true, Value::Null, json!(evidence.evidence_root)),
@@ -7735,6 +7754,8 @@ fn public_deployment_capture_audit(
         "capture_plan_root_matches": capture_plan_root_matches,
         "capture_contract_root_matches": capture_contract_root_matches,
         "deployment_preflight_checklist_root_matches": deployment_preflight_checklist_root_matches,
+        "expected_public_launch_package_file_set_root": expected_public_launch_package_file_set_root,
+        "public_launch_package_file_set_root_matches": public_launch_package_file_set_root_matches,
         "structural_ready": structural_ready,
         "strict_verifier_passed": strict_verifier_passed,
         "strict_verifier_error": strict_verifier_error,
@@ -7745,7 +7766,7 @@ fn public_deployment_capture_audit(
         } else if structural_ready {
             "repair the nested capture section reported by strict_verifier_error"
         } else {
-            "fill missing fields, remove placeholders/sensitive markers, and bind the current capture plan roots"
+            "fill missing fields, remove placeholders/sensitive markers, and bind the current capture plan and package file-set roots"
         },
     });
     let audit_root = value_root("public-deployment-capture-audit", &audit);
@@ -24564,6 +24585,10 @@ mod tests {
         assert!(missing
             .iter()
             .any(|field| field.as_str() == Some("capture_plan_root")));
+        assert_eq!(
+            audit["public_launch_package_file_set_root_matches"],
+            false
+        );
         assert!(is_hex_root(
             audit["capture_audit_root"].as_str().expect("audit root")
         ));
@@ -24596,6 +24621,11 @@ mod tests {
         assert_eq!(audit["capture_contract_root_matches"], true);
         assert_eq!(audit["deployment_preflight_checklist_root_matches"], true);
         assert_eq!(
+            audit["expected_public_launch_package_file_set_root"],
+            public_launch_package_file_set_root(&base_summary.manifest_id, &base_summary.testnet_id)
+        );
+        assert_eq!(audit["public_launch_package_file_set_root_matches"], true);
+        assert_eq!(
             audit["missing_required_fields"]
                 .as_array()
                 .expect("missing fields")
@@ -24605,6 +24635,39 @@ mod tests {
         assert!(is_hex_root(
             audit["capture_audit_root"].as_str().expect("audit root")
         ));
+        let _ = fs::remove_file(capture_path);
+    }
+
+    #[test]
+    fn public_deployment_capture_audit_reports_package_file_set_mismatch() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let mut capture: Value =
+            serde_json::from_str(&valid_public_deployment_capture(&base_summary))
+                .expect("deployment capture json");
+        capture["public_launch_package_file_set_root"] =
+            json!(root(&["test-public-deployment", "wrong-package-file-set-capture"]));
+        let capture_path = write_public_deployment_evidence(&capture.to_string());
+        let audit = public_deployment_capture_audit(&capture_path, &base_summary)
+            .expect("audit package-file-set mismatch");
+        assert_eq!(audit["structural_ready"], false);
+        assert_eq!(audit["strict_verifier_passed"], false);
+        assert_eq!(audit["strict_verifier_error"], Value::Null);
+        assert_eq!(audit["assembler_ready"], false);
+        assert_eq!(audit["capture_plan_root_matches"], true);
+        assert_eq!(audit["capture_contract_root_matches"], true);
+        assert_eq!(
+            audit["deployment_preflight_checklist_root_matches"],
+            true
+        );
+        assert_eq!(audit["public_launch_package_file_set_root_matches"], false);
+        assert_eq!(
+            audit["expected_public_launch_package_file_set_root"],
+            public_launch_package_file_set_root(&base_summary.manifest_id, &base_summary.testnet_id)
+        );
         let _ = fs::remove_file(capture_path);
     }
 
