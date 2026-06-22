@@ -1261,6 +1261,7 @@ struct PublicLaunchRemediation {
     expected_artifact: String,
     command: String,
     expected_evidence_root: String,
+    failed_subchecks: Vec<String>,
     privacy_classification: String,
     operator_private: bool,
     external_capture_required: bool,
@@ -6592,7 +6593,7 @@ fn public_launch_gaps(summary: &TestnetSummary) -> Vec<String> {
 
 fn public_launch_readiness_report(summary: &TestnetSummary) -> PublicLaunchReadiness {
     let checks = public_launch_checks(summary);
-    let remediations = public_launch_remediations(&checks);
+    let remediations = public_launch_remediations(summary, &checks);
     let blocking_gaps = checks
         .iter()
         .filter(|check| check.status != "pass")
@@ -6645,15 +6646,21 @@ fn public_launch_readiness_report(summary: &TestnetSummary) -> PublicLaunchReadi
     }
 }
 
-fn public_launch_remediations(checks: &[ReadinessCheck]) -> Vec<PublicLaunchRemediation> {
+fn public_launch_remediations(
+    summary: &TestnetSummary,
+    checks: &[ReadinessCheck],
+) -> Vec<PublicLaunchRemediation> {
     checks
         .iter()
         .filter(|check| check.status != "pass")
-        .map(public_launch_remediation_for_check)
+        .map(|check| public_launch_remediation_for_check(summary, check))
         .collect()
 }
 
-fn public_launch_remediation_for_check(check: &ReadinessCheck) -> PublicLaunchRemediation {
+fn public_launch_remediation_for_check(
+    summary: &TestnetSummary,
+    check: &ReadinessCheck,
+) -> PublicLaunchRemediation {
     let (expected_artifact, command, privacy_classification, operator_private, external_capture_required) =
         match check.id.as_str() {
             "public-launch-no-mainnet-custody" => (
@@ -6741,6 +6748,15 @@ fn public_launch_remediation_for_check(check: &ReadinessCheck) -> PublicLaunchRe
                 false,
             ),
         };
+    let failed_subchecks = if check.id == "public-launch-deployment-attestation" {
+        public_deployment_failed_subchecks(&summary.public_deployment)
+    } else {
+        Vec::new()
+    };
+    let failed_subcheck_root = collection_root(
+        "public-launch-remediation-failed-subchecks",
+        failed_subchecks.clone(),
+    );
     let remediation_root = root(&[
         "public-launch-remediation",
         CHAIN_ID,
@@ -6748,6 +6764,7 @@ fn public_launch_remediation_for_check(check: &ReadinessCheck) -> PublicLaunchRe
         expected_artifact,
         command,
         &check.evidence_root,
+        &failed_subcheck_root,
         privacy_classification,
         bool_str(operator_private),
         bool_str(external_capture_required),
@@ -6757,11 +6774,54 @@ fn public_launch_remediation_for_check(check: &ReadinessCheck) -> PublicLaunchRe
         expected_artifact: expected_artifact.to_string(),
         command: command.to_string(),
         expected_evidence_root: check.evidence_root.clone(),
+        failed_subchecks,
         privacy_classification: privacy_classification.to_string(),
         operator_private,
         external_capture_required,
         remediation_root,
     }
+}
+
+fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<String> {
+    let mut failed = Vec::new();
+    if report.evidence_root.is_none() {
+        failed.push("public_deployment_attestation_available".to_string());
+    }
+    for (id, passed) in [
+        (
+            "public_deployment_evidence_shape_verified",
+            report.evidence_shape_verified,
+        ),
+        ("capture_plan_bound", report.capture_plan_bound),
+        ("matches_current_manifest", report.matches_current_manifest),
+        (
+            "public_launch_bundle_root_bound",
+            report.public_launch_bundle_root_bound,
+        ),
+        (
+            "public_launch_package_file_set_root_bound",
+            report.public_launch_package_file_set_root_bound,
+        ),
+        ("bootstrap_profile_bound", report.bootstrap_profile_bound),
+        ("status_manifest_root_bound", report.status_manifest_root_bound),
+        ("endpoint_set_public", report.endpoint_set_public),
+        ("tls_pins_bound", report.tls_pins_bound),
+        ("proxy_policy_verified", report.proxy_policy_verified),
+        ("bootstrap_nodes_bound", report.bootstrap_nodes_bound),
+        ("live_probe_roots_bound", report.live_probe_roots_bound),
+        (
+            "no_private_summary_exposed",
+            report.no_private_summary_exposed,
+        ),
+        ("mainnet_custody_disabled", report.mainnet_custody_disabled),
+        ("preflight_receipt_bound", report.preflight_receipt_bound),
+        ("runbook_receipt_bound", report.runbook_receipt_bound),
+    ] {
+        if !passed {
+            failed.push(id.to_string());
+        }
+    }
+    failed
 }
 
 fn public_launch_checks(summary: &TestnetSummary) -> Vec<ReadinessCheck> {
@@ -25952,6 +26012,16 @@ mod tests {
             summary.public_launch_readiness.blocking_gaps,
             vec!["public-launch-deployment-attestation"]
         );
+        let remediation = summary
+            .public_launch_readiness
+            .remediations
+            .iter()
+            .find(|remediation| remediation.blocker_id == "public-launch-deployment-attestation")
+            .expect("deployment remediation");
+        assert_eq!(
+            remediation.failed_subchecks,
+            vec!["public_launch_package_file_set_root_bound".to_string()]
+        );
         let _ = fs::remove_file(path);
     }
 
@@ -26788,6 +26858,15 @@ mod tests {
             remediation.expected_evidence_root,
             "missing-public-deployment-evidence"
         );
+        assert!(remediation
+            .failed_subchecks
+            .contains(&"public_deployment_attestation_available".to_string()));
+        assert!(remediation
+            .failed_subchecks
+            .contains(&"capture_plan_bound".to_string()));
+        assert!(remediation
+            .failed_subchecks
+            .contains(&"public_launch_package_file_set_root_bound".to_string()));
         assert!(is_hex_root(&remediation.remediation_root));
         let public_status = public_status_manifest(&summary);
         assert!(!value_contains_exact_key(
@@ -26809,6 +26888,10 @@ mod tests {
             summary_json["public_launch_readiness"]["remediations"][0]["expected_artifact"],
             "nebula-public-launch-artifacts.json + nebula-public-deployment.json"
         );
+        assert!(summary_json["public_launch_readiness"]["remediations"][0]["failed_subchecks"]
+            .as_array()
+            .expect("failed subchecks")
+            .contains(&json!("public_launch_package_file_set_root_bound")));
     }
 
     #[test]

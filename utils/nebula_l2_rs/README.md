@@ -657,8 +657,11 @@ includes `public_launch_readiness` with check roots, blocker ids, machine-action
 `remediations`, a `remediation_root`, and a `public-launch-ready` or
 `public-launch-blocked` level. Each remediation names the expected artifact,
 relevant command, expected evidence root, privacy classification, and whether
-external deployment capture is required; the redacted public status manifest
-does not include that local operator report.
+external deployment capture is required. Deployment-attestation remediations
+also list failed subchecks, including capture-plan, launch-bundle, package
+file-set, preflight, runbook, endpoint, probe, privacy-denial, and custody
+bindings; the redacted public status manifest does not include that local
+operator report.
 
 `--fail-on-readiness-gaps` also requires `--mainnet-readiness` and turns the
 dry-run report into a CI/release gate: the command exits nonzero until every
