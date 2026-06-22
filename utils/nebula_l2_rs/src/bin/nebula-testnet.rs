@@ -1123,6 +1123,14 @@ struct PublicDeploymentReport {
     public_status_manifest_root_bound: bool,
     public_status_manifest_payload_bound: bool,
     endpoint_set_public: bool,
+    public_rpc_url_public: bool,
+    public_p2p_endpoint_public: bool,
+    status_page_url_public: bool,
+    health_check_url_public: bool,
+    metrics_url_public: bool,
+    incident_contact_url_public: bool,
+    faucet_url_public: bool,
+    reset_runbook_url_public: bool,
     tls_pins_bound: bool,
     proxy_policy_verified: bool,
     bootstrap_nodes_bound: bool,
@@ -1145,6 +1153,14 @@ struct PublicDeploymentReport {
     expected_capture_plan_root: Option<String>,
     expected_capture_contract_root: Option<String>,
     expected_deployment_preflight_checklist_root: Option<String>,
+    public_rpc_url: Option<String>,
+    public_p2p_endpoint: Option<String>,
+    status_page_url: Option<String>,
+    health_check_url: Option<String>,
+    metrics_url: Option<String>,
+    incident_contact_url: Option<String>,
+    faucet_url: Option<String>,
+    reset_runbook_url: Option<String>,
     preflight_receipt_bound: bool,
     deployment_preflight_receipt_root: Option<String>,
     deployment_preflight_phase_set_root: Option<String>,
@@ -5573,14 +5589,23 @@ impl Testnet {
             evidence.public_status_manifest == expected_public_status;
         let status_manifest_root_bound =
             public_status_manifest_root_bound && public_status_manifest_payload_bound;
-        let endpoint_set_public = public_https_endpoint(&evidence.public_rpc_url)
-            && public_endpoint(&evidence.public_p2p_endpoint)
-            && public_https_endpoint(&evidence.status_page_url)
-            && public_https_endpoint(&evidence.health_check_url)
-            && public_https_endpoint(&evidence.metrics_url)
-            && public_https_endpoint(&evidence.incident_contact_url)
-            && public_https_endpoint(&evidence.faucet_url)
-            && public_https_endpoint(&evidence.reset_runbook_url);
+        let public_rpc_url_public = public_https_endpoint(&evidence.public_rpc_url);
+        let public_p2p_endpoint_public = public_endpoint(&evidence.public_p2p_endpoint);
+        let status_page_url_public = public_https_endpoint(&evidence.status_page_url);
+        let health_check_url_public = public_https_endpoint(&evidence.health_check_url);
+        let metrics_url_public = public_https_endpoint(&evidence.metrics_url);
+        let incident_contact_url_public =
+            public_https_endpoint(&evidence.incident_contact_url);
+        let faucet_url_public = public_https_endpoint(&evidence.faucet_url);
+        let reset_runbook_url_public = public_https_endpoint(&evidence.reset_runbook_url);
+        let endpoint_set_public = public_rpc_url_public
+            && public_p2p_endpoint_public
+            && status_page_url_public
+            && health_check_url_public
+            && metrics_url_public
+            && incident_contact_url_public
+            && faucet_url_public
+            && reset_runbook_url_public;
         let tls_pins_bound = is_hex_root(&evidence.tls_spki_pin_root)
             && is_hex_root(&evidence.tls_endpoint_pin_set_root)
             && evidence.tls_endpoint_pin_count >= 7
@@ -5690,6 +5715,14 @@ impl Testnet {
             public_status_manifest_root_bound,
             public_status_manifest_payload_bound,
             endpoint_set_public,
+            public_rpc_url_public,
+            public_p2p_endpoint_public,
+            status_page_url_public,
+            health_check_url_public,
+            metrics_url_public,
+            incident_contact_url_public,
+            faucet_url_public,
+            reset_runbook_url_public,
             tls_pins_bound,
             proxy_policy_verified,
             bootstrap_nodes_bound,
@@ -5726,6 +5759,14 @@ impl Testnet {
             expected_deployment_preflight_checklist_root: Some(
                 expected_preflight_checklist_root,
             ),
+            public_rpc_url: Some(evidence.public_rpc_url.clone()),
+            public_p2p_endpoint: Some(evidence.public_p2p_endpoint.clone()),
+            status_page_url: Some(evidence.status_page_url.clone()),
+            health_check_url: Some(evidence.health_check_url.clone()),
+            metrics_url: Some(evidence.metrics_url.clone()),
+            incident_contact_url: Some(evidence.incident_contact_url.clone()),
+            faucet_url: Some(evidence.faucet_url.clone()),
+            reset_runbook_url: Some(evidence.reset_runbook_url.clone()),
             preflight_receipt_bound,
             deployment_preflight_receipt_root: Some(
                 evidence.deployment_preflight_receipt_root.clone(),
@@ -6643,6 +6684,14 @@ fn missing_public_deployment_report(manifest_id: &str) -> PublicDeploymentReport
         public_status_manifest_root_bound: false,
         public_status_manifest_payload_bound: false,
         endpoint_set_public: false,
+        public_rpc_url_public: false,
+        public_p2p_endpoint_public: false,
+        status_page_url_public: false,
+        health_check_url_public: false,
+        metrics_url_public: false,
+        incident_contact_url_public: false,
+        faucet_url_public: false,
+        reset_runbook_url_public: false,
         tls_pins_bound: false,
         proxy_policy_verified: false,
         bootstrap_nodes_bound: false,
@@ -6665,6 +6714,14 @@ fn missing_public_deployment_report(manifest_id: &str) -> PublicDeploymentReport
         expected_capture_plan_root: None,
         expected_capture_contract_root: None,
         expected_deployment_preflight_checklist_root: None,
+        public_rpc_url: None,
+        public_p2p_endpoint: None,
+        status_page_url: None,
+        health_check_url: None,
+        metrics_url: None,
+        incident_contact_url: None,
+        faucet_url: None,
+        reset_runbook_url: None,
         preflight_receipt_bound: false,
         deployment_preflight_receipt_root: None,
         deployment_preflight_phase_set_root: None,
@@ -6935,6 +6992,23 @@ fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<St
             report.public_status_manifest_payload_bound,
         ),
         ("endpoint_set_public", report.endpoint_set_public),
+        ("public_rpc_url_public", report.public_rpc_url_public),
+        (
+            "public_p2p_endpoint_public",
+            report.public_p2p_endpoint_public,
+        ),
+        ("status_page_url_public", report.status_page_url_public),
+        ("health_check_url_public", report.health_check_url_public),
+        ("metrics_url_public", report.metrics_url_public),
+        (
+            "incident_contact_url_public",
+            report.incident_contact_url_public,
+        ),
+        ("faucet_url_public", report.faucet_url_public),
+        (
+            "reset_runbook_url_public",
+            report.reset_runbook_url_public,
+        ),
         ("tls_pins_bound", report.tls_pins_bound),
         ("proxy_policy_verified", report.proxy_policy_verified),
         ("bootstrap_nodes_bound", report.bootstrap_nodes_bound),
@@ -27567,6 +27641,28 @@ mod tests {
             .public_deployment
             .public_status_manifest_payload_bound);
         assert!(summary.public_deployment.endpoint_set_public);
+        assert!(summary.public_deployment.public_rpc_url_public);
+        assert!(summary.public_deployment.public_p2p_endpoint_public);
+        assert!(summary.public_deployment.status_page_url_public);
+        assert!(summary.public_deployment.health_check_url_public);
+        assert!(summary.public_deployment.metrics_url_public);
+        assert!(summary.public_deployment.incident_contact_url_public);
+        assert!(summary.public_deployment.faucet_url_public);
+        assert!(summary.public_deployment.reset_runbook_url_public);
+        assert!(summary
+            .public_deployment
+            .public_rpc_url
+            .as_deref()
+            .expect("public rpc url")
+            .starts_with("https://"));
+        assert_ne!(
+            summary
+                .public_deployment
+                .public_p2p_endpoint
+                .as_deref()
+                .expect("public p2p endpoint"),
+            ""
+        );
         assert!(summary.public_deployment.proxy_policy_verified);
         assert!(summary.public_deployment.preflight_receipt_bound);
         assert!(summary.public_deployment.runbook_receipt_bound);
@@ -30130,6 +30226,79 @@ mod tests {
         assert!(remediation
             .failed_subchecks
             .contains(&"deployment_preflight_checklist_root_bound".to_string()));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_report_rejects_non_public_endpoint_set() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
+            &base_summary,
+        ));
+        let mut evidence =
+            load_public_deployment_evidence(&path).expect("public deployment evidence");
+        evidence.public_rpc_url = "http://127.0.0.1:58480/status".to_string();
+        evidence.public_p2p_endpoint = "127.0.0.1:58481".to_string();
+        evidence.status_page_url = "http://status.public.nebula.example".to_string();
+        evidence.health_check_url = "http://127.0.0.1/healthz".to_string();
+        evidence.metrics_url = "http://metrics.public.nebula.example/metrics".to_string();
+        evidence.incident_contact_url =
+            "http://ops.public.nebula.example/incident-contact".to_string();
+        evidence.faucet_url = "http://faucet.public.nebula.example".to_string();
+        evidence.reset_runbook_url =
+            "http://ops.public.nebula.example/reset-runbook".to_string();
+        base_testnet.cli.public_deployment_evidence = Some(evidence);
+        let summary = base_testnet.summary(Vec::new());
+        assert!(!summary.public_deployment.passed);
+        assert!(!summary.public_deployment.endpoint_set_public);
+        assert!(!summary.public_deployment.public_rpc_url_public);
+        assert!(!summary.public_deployment.public_p2p_endpoint_public);
+        assert!(!summary.public_deployment.status_page_url_public);
+        assert!(!summary.public_deployment.health_check_url_public);
+        assert!(!summary.public_deployment.metrics_url_public);
+        assert!(!summary.public_deployment.incident_contact_url_public);
+        assert!(!summary.public_deployment.faucet_url_public);
+        assert!(!summary.public_deployment.reset_runbook_url_public);
+        assert_eq!(
+            summary
+                .public_deployment
+                .public_rpc_url
+                .as_deref()
+                .expect("public rpc url"),
+            "http://127.0.0.1:58480/status"
+        );
+        assert_eq!(
+            summary.public_launch_readiness.blocking_gaps,
+            vec!["public-launch-deployment-attestation"]
+        );
+        let remediation = summary
+            .public_launch_readiness
+            .remediations
+            .iter()
+            .find(|remediation| remediation.blocker_id == "public-launch-deployment-attestation")
+            .expect("deployment remediation");
+        for failed_subcheck in [
+            "endpoint_set_public",
+            "public_rpc_url_public",
+            "public_p2p_endpoint_public",
+            "status_page_url_public",
+            "health_check_url_public",
+            "metrics_url_public",
+            "incident_contact_url_public",
+            "faucet_url_public",
+            "reset_runbook_url_public",
+        ] {
+            assert!(
+                remediation
+                    .failed_subchecks
+                    .contains(&failed_subcheck.to_string()),
+                "missing failed subcheck {failed_subcheck}"
+            );
+        }
         let _ = fs::remove_file(path);
     }
 
