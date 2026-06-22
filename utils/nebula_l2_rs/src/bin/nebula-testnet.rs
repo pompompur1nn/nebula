@@ -7230,12 +7230,15 @@ fn write_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<(
             })
             .collect(),
     );
+    let package_file_set_root =
+        public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id);
     let package_manifest_root = root(&[
         "public-launch-package-manifest",
         CHAIN_ID,
         &summary.manifest_id,
         &summary.testnet_id,
         &artifact_set_root,
+        &package_file_set_root,
         bool_str(summary.acceptance.no_mainnet_custody),
     ]);
     let manifest = json!({
@@ -7253,6 +7256,7 @@ fn write_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<(
         "artifact_count": package_records.len(),
         "artifacts": package_records,
         "artifact_set_root": artifact_set_root,
+        "package_file_set_root": package_file_set_root,
         "package_manifest_root": package_manifest_root,
         "next_steps": {
             "capture_public_deployment": "Fill nebula-public-deployment-template.json with captured public endpoint, TLS, probe, observer, operator-registry, preflight, and runbook receipt evidence.",
@@ -7415,12 +7419,19 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
         required_root(&manifest, "artifact_set_root")? == expected_artifact_set_root,
         "public launch package artifact_set_root mismatch",
     )?;
+    let expected_package_file_set_root =
+        public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id);
+    ensure(
+        required_root(&manifest, "package_file_set_root")? == expected_package_file_set_root,
+        "public launch package file_set_root mismatch",
+    )?;
     let expected_package_manifest_root = root(&[
         "public-launch-package-manifest",
         CHAIN_ID,
         &summary.manifest_id,
         &summary.testnet_id,
         &expected_artifact_set_root,
+        &expected_package_file_set_root,
         bool_str(summary.acceptance.no_mainnet_custody),
     ]);
     ensure(
@@ -7430,12 +7441,7 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
 }
 
 fn ensure_public_launch_package_exact_file_set(dir: &PathBuf) -> Result<(), String> {
-    let mut expected_files = vec!["nebula-public-launch-package.json"];
-    expected_files.extend(
-        PUBLIC_LAUNCH_PACKAGE_ARTIFACTS
-            .iter()
-            .map(|(_, file_name, _)| *file_name),
-    );
+    let expected_files = public_launch_package_expected_file_names();
 
     let entries = fs::read_dir(dir)
         .map_err(|error| format!("failed to list public launch package directory: {error}"))?;
@@ -7466,6 +7472,36 @@ fn ensure_public_launch_package_exact_file_set(dir: &PathBuf) -> Result<(), Stri
         )?;
     }
     Ok(())
+}
+
+fn public_launch_package_expected_file_names() -> Vec<&'static str> {
+    let mut expected_files = vec!["nebula-public-launch-package.json"];
+    expected_files.extend(
+        PUBLIC_LAUNCH_PACKAGE_ARTIFACTS
+            .iter()
+            .map(|(_, file_name, _)| *file_name),
+    );
+    expected_files
+}
+
+fn public_launch_package_file_set_root(manifest_id: &str, testnet_id: &str) -> String {
+    collection_root(
+        "public-launch-package-file-set",
+        public_launch_package_expected_file_names()
+            .iter()
+            .enumerate()
+            .map(|(index, file_name)| {
+                root(&[
+                    "public-launch-package-file",
+                    CHAIN_ID,
+                    manifest_id,
+                    testnet_id,
+                    file_name,
+                    &(index + 1).to_string(),
+                ])
+            })
+            .collect(),
+    )
 }
 
 fn public_launch_package_required_before_capture(artifact_id: &str) -> bool {
@@ -23579,6 +23615,15 @@ mod tests {
                 .expect("artifact set root")
         ));
         assert!(is_hex_root(
+            manifest["package_file_set_root"]
+                .as_str()
+                .expect("package file set root")
+        ));
+        assert_eq!(
+            manifest["package_file_set_root"],
+            public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id)
+        );
+        assert!(is_hex_root(
             manifest["package_manifest_root"]
                 .as_str()
                 .expect("package manifest root")
@@ -23682,6 +23727,39 @@ mod tests {
         let error = verify_public_launch_package(&package_dir_string, &summary)
             .expect_err("tampered package manifest shape should fail verification");
         assert!(error.contains("capture requirement mismatch"));
+        let _ = fs::remove_dir_all(package_dir);
+    }
+
+    #[test]
+    fn public_launch_package_verifier_rejects_file_set_root_tampering() {
+        let counter = TEST_FILE_COUNTER.fetch_add(1, AtomicOrdering::SeqCst);
+        let package_dir = env::temp_dir().join(format!(
+            "nebula-public-launch-package-file-set-{}",
+            root(&["test-public-launch-package-file-set", &counter.to_string()])
+        ));
+        let package_dir_string = package_dir.to_string_lossy().into_owned();
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness cli should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_launch_package(&package_dir_string, &summary)
+            .expect("write public launch package");
+
+        let manifest_path = package_dir.join("nebula-public-launch-package.json");
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("read package manifest"))
+                .expect("package manifest json");
+        manifest["package_file_set_root"] = json!(root(&["tampered-package-file-set"]));
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("manifest json"),
+        )
+        .expect("write tampered package manifest");
+
+        let error = verify_public_launch_package(&package_dir_string, &summary)
+            .expect_err("tampered package file-set root should fail verification");
+        assert!(error.contains("file_set_root mismatch"));
         let _ = fs::remove_dir_all(package_dir);
     }
 

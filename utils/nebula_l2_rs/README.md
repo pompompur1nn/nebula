@@ -409,8 +409,10 @@ local launch-readiness report, deployment evidence template, deployment capture
 plan, and a `nebula-public-launch-package` manifest. The package manifest
 records each filename, root field, artifact root, record root,
 required-before-capture flag, and operator-fill flag under an
-`artifact_set_root`, so deployment automation can detect stale, swapped,
-cross-run, or metadata-tampered files before filling public probe evidence.
+`artifact_set_root`, plus a `package_file_set_root` over the exact ordered
+top-level file list, so deployment automation can detect stale, swapped,
+cross-run, extra, or metadata-tampered files before filling public probe
+evidence.
 `--verify-public-launch-package path\to\package-dir` reruns those checks against
 the current release-candidate summary, so CI should combine it with the export
 step for the same runner invocation. It recomputes every artifact and package

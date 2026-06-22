@@ -3239,9 +3239,10 @@ real XMR.
   template, deployment capture plan, and a `nebula-public-launch-package`
   manifest. The package manifest binds each filename, root field, artifact
   root, record root, required-before-capture flag, operator-fill flag, package
-  `artifact_set_root`, release-candidate manifest id, and no-mainnet-custody
-  boundary so deployment automation can reject stale, swapped, cross-run, or
-  metadata-tampered handoff files before public endpoint evidence is assembled.
+  `artifact_set_root`, package `package_file_set_root`, release-candidate
+  manifest id, and no-mainnet-custody boundary so deployment automation can
+  reject stale, swapped, cross-run, extra, or metadata-tampered handoff files
+  before public endpoint evidence is assembled.
   When combined with the export step in the same runner invocation,
   `--verify-public-launch-package` recomputes each package artifact and the
   package manifest root against the current release-candidate summary, enforces
