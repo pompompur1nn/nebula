@@ -7834,6 +7834,10 @@ fn public_deployment_capture_audit(
         invalid_preflight_receipt_phase_indexes,
         preflight_receipt_roots_valid,
         preflight_receipt_fields_valid,
+        invalid_runbook_receipt_binding_fields,
+        invalid_runbook_receipt_step_indexes,
+        runbook_receipt_roots_valid,
+        runbook_receipt_fields_valid,
         public_launch_package_file_set_root_matches,
         expected_public_launch_package_file_set_root,
     ) =
@@ -7908,6 +7912,7 @@ fn public_deployment_capture_audit(
                 let operator_registry_fields =
                     public_bootstrap_operator_registry_field_audit(&value);
                 let preflight_receipt_fields = public_deployment_preflight_receipt_field_audit(&value);
+                let runbook_receipt_fields = public_deployment_runbook_receipt_field_audit(&value);
                 let observer_count = value
                     .get("probe_observers")
                     .and_then(Value::as_array)
@@ -8090,6 +8095,10 @@ fn public_deployment_capture_audit(
                     preflight_receipt_fields.invalid_phase_indexes,
                     preflight_receipt_fields.roots_valid,
                     preflight_receipt_fields.fields_valid,
+                    runbook_receipt_fields.invalid_binding_fields,
+                    runbook_receipt_fields.invalid_step_indexes,
+                    runbook_receipt_fields.roots_valid,
+                    runbook_receipt_fields.fields_valid,
                     value.get("public_launch_package_file_set_root")
                         .and_then(Value::as_str)
                         == Some(expected_package_file_set_root.as_str()),
@@ -8197,6 +8206,10 @@ fn public_deployment_capture_audit(
                 Vec::new(),
                 true,
                 true,
+                Vec::new(),
+                Vec::new(),
+                true,
+                true,
                 false,
                 public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id),
             ),
@@ -8242,6 +8255,7 @@ fn public_deployment_capture_audit(
         && capture_contract_root_matches
         && deployment_preflight_checklist_root_matches
         && preflight_receipt_fields_valid
+        && runbook_receipt_fields_valid
         && public_launch_package_file_set_root_matches;
     let mut structural_failed_checks = Vec::new();
     if !within_size_limit {
@@ -8355,6 +8369,9 @@ fn public_deployment_capture_audit(
     if !preflight_receipt_fields_valid {
         structural_failed_checks.push("preflight_receipt_fields_valid".to_string());
     }
+    if !runbook_receipt_fields_valid {
+        structural_failed_checks.push("runbook_receipt_fields_valid".to_string());
+    }
     if !public_launch_package_file_set_root_matches {
         structural_failed_checks.push("public_launch_package_file_set_root_matches".to_string());
     }
@@ -8436,6 +8453,11 @@ fn public_deployment_capture_audit(
         json!(invalid_preflight_receipt_phase_indexes);
     audit["preflight_receipt_roots_valid"] = json!(preflight_receipt_roots_valid);
     audit["preflight_receipt_fields_valid"] = json!(preflight_receipt_fields_valid);
+    audit["invalid_runbook_receipt_binding_fields"] =
+        json!(invalid_runbook_receipt_binding_fields);
+    audit["invalid_runbook_receipt_step_indexes"] = json!(invalid_runbook_receipt_step_indexes);
+    audit["runbook_receipt_roots_valid"] = json!(runbook_receipt_roots_valid);
+    audit["runbook_receipt_fields_valid"] = json!(runbook_receipt_fields_valid);
     audit["required_tls_endpoint_pin_roles"] = json!(PUBLIC_TLS_ENDPOINT_PIN_ROLES);
     audit["tls_endpoint_pin_count"] = json!(tls_endpoint_pin_count);
     audit["missing_tls_endpoint_pin_roles"] = json!(missing_tls_endpoint_pin_roles);
@@ -9911,6 +9933,254 @@ fn public_deployment_preflight_receipt_field_audit(value: &Value) -> PublicPrefl
     PublicPreflightReceiptFieldAudit {
         invalid_binding_fields,
         invalid_phase_indexes,
+        roots_valid,
+        fields_valid,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PublicRunbookReceiptFieldAudit {
+    invalid_binding_fields: Vec<String>,
+    invalid_step_indexes: Vec<usize>,
+    roots_valid: bool,
+    fields_valid: bool,
+}
+
+fn public_deployment_runbook_receipt_field_audit(value: &Value) -> PublicRunbookReceiptFieldAudit {
+    let receipt = value.get("public_deployment_runbook_receipt");
+    let mut invalid_binding_fields = Vec::new();
+    let mut invalid_step_indexes = Vec::new();
+    let mut roots_valid = true;
+    if let Some(receipt) = receipt {
+        let Some(receipt_map) = receipt.as_object() else {
+            return PublicRunbookReceiptFieldAudit {
+                invalid_binding_fields: vec!["public_deployment_runbook_receipt".to_string()],
+                invalid_step_indexes,
+                roots_valid: false,
+                fields_valid: false,
+            };
+        };
+        let deployment_run_id = value
+            .get("deployment_run_id")
+            .and_then(Value::as_str)
+            .or_else(|| receipt.get("deployment_run_id").and_then(Value::as_str));
+        let observed_at_unix_ms = value.get("observed_at_unix_ms").and_then(Value::as_u64);
+        let expires_at_unix_ms = value.get("expires_at_unix_ms").and_then(Value::as_u64);
+        let public_deployment_runbook_root = value
+            .get("public_deployment_runbook_root")
+            .and_then(Value::as_str)
+            .or_else(|| receipt.get("public_deployment_runbook_root").and_then(Value::as_str));
+        let public_deployment_runbook_step_set_root = value
+            .get("public_deployment_runbook_step_set_root")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                receipt
+                    .get("public_deployment_runbook_step_set_root")
+                    .and_then(Value::as_str)
+            });
+        let capture_contract_root = value
+            .get("capture_contract_root")
+            .and_then(Value::as_str)
+            .or_else(|| receipt.get("capture_contract_root").and_then(Value::as_str));
+        let public_launch_bundle_root = value
+            .get("public_launch_bundle_root")
+            .and_then(Value::as_str)
+            .or_else(|| receipt.get("public_launch_bundle_root").and_then(Value::as_str));
+        let public_status_manifest_root = value
+            .get("public_status_manifest_root")
+            .and_then(Value::as_str)
+            .or_else(|| receipt.get("public_status_manifest_root").and_then(Value::as_str));
+        if receipt.get("schema_version").and_then(Value::as_u64) != Some(1) {
+            invalid_binding_fields.push("schema_version".to_string());
+        }
+        if receipt.get("kind").and_then(Value::as_str)
+            != Some("nebula-public-deployment-runbook-receipt")
+        {
+            invalid_binding_fields.push("kind".to_string());
+        }
+        if receipt.get("chain_id").and_then(Value::as_str) != Some(CHAIN_ID) {
+            invalid_binding_fields.push("chain_id".to_string());
+        }
+        if receipt.get("completed").and_then(Value::as_bool) != Some(true) {
+            invalid_binding_fields.push("completed".to_string());
+        }
+        for (field, expected) in [
+            ("deployment_run_id", deployment_run_id),
+            ("public_deployment_runbook_root", public_deployment_runbook_root),
+            (
+                "public_deployment_runbook_step_set_root",
+                public_deployment_runbook_step_set_root,
+            ),
+            ("capture_contract_root", capture_contract_root),
+            ("public_launch_bundle_root", public_launch_bundle_root),
+            ("public_status_manifest_root", public_status_manifest_root),
+        ] {
+            let actual = receipt.get(field).and_then(Value::as_str);
+            if actual.is_none()
+                || expected.map(|expected| actual == Some(expected)).unwrap_or(true) == false
+            {
+                invalid_binding_fields.push(field.to_string());
+            }
+        }
+        let required_step_ids_valid = receipt
+            .get("required_step_ids")
+            .and_then(Value::as_array)
+            .map(|step_ids| {
+                step_ids.len() == PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len()
+                    && PUBLIC_DEPLOYMENT_RUNBOOK_STEPS
+                        .iter()
+                        .enumerate()
+                        .all(|(index, expected)| {
+                            step_ids.get(index).and_then(Value::as_str) == Some(*expected)
+                        })
+            })
+            == Some(true);
+        if !required_step_ids_valid {
+            invalid_binding_fields.push("required_step_ids".to_string());
+        }
+        let mut runbook_step_roots = Vec::new();
+        let mut step_receipt_roots = Vec::new();
+        let steps = receipt.get("steps").and_then(Value::as_array);
+        if steps.map(|steps| steps.len()) != Some(PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len()) {
+            invalid_binding_fields.push("steps".to_string());
+        }
+        if let Some(steps) = steps {
+            for (index, step) in steps.iter().enumerate() {
+                let expected_id = PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.get(index).copied();
+                let order = step.get("order").and_then(Value::as_u64);
+                let step_id = step.get("step_id").and_then(Value::as_str);
+                let completed_at = step.get("completed_at_unix_ms").and_then(Value::as_u64);
+                let step_root = step.get("step_root").and_then(Value::as_str);
+                let source_root = step.get("source_root").and_then(Value::as_str);
+                let step_evidence_root = step.get("step_evidence_root").and_then(Value::as_str);
+                let step_time_valid = completed_at
+                    .map(|completed_at| {
+                        observed_at_unix_ms
+                            .zip(expires_at_unix_ms)
+                            .map(|(observed_at, expires_at)| {
+                                completed_at <= observed_at
+                                    && completed_at <= expires_at
+                                    && observed_at.saturating_sub(completed_at)
+                                        <= MAX_PUBLIC_DEPLOYMENT_FRESHNESS_MS
+                            })
+                            .unwrap_or(true)
+                    })
+                    == Some(true);
+                if let Some(root) = step_root {
+                    runbook_step_roots.push(root.to_string());
+                }
+                let expected_step_receipt_root = deployment_run_id
+                    .zip(public_deployment_runbook_root)
+                    .zip(public_deployment_runbook_step_set_root)
+                    .zip(expected_id.zip(order))
+                    .zip(step_root.zip(source_root).zip(step_evidence_root.zip(completed_at)))
+                    .map(|((((run_id, runbook_root), step_set_root), (expected_id, order)), ((step_root, source_root), (evidence_root, completed_at)))| {
+                        root(&[
+                            "public-deployment-runbook-step-receipt",
+                            CHAIN_ID,
+                            run_id,
+                            runbook_root,
+                            step_set_root,
+                            expected_id,
+                            &order.to_string(),
+                            step_root,
+                            source_root,
+                            evidence_root,
+                            &completed_at.to_string(),
+                            bool_str(true),
+                        ])
+                    });
+                if let Some(root) = expected_step_receipt_root.clone() {
+                    step_receipt_roots.push(root);
+                }
+                let step_valid = step.is_object()
+                    && order == Some((index + 1) as u64)
+                    && expected_id.is_some()
+                    && step_id == expected_id
+                    && step.get("required").and_then(Value::as_bool) == Some(true)
+                    && step.get("completed").and_then(Value::as_bool) == Some(true)
+                    && step_time_valid
+                    && step_root.is_some_and(is_hex_root)
+                    && source_root.is_some_and(is_hex_root)
+                    && step_evidence_root.is_some_and(is_hex_root)
+                    && step
+                        .get("step_receipt_root")
+                        .and_then(Value::as_str)
+                        .is_some_and(is_hex_root)
+                    && expected_step_receipt_root
+                        .map(|expected| {
+                            step.get("step_receipt_root").and_then(Value::as_str)
+                                == Some(expected.as_str())
+                        })
+                        .unwrap_or(false);
+                if !step_valid {
+                    invalid_step_indexes.push(index);
+                }
+            }
+        }
+        if receipt.get("step_count").and_then(Value::as_u64)
+            != Some(PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64)
+        {
+            invalid_binding_fields.push("step_count".to_string());
+        }
+        roots_valid = false;
+        if runbook_step_roots.len() == PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len()
+            && step_receipt_roots.len() == PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len()
+        {
+            let computed_step_set_root =
+                collection_root("public-deployment-runbook-step-set", runbook_step_roots);
+            let step_receipt_set_root =
+                collection_root("public-deployment-runbook-step-receipt-set", step_receipt_roots);
+            let receipt_root = deployment_run_id
+                .zip(public_deployment_runbook_root)
+                .zip(public_deployment_runbook_step_set_root)
+                .zip(capture_contract_root)
+                .zip(public_launch_bundle_root)
+                .zip(public_status_manifest_root)
+                .map(|(((((run_id, runbook_root), step_set_root), contract_root), launch_root), status_root)| {
+                    root(&[
+                        "public-deployment-runbook-receipt",
+                        CHAIN_ID,
+                        run_id,
+                        runbook_root,
+                        step_set_root,
+                        contract_root,
+                        launch_root,
+                        status_root,
+                        &step_receipt_set_root,
+                        &(PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64).to_string(),
+                        bool_str(true),
+                    ])
+                });
+            roots_valid = public_deployment_runbook_step_set_root
+                .map(|expected| computed_step_set_root == expected)
+                .unwrap_or(true)
+                && receipt.get("step_receipt_set_root").and_then(Value::as_str)
+                    == Some(step_receipt_set_root.as_str())
+                && receipt
+                    .get("receipt_root")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_hex_root)
+                && receipt_root
+                    .map(|root| {
+                        receipt.get("receipt_root").and_then(Value::as_str) == Some(root.as_str())
+                    })
+                    .unwrap_or(false);
+        }
+        if receipt_map.is_empty() {
+            invalid_binding_fields.push("public_deployment_runbook_receipt".to_string());
+        }
+    }
+    let fields_valid = match receipt {
+        Some(Value::Object(_)) => {
+            invalid_binding_fields.is_empty() && invalid_step_indexes.is_empty() && roots_valid
+        }
+        Some(_) => false,
+        None => true,
+    };
+    PublicRunbookReceiptFieldAudit {
+        invalid_binding_fields,
+        invalid_step_indexes,
         roots_valid,
         fields_valid,
     }
@@ -27592,6 +27862,41 @@ mod tests {
             .as_array()
             .expect("structural failed checks")
             .contains(&json!("preflight_receipt_fields_valid")));
+        let _ = fs::remove_file(capture_path);
+    }
+
+    #[test]
+    fn public_deployment_capture_audit_reports_invalid_runbook_receipt_fields() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let mut capture: Value =
+            serde_json::from_str(&valid_public_deployment_capture(&base_summary))
+                .expect("deployment capture json");
+        capture["public_deployment_runbook_receipt"]["completed"] = json!(false);
+        capture["public_deployment_runbook_receipt"]["steps"][0]["completed"] = json!(false);
+        capture["public_deployment_runbook_receipt"]["steps"][0]["step_id"] =
+            json!("wrong-runbook-step");
+        capture["public_deployment_runbook_receipt"]["steps"][0]["completed_at_unix_ms"] = json!(0);
+        let capture_path = write_public_deployment_evidence(&capture.to_string());
+        let audit = public_deployment_capture_audit(&capture_path, &base_summary)
+            .expect("audit invalid runbook receipt capture");
+        assert_eq!(audit["structural_ready"], false);
+        assert_eq!(audit["strict_verifier_passed"], false);
+        assert_eq!(audit["strict_verifier_error"], Value::Null);
+        assert_eq!(audit["runbook_receipt_fields_valid"], false);
+        assert_eq!(audit["runbook_receipt_roots_valid"], false);
+        assert!(audit["invalid_runbook_receipt_binding_fields"]
+            .as_array()
+            .expect("invalid runbook binding fields")
+            .contains(&json!("completed")));
+        assert_eq!(audit["invalid_runbook_receipt_step_indexes"], json!([0]));
+        assert!(audit["structural_failed_checks"]
+            .as_array()
+            .expect("structural failed checks")
+            .contains(&json!("runbook_receipt_fields_valid")));
         let _ = fs::remove_file(capture_path);
     }
 

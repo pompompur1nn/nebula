@@ -487,8 +487,9 @@ requires `--mainnet-readiness` and writes a non-passing
 `nebula-public-deployment-capture-audit` report. The audit lists missing
 required capture fields, missing and invalid public endpoint fields, invalid
 timestamp types, freshness-window bounds, current capture-time validity,
-deployment-run-id validity, malformed preflight receipt fields/phases, TLS
-endpoint pin counts and missing/extra/duplicate TLS endpoint pin roles,
+deployment-run-id validity, malformed preflight receipt fields/phases,
+malformed runbook receipt fields/steps, TLS endpoint pin counts and
+missing/extra/duplicate TLS endpoint pin roles,
 indexed malformed TLS endpoint pin records,
 public-surface probe counts and missing/extra/duplicate probe roles,
 indexed malformed public-surface probe records, bootstrap
