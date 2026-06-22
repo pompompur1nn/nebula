@@ -396,8 +396,8 @@ custody approval.
 requires `--mainnet-readiness` and writes a local operator-only
 `nebula-public-launch-readiness-report`. It archives the public launch gate
 level, blocker ids, remediation commands, public status/bundle/capture-plan
-roots, deployment evidence root if present, and its own artifact root. The
-report is not a public deployment attestation and has both
+roots, package file-set root, deployment evidence root if present, and its own
+artifact root. The report is not a public deployment attestation and has both
 `usable_as_public_deployment_evidence` and
 `usable_as_mainnet_custody_approval` set to false.
 
