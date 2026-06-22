@@ -1159,6 +1159,20 @@ struct PublicDeploymentReport {
     bootstrap_p2p_endpoint_set_root_bound: bool,
     bootstrap_status_page_set_root_bound: bool,
     live_probe_roots_bound: bool,
+    status_probe_root_bound: bool,
+    p2p_handshake_root_bound: bool,
+    health_probe_root_bound: bool,
+    status_page_probe_root_bound: bool,
+    metrics_probe_root_bound: bool,
+    deployed_finality_probe_root_bound: bool,
+    incident_contact_probe_root_bound: bool,
+    faucet_probe_root_bound: bool,
+    reset_runbook_probe_root_bound: bool,
+    live_private_summary_probe_root_bound: bool,
+    public_surface_probe_set_root_bound: bool,
+    public_surface_probe_count_bound: bool,
+    public_probe_set_root_bound: bool,
+    public_probe_count_bound: bool,
     no_private_summary_exposed: bool,
     mainnet_custody_disabled: bool,
     public_launch_bundle_root: Option<String>,
@@ -1215,6 +1229,19 @@ struct PublicDeploymentReport {
     bootstrap_node_probe_count: u64,
     bootstrap_p2p_endpoint_set_root: Option<String>,
     bootstrap_status_page_set_root: Option<String>,
+    status_probe_root: Option<String>,
+    p2p_handshake_root: Option<String>,
+    health_probe_root: Option<String>,
+    status_page_probe_root: Option<String>,
+    metrics_probe_root: Option<String>,
+    deployed_finality_probe_root: Option<String>,
+    incident_contact_probe_root: Option<String>,
+    faucet_probe_root: Option<String>,
+    reset_runbook_probe_root: Option<String>,
+    public_surface_probe_set_root: Option<String>,
+    public_surface_probe_count: u64,
+    public_probe_set_root: Option<String>,
+    public_probe_count: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -5717,21 +5744,42 @@ impl Testnet {
             && bootstrap_node_probe_set_root_bound
             && bootstrap_p2p_endpoint_set_root_bound
             && bootstrap_status_page_set_root_bound;
-        let live_probe_roots_bound = is_hex_root(&evidence.status_probe_root)
-            && is_hex_root(&evidence.p2p_handshake_root)
-            && is_hex_root(&evidence.health_probe_root)
-            && is_hex_root(&evidence.status_page_probe_root)
-            && is_hex_root(&evidence.metrics_probe_root)
-            && is_hex_root(&evidence.deployed_finality_probe_root)
-            && is_hex_root(&evidence.incident_contact_probe_root)
-            && is_hex_root(&evidence.faucet_probe_root)
-            && is_hex_root(&evidence.reset_runbook_probe_root)
-            && is_hex_root(&evidence.private_summary_probe_root)
-            && is_hex_root(&evidence.public_surface_probe_set_root)
-            && evidence.public_surface_probe_count == REQUIRED_PUBLIC_SURFACE_PROBE_COUNT
-            && is_hex_root(&evidence.public_probe_set_root)
-            && evidence.public_probe_count
+        let status_probe_root_bound = is_hex_root(&evidence.status_probe_root);
+        let p2p_handshake_root_bound = is_hex_root(&evidence.p2p_handshake_root);
+        let health_probe_root_bound = is_hex_root(&evidence.health_probe_root);
+        let status_page_probe_root_bound = is_hex_root(&evidence.status_page_probe_root);
+        let metrics_probe_root_bound = is_hex_root(&evidence.metrics_probe_root);
+        let deployed_finality_probe_root_bound =
+            is_hex_root(&evidence.deployed_finality_probe_root);
+        let incident_contact_probe_root_bound =
+            is_hex_root(&evidence.incident_contact_probe_root);
+        let faucet_probe_root_bound = is_hex_root(&evidence.faucet_probe_root);
+        let reset_runbook_probe_root_bound =
+            is_hex_root(&evidence.reset_runbook_probe_root);
+        let live_private_summary_probe_root_bound =
+            is_hex_root(&evidence.private_summary_probe_root);
+        let public_surface_probe_set_root_bound =
+            is_hex_root(&evidence.public_surface_probe_set_root);
+        let public_surface_probe_count_bound =
+            evidence.public_surface_probe_count == REQUIRED_PUBLIC_SURFACE_PROBE_COUNT;
+        let public_probe_set_root_bound = is_hex_root(&evidence.public_probe_set_root);
+        let public_probe_count_bound =
+            evidence.public_probe_count
                 == REQUIRED_PUBLIC_DEPLOYMENT_PROBE_ROOT_FIELDS.len() as u64;
+        let live_probe_roots_bound = status_probe_root_bound
+            && p2p_handshake_root_bound
+            && health_probe_root_bound
+            && status_page_probe_root_bound
+            && metrics_probe_root_bound
+            && deployed_finality_probe_root_bound
+            && incident_contact_probe_root_bound
+            && faucet_probe_root_bound
+            && reset_runbook_probe_root_bound
+            && live_private_summary_probe_root_bound
+            && public_surface_probe_set_root_bound
+            && public_surface_probe_count_bound
+            && public_probe_set_root_bound
+            && public_probe_count_bound;
         let mainnet_custody_disabled = evidence.mainnet_custody_disabled;
         let passed = evidence.placeholders_absent
             && capture_plan_bound
@@ -5833,6 +5881,20 @@ impl Testnet {
             bootstrap_p2p_endpoint_set_root_bound,
             bootstrap_status_page_set_root_bound,
             live_probe_roots_bound,
+            status_probe_root_bound,
+            p2p_handshake_root_bound,
+            health_probe_root_bound,
+            status_page_probe_root_bound,
+            metrics_probe_root_bound,
+            deployed_finality_probe_root_bound,
+            incident_contact_probe_root_bound,
+            faucet_probe_root_bound,
+            reset_runbook_probe_root_bound,
+            live_private_summary_probe_root_bound,
+            public_surface_probe_set_root_bound,
+            public_surface_probe_count_bound,
+            public_probe_set_root_bound,
+            public_probe_count_bound,
             no_private_summary_exposed,
             mainnet_custody_disabled,
             public_launch_bundle_root: Some(evidence.public_launch_bundle_root.clone()),
@@ -5926,6 +5988,19 @@ impl Testnet {
             bootstrap_status_page_set_root: Some(
                 evidence.bootstrap_status_page_set_root.clone(),
             ),
+            status_probe_root: Some(evidence.status_probe_root.clone()),
+            p2p_handshake_root: Some(evidence.p2p_handshake_root.clone()),
+            health_probe_root: Some(evidence.health_probe_root.clone()),
+            status_page_probe_root: Some(evidence.status_page_probe_root.clone()),
+            metrics_probe_root: Some(evidence.metrics_probe_root.clone()),
+            deployed_finality_probe_root: Some(evidence.deployed_finality_probe_root.clone()),
+            incident_contact_probe_root: Some(evidence.incident_contact_probe_root.clone()),
+            faucet_probe_root: Some(evidence.faucet_probe_root.clone()),
+            reset_runbook_probe_root: Some(evidence.reset_runbook_probe_root.clone()),
+            public_surface_probe_set_root: Some(evidence.public_surface_probe_set_root.clone()),
+            public_surface_probe_count: evidence.public_surface_probe_count,
+            public_probe_set_root: Some(evidence.public_probe_set_root.clone()),
+            public_probe_count: evidence.public_probe_count,
         }
     }
 
@@ -6855,6 +6930,20 @@ fn missing_public_deployment_report(manifest_id: &str) -> PublicDeploymentReport
         bootstrap_p2p_endpoint_set_root_bound: false,
         bootstrap_status_page_set_root_bound: false,
         live_probe_roots_bound: false,
+        status_probe_root_bound: false,
+        p2p_handshake_root_bound: false,
+        health_probe_root_bound: false,
+        status_page_probe_root_bound: false,
+        metrics_probe_root_bound: false,
+        deployed_finality_probe_root_bound: false,
+        incident_contact_probe_root_bound: false,
+        faucet_probe_root_bound: false,
+        reset_runbook_probe_root_bound: false,
+        live_private_summary_probe_root_bound: false,
+        public_surface_probe_set_root_bound: false,
+        public_surface_probe_count_bound: false,
+        public_probe_set_root_bound: false,
+        public_probe_count_bound: false,
         no_private_summary_exposed: false,
         mainnet_custody_disabled: false,
         public_launch_bundle_root: None,
@@ -6911,6 +7000,19 @@ fn missing_public_deployment_report(manifest_id: &str) -> PublicDeploymentReport
         bootstrap_node_probe_count: 0,
         bootstrap_p2p_endpoint_set_root: None,
         bootstrap_status_page_set_root: None,
+        status_probe_root: None,
+        p2p_handshake_root: None,
+        health_probe_root: None,
+        status_page_probe_root: None,
+        metrics_probe_root: None,
+        deployed_finality_probe_root: None,
+        incident_contact_probe_root: None,
+        faucet_probe_root: None,
+        reset_runbook_probe_root: None,
+        public_surface_probe_set_root: None,
+        public_surface_probe_count: 0,
+        public_probe_set_root: None,
+        public_probe_count: 0,
     }
 }
 
@@ -7281,6 +7383,44 @@ fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<St
             report.bootstrap_status_page_set_root_bound,
         ),
         ("live_probe_roots_bound", report.live_probe_roots_bound),
+        ("status_probe_root_bound", report.status_probe_root_bound),
+        ("p2p_handshake_root_bound", report.p2p_handshake_root_bound),
+        ("health_probe_root_bound", report.health_probe_root_bound),
+        (
+            "status_page_probe_root_bound",
+            report.status_page_probe_root_bound,
+        ),
+        ("metrics_probe_root_bound", report.metrics_probe_root_bound),
+        (
+            "deployed_finality_probe_root_bound",
+            report.deployed_finality_probe_root_bound,
+        ),
+        (
+            "incident_contact_probe_root_bound",
+            report.incident_contact_probe_root_bound,
+        ),
+        ("faucet_probe_root_bound", report.faucet_probe_root_bound),
+        (
+            "reset_runbook_probe_root_bound",
+            report.reset_runbook_probe_root_bound,
+        ),
+        (
+            "live_private_summary_probe_root_bound",
+            report.live_private_summary_probe_root_bound,
+        ),
+        (
+            "public_surface_probe_set_root_bound",
+            report.public_surface_probe_set_root_bound,
+        ),
+        (
+            "public_surface_probe_count_bound",
+            report.public_surface_probe_count_bound,
+        ),
+        (
+            "public_probe_set_root_bound",
+            report.public_probe_set_root_bound,
+        ),
+        ("public_probe_count_bound", report.public_probe_count_bound),
         (
             "no_private_summary_exposed",
             report.no_private_summary_exposed,
@@ -28086,6 +28226,64 @@ mod tests {
                 .as_deref()
                 .expect("bootstrap status page set root")
         ));
+        assert!(summary.public_deployment.live_probe_roots_bound);
+        assert!(summary.public_deployment.status_probe_root_bound);
+        assert!(summary.public_deployment.p2p_handshake_root_bound);
+        assert!(summary.public_deployment.health_probe_root_bound);
+        assert!(summary.public_deployment.status_page_probe_root_bound);
+        assert!(summary.public_deployment.metrics_probe_root_bound);
+        assert!(summary
+            .public_deployment
+            .deployed_finality_probe_root_bound);
+        assert!(summary
+            .public_deployment
+            .incident_contact_probe_root_bound);
+        assert!(summary.public_deployment.faucet_probe_root_bound);
+        assert!(summary.public_deployment.reset_runbook_probe_root_bound);
+        assert!(summary
+            .public_deployment
+            .live_private_summary_probe_root_bound);
+        assert!(summary
+            .public_deployment
+            .public_surface_probe_set_root_bound);
+        assert!(summary.public_deployment.public_surface_probe_count_bound);
+        assert!(summary.public_deployment.public_probe_set_root_bound);
+        assert!(summary.public_deployment.public_probe_count_bound);
+        for probe_root in [
+            summary.public_deployment.status_probe_root.as_deref(),
+            summary.public_deployment.p2p_handshake_root.as_deref(),
+            summary.public_deployment.health_probe_root.as_deref(),
+            summary.public_deployment.status_page_probe_root.as_deref(),
+            summary.public_deployment.metrics_probe_root.as_deref(),
+            summary
+                .public_deployment
+                .deployed_finality_probe_root
+                .as_deref(),
+            summary
+                .public_deployment
+                .incident_contact_probe_root
+                .as_deref(),
+            summary.public_deployment.faucet_probe_root.as_deref(),
+            summary
+                .public_deployment
+                .reset_runbook_probe_root
+                .as_deref(),
+            summary
+                .public_deployment
+                .public_surface_probe_set_root
+                .as_deref(),
+            summary.public_deployment.public_probe_set_root.as_deref(),
+        ] {
+            assert!(is_hex_root(probe_root.expect("probe root")));
+        }
+        assert_eq!(
+            summary.public_deployment.public_surface_probe_count,
+            REQUIRED_PUBLIC_SURFACE_PROBE_COUNT
+        );
+        assert_eq!(
+            summary.public_deployment.public_probe_count,
+            REQUIRED_PUBLIC_DEPLOYMENT_PROBE_ROOT_FIELDS.len() as u64
+        );
         assert!(summary.public_deployment.preflight_receipt_bound);
         assert!(summary.public_deployment.runbook_receipt_bound);
         assert!(is_hex_root(
@@ -30963,6 +31161,106 @@ mod tests {
             "bootstrap_node_probe_set_root_bound",
             "bootstrap_p2p_endpoint_set_root_bound",
             "bootstrap_status_page_set_root_bound",
+        ] {
+            assert!(
+                remediation
+                    .failed_subchecks
+                    .contains(&failed_subcheck.to_string()),
+                "missing failed subcheck {failed_subcheck}"
+            );
+        }
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_report_rejects_unbound_live_probe_roots() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
+            &base_summary,
+        ));
+        let mut evidence =
+            load_public_deployment_evidence(&path).expect("public deployment evidence");
+        evidence.status_probe_root = "missing-status-probe-root".to_string();
+        evidence.p2p_handshake_root = "missing-p2p-handshake-root".to_string();
+        evidence.health_probe_root = "missing-health-probe-root".to_string();
+        evidence.status_page_probe_root = "missing-status-page-probe-root".to_string();
+        evidence.metrics_probe_root = "missing-metrics-probe-root".to_string();
+        evidence.deployed_finality_probe_root =
+            "missing-deployed-finality-probe-root".to_string();
+        evidence.incident_contact_probe_root =
+            "missing-incident-contact-probe-root".to_string();
+        evidence.faucet_probe_root = "missing-faucet-probe-root".to_string();
+        evidence.reset_runbook_probe_root = "missing-reset-runbook-probe-root".to_string();
+        evidence.private_summary_probe_root = "missing-private-summary-probe-root".to_string();
+        evidence.public_surface_probe_set_root =
+            "missing-public-surface-probe-set-root".to_string();
+        evidence.public_surface_probe_count = 0;
+        evidence.public_probe_set_root = "missing-public-probe-set-root".to_string();
+        evidence.public_probe_count = 0;
+        base_testnet.cli.public_deployment_evidence = Some(evidence);
+        let summary = base_testnet.summary(Vec::new());
+        assert!(!summary.public_deployment.passed);
+        assert!(!summary.public_deployment.live_probe_roots_bound);
+        assert!(!summary.public_deployment.status_probe_root_bound);
+        assert!(!summary.public_deployment.p2p_handshake_root_bound);
+        assert!(!summary.public_deployment.health_probe_root_bound);
+        assert!(!summary.public_deployment.status_page_probe_root_bound);
+        assert!(!summary.public_deployment.metrics_probe_root_bound);
+        assert!(!summary
+            .public_deployment
+            .deployed_finality_probe_root_bound);
+        assert!(!summary
+            .public_deployment
+            .incident_contact_probe_root_bound);
+        assert!(!summary.public_deployment.faucet_probe_root_bound);
+        assert!(!summary.public_deployment.reset_runbook_probe_root_bound);
+        assert!(!summary
+            .public_deployment
+            .live_private_summary_probe_root_bound);
+        assert!(!summary
+            .public_deployment
+            .public_surface_probe_set_root_bound);
+        assert!(!summary.public_deployment.public_surface_probe_count_bound);
+        assert!(!summary.public_deployment.public_probe_set_root_bound);
+        assert!(!summary.public_deployment.public_probe_count_bound);
+        assert_eq!(
+            summary
+                .public_deployment
+                .status_probe_root
+                .as_deref()
+                .expect("status probe root"),
+            "missing-status-probe-root"
+        );
+        assert_eq!(
+            summary.public_launch_readiness.blocking_gaps,
+            vec!["public-launch-deployment-attestation"]
+        );
+        let remediation = summary
+            .public_launch_readiness
+            .remediations
+            .iter()
+            .find(|remediation| remediation.blocker_id == "public-launch-deployment-attestation")
+            .expect("deployment remediation");
+        for failed_subcheck in [
+            "live_probe_roots_bound",
+            "status_probe_root_bound",
+            "p2p_handshake_root_bound",
+            "health_probe_root_bound",
+            "status_page_probe_root_bound",
+            "metrics_probe_root_bound",
+            "deployed_finality_probe_root_bound",
+            "incident_contact_probe_root_bound",
+            "faucet_probe_root_bound",
+            "reset_runbook_probe_root_bound",
+            "live_private_summary_probe_root_bound",
+            "public_surface_probe_set_root_bound",
+            "public_surface_probe_count_bound",
+            "public_probe_set_root_bound",
+            "public_probe_count_bound",
         ] {
             assert!(
                 remediation

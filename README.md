@@ -3458,7 +3458,7 @@ real XMR.
   rate-limit roots, bootstrap topology/count/registry/probe bindings,
   endpoint publicness, TLS pin roots/counts,
   proxy/firewall/rate-limit policy roots, status-manifest root/payload, and
-  probe bindings, privacy
+  per-surface probe roots/counts, privacy
   classification, and whether external deployment capture is required. That private operator report is intentionally absent from the public status
   manifest and launch bundle.
 - External review evidence must bind the release-candidate manifest id, latest
