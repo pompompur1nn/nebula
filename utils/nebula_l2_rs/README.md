@@ -488,9 +488,9 @@ requires `--mainnet-readiness` and writes a non-passing
 required capture fields, missing and invalid public endpoint fields, invalid
 timestamp types, freshness-window bounds, current capture-time validity,
 deployment-run-id validity, observer count and quorum reachability, placeholder
-presence, observer region coverage, duplicate observer ids or keys, sensitive
-key markers, public-forbidden key names, size/parseability checks, current
-capture-plan root matches, the
+presence, observer region coverage, malformed observer region indexes,
+duplicate observer ids or keys, sensitive key markers, public-forbidden key
+names, size/parseability checks, current capture-plan root matches, the
 expected package file-set root, package file-set root matches, and
 `structural_failed_checks`/`failed_checks` arrays with counts for CI routing,
 plus an `assembler_ready` boolean. It is diagnostic only:

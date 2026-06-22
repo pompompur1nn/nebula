@@ -3355,9 +3355,10 @@ real XMR.
   capture audit that lists missing required fields, missing or invalid public
   endpoint fields, invalid freshness windows, stale capture times,
   invalid deployment run ids, unreachable observer quorums, insufficient
-  observer region coverage, duplicate observer ids or keys, placeholders,
-  sensitive markers, public-forbidden keys, current capture-plan and package
-  file-set root mismatches, structural readiness, machine-readable
+  observer region coverage, malformed observer regions, duplicate observer ids
+  or keys, placeholders, sensitive markers, public-forbidden keys, current
+  capture-plan and package file-set root mismatches, structural readiness,
+  machine-readable
   structural and full failed-check lists, strict verifier status, and the first
   nested verifier error, then run
   `--verify-public-deployment-capture` to dry-run the same assembler/verifier

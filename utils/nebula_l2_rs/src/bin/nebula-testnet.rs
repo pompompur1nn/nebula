@@ -7743,10 +7743,12 @@ fn public_deployment_capture_audit(
         deployment_run_id_valid,
         probe_observer_count,
         probe_observer_region_count,
+        invalid_probe_observer_region_indexes,
         duplicate_probe_observer_ids,
         duplicate_probe_observer_keys,
         observer_quorum_threshold_valid,
         observer_quorum_reachable,
+        observer_regions_valid,
         observer_id_uniqueness_valid,
         observer_key_uniqueness_valid,
         observer_region_coverage_valid,
@@ -7830,17 +7832,14 @@ fn public_deployment_capture_audit(
                         observers
                             .iter()
                             .filter_map(|observer| observer.get("region").and_then(Value::as_str))
-                            .filter(|region| {
-                                !region.trim().is_empty()
-                                    && region.len() <= 64
-                                    && !region.contains('<')
-                                    && !region.contains('>')
-                            })
+                            .filter(|region| public_probe_observer_region_valid(region))
                             .map(str::to_string)
                             .collect::<BTreeSet<_>>()
                             .len() as u64
                     })
                     .unwrap_or_default();
+                let invalid_observer_region_indexes =
+                    invalid_public_probe_observer_region_indexes(&value);
                 let duplicate_observer_ids =
                     duplicate_public_probe_observer_field_values(&value, "observer_id");
                 let duplicate_observer_keys =
@@ -7863,6 +7862,7 @@ fn public_deployment_capture_audit(
                     (None, None) | (None, Some(_)) => true,
                     _ => false,
                 };
+                let observer_regions_valid = invalid_observer_region_indexes.is_empty();
                 let observer_id_unique = duplicate_observer_ids.is_empty();
                 let observer_key_unique = duplicate_observer_keys.is_empty();
                 let region_coverage_valid = match value.get("probe_observers") {
@@ -7908,10 +7908,12 @@ fn public_deployment_capture_audit(
                     run_id_valid,
                     observer_count,
                     observer_region_count,
+                    invalid_observer_region_indexes,
                     duplicate_observer_ids,
                     duplicate_observer_keys,
                     quorum_threshold_valid,
                     quorum_reachable,
+                    observer_regions_valid,
                     observer_id_unique,
                     observer_key_unique,
                     region_coverage_valid,
@@ -7952,6 +7954,8 @@ fn public_deployment_capture_audit(
                 0,
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
+                true,
                 true,
                 true,
                 true,
@@ -7984,6 +7988,7 @@ fn public_deployment_capture_audit(
         && deployment_run_id_valid
         && observer_quorum_threshold_valid
         && observer_quorum_reachable
+        && observer_regions_valid
         && observer_id_uniqueness_valid
         && observer_key_uniqueness_valid
         && observer_region_coverage_valid
@@ -8033,6 +8038,9 @@ fn public_deployment_capture_audit(
     }
     if !observer_quorum_reachable {
         structural_failed_checks.push("observer_quorum_reachable".to_string());
+    }
+    if !observer_regions_valid {
+        structural_failed_checks.push("observer_regions_valid".to_string());
     }
     if !observer_id_uniqueness_valid {
         structural_failed_checks.push("observer_id_uniqueness_valid".to_string());
@@ -8140,16 +8148,40 @@ fn public_deployment_capture_audit(
     audit["minimum_observer_region_count"] = json!(MIN_PUBLIC_DEPLOYMENT_REGION_COUNT);
     audit["probe_observer_count"] = json!(probe_observer_count);
     audit["probe_observer_region_count"] = json!(probe_observer_region_count);
+    audit["invalid_probe_observer_region_indexes"] = json!(invalid_probe_observer_region_indexes);
     audit["duplicate_probe_observer_ids"] = json!(duplicate_probe_observer_ids);
     audit["duplicate_probe_observer_keys"] = json!(duplicate_probe_observer_keys);
     audit["observer_quorum_threshold_valid"] = json!(observer_quorum_threshold_valid);
     audit["observer_quorum_reachable"] = json!(observer_quorum_reachable);
+    audit["observer_regions_valid"] = json!(observer_regions_valid);
     audit["observer_id_uniqueness_valid"] = json!(observer_id_uniqueness_valid);
     audit["observer_key_uniqueness_valid"] = json!(observer_key_uniqueness_valid);
     audit["observer_region_coverage_valid"] = json!(observer_region_coverage_valid);
     let audit_root = value_root("public-deployment-capture-audit", &audit);
     audit["capture_audit_root"] = json!(audit_root);
     Ok(audit)
+}
+
+fn public_probe_observer_region_valid(region: &str) -> bool {
+    !region.trim().is_empty() && region.len() <= 64 && !region.contains('<') && !region.contains('>')
+}
+
+fn invalid_public_probe_observer_region_indexes(value: &Value) -> Vec<u64> {
+    let Some(observers) = value.get("probe_observers").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    observers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, observer)| {
+            observer
+                .get("region")
+                .and_then(Value::as_str)
+                .filter(|region| public_probe_observer_region_valid(region))
+                .is_none()
+                .then_some(index as u64)
+        })
+        .collect()
 }
 
 fn duplicate_public_probe_observer_field_values(value: &Value, field: &str) -> Vec<String> {
@@ -20575,10 +20607,7 @@ fn validate_public_probe_observers(
         )?;
         let region = required_str(observer, "region")?;
         ensure(
-            !region.trim().is_empty()
-                && region.len() <= 64
-                && !region.contains('<')
-                && !region.contains('>'),
+            public_probe_observer_region_valid(region),
             "public deployment probe observer region must be non-placeholder",
         )?;
         regions.insert(region.to_string());
@@ -25696,6 +25725,32 @@ mod tests {
             .as_array()
             .expect("structural failed checks")
             .contains(&json!("observer_region_coverage_valid")));
+        let _ = fs::remove_file(capture_path);
+    }
+
+    #[test]
+    fn public_deployment_capture_audit_reports_invalid_observer_regions() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let mut capture: Value =
+            serde_json::from_str(&valid_public_deployment_capture(&base_summary))
+                .expect("deployment capture json");
+        capture["probe_observers"][0]["region"] = json!("   ");
+        let capture_path = write_public_deployment_evidence(&capture.to_string());
+        let audit = public_deployment_capture_audit(&capture_path, &base_summary)
+            .expect("audit invalid observer region capture");
+        assert_eq!(audit["structural_ready"], false);
+        assert_eq!(audit["strict_verifier_passed"], false);
+        assert_eq!(audit["strict_verifier_error"], Value::Null);
+        assert_eq!(audit["observer_regions_valid"], false);
+        assert_eq!(audit["invalid_probe_observer_region_indexes"], json!([0]));
+        assert!(audit["structural_failed_checks"]
+            .as_array()
+            .expect("structural failed checks")
+            .contains(&json!("observer_regions_valid")));
         let _ = fs::remove_file(capture_path);
     }
 
