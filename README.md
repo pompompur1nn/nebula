@@ -3238,8 +3238,9 @@ real XMR.
 - A public launch artifact manifest export gives operators a rooted
   `nebula-public-launch-artifact-manifest` before public probe capture starts.
   It freezes the pre-capture handoff set: redacted public status manifest,
-  public bootstrap profile template, typed deployment runbook, and public
-  launch bundle. Each record carries its export flag, root field, artifact
+  public bootstrap profile template, typed deployment runbook, public launch
+  bundle, release approval template, and release-authority registry template.
+  Each record carries its export flag, root field, artifact
   root, order, required-before-capture flag, publishability flag,
   non-evidence/non-custody flags, and record root, plus a collection
   `artifact_set_root`, without embedding operator-private evidence. The
@@ -3252,8 +3253,9 @@ real XMR.
 - A public launch package export gives operators one rooted directory handoff
   before capture starts. It contains the public status manifest, bootstrap
   profile template, typed deployment runbook, launch artifact manifest, launch
-  bundle, local launch-readiness report, schema v5 deployment evidence
-  template, deployment capture plan, a rooted machine-readable
+  bundle, local launch-readiness report, release approval template,
+  release-authority registry template, schema v5 deployment evidence template,
+  deployment capture plan, a rooted machine-readable
   `nebula-public-capture-todo` work order, and a
   `nebula-public-launch-package` manifest. The package manifest binds each
   filename, root field, artifact

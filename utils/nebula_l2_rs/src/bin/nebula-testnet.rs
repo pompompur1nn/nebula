@@ -134,7 +134,7 @@ const REQUIRED_PUBLIC_DEPLOYMENT_PROBE_ROOT_FIELDS: [&str; 12] = [
     "reset_runbook_probe_root",
     "private_summary_probe_root",
 ];
-const PUBLIC_LAUNCH_PACKAGE_ARTIFACTS: [(&str, &str, &str); 9] = [
+const PUBLIC_LAUNCH_PACKAGE_ARTIFACTS: [(&str, &str, &str); 11] = [
     (
         "public-status-manifest",
         "nebula-public-status.json",
@@ -164,6 +164,16 @@ const PUBLIC_LAUNCH_PACKAGE_ARTIFACTS: [(&str, &str, &str); 9] = [
         "public-launch-readiness-report",
         "nebula-public-launch-readiness-report.json",
         "public_launch_readiness_artifact_root",
+    ),
+    (
+        "release-approval-template",
+        "nebula-release-approval-template.json",
+        "release_approval_template_root",
+    ),
+    (
+        "release-authority-registry-template",
+        "nebula-release-authority-registry-template.json",
+        "release_authority_registry_template_root",
     ),
     (
         "public-deployment-evidence-template",
@@ -9115,7 +9125,7 @@ fn write_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<(
             .and_then(Value::as_str)
             .filter(|candidate| is_hex_root(candidate))
             .map(str::to_string)
-            .unwrap_or_else(|| value_root(&format!("public-launch-package-{artifact_id}"), &value));
+            .unwrap_or_else(|| public_launch_package_value_root(artifact_id, &value));
         let required_before_public_capture =
             public_launch_package_required_before_capture(artifact_id);
         let operator_fill_required = public_launch_package_operator_fill_required(artifact_id);
@@ -9363,12 +9373,7 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
             .and_then(Value::as_str)
             .filter(|candidate| is_hex_root(candidate))
             .map(str::to_string)
-            .unwrap_or_else(|| {
-                value_root(
-                    &format!("public-launch-package-{artifact_id}"),
-                    &expected_artifact,
-                )
-            });
+            .unwrap_or_else(|| public_launch_package_value_root(artifact_id, &expected_artifact));
         ensure(
             artifact == expected_artifact,
             &format!("public launch package artifact {file_name} does not match this run"),
@@ -9779,7 +9784,7 @@ fn public_launch_package_manifest_root_for_summary(summary: &TestnetSummary) -> 
             .and_then(Value::as_str)
             .filter(|candidate| is_hex_root(candidate))
             .map(str::to_string)
-            .unwrap_or_else(|| value_root(&format!("public-launch-package-{artifact_id}"), &value));
+            .unwrap_or_else(|| public_launch_package_value_root(artifact_id, &value));
         let record_root = public_launch_package_artifact_record_root(
             &summary.manifest_id,
             artifact_id,
@@ -9840,6 +9845,8 @@ fn public_launch_package_required_before_capture(artifact_id: &str) -> bool {
             | "public-launch-artifact-manifest"
             | "public-launch-bundle"
             | "public-launch-readiness-report"
+            | "release-approval-template"
+            | "release-authority-registry-template"
             | "public-deployment-evidence-template"
             | "public-deployment-capture-plan"
             | "public-capture-todo"
@@ -9855,6 +9862,10 @@ fn public_launch_package_operator_fill_required(artifact_id: &str) -> bool {
     )
 }
 
+fn public_launch_package_value_root(artifact_id: &str, value: &Value) -> String {
+    value_root(artifact_id, value)
+}
+
 fn public_launch_package_artifact_value(
     artifact_id: &str,
     summary: &TestnetSummary,
@@ -9866,6 +9877,8 @@ fn public_launch_package_artifact_value(
         "public-launch-artifact-manifest" => Ok(public_launch_artifact_manifest(summary)),
         "public-launch-bundle" => Ok(public_launch_bundle(summary)),
         "public-launch-readiness-report" => Ok(public_launch_readiness_report_artifact(summary)),
+        "release-approval-template" => Ok(release_approval_template_for_summary(summary)),
+        "release-authority-registry-template" => Ok(release_authority_registry_template()),
         "public-deployment-evidence-template" => Ok(public_deployment_evidence_template(summary)),
         "public-deployment-capture-plan" => {
             let plan = public_deployment_capture_plan(summary);
@@ -16247,6 +16260,14 @@ fn public_launch_artifact_manifest(summary: &TestnetSummary) -> Value {
         .as_str()
         .unwrap_or_default()
         .to_string();
+    let release_approval_template = release_approval_template_for_summary(summary);
+    let release_approval_template_root =
+        value_root("release-approval-template", &release_approval_template);
+    let release_authority_registry_template = release_authority_registry_template();
+    let release_authority_registry_template_root = value_root(
+        "release-authority-registry-template",
+        &release_authority_registry_template,
+    );
     let artifact_specs = vec![
         (
             "public-status-manifest",
@@ -16281,6 +16302,24 @@ fn public_launch_artifact_manifest(summary: &TestnetSummary) -> Value {
             "--write-public-launch-bundle",
             "public_launch_bundle_root",
             public_launch_bundle_root.clone(),
+            false,
+            false,
+        ),
+        (
+            "release-approval-template",
+            "nebula-mainnet-release-approval",
+            "--write-release-approval-template",
+            "release_approval_template_root",
+            release_approval_template_root.clone(),
+            false,
+            false,
+        ),
+        (
+            "release-authority-registry-template",
+            "nebula-release-authority-registry",
+            "--write-release-authority-registry-template",
+            "release_authority_registry_template_root",
+            release_authority_registry_template_root.clone(),
             false,
             false,
         ),
@@ -16361,6 +16400,8 @@ fn public_launch_artifact_manifest(summary: &TestnetSummary) -> Value {
             "public_deployment_runbook_root": public_deployment_runbook_root,
             "public_deployment_runbook_step_set_root": public_deployment_runbook_step_set_root,
             "public_launch_bundle_root": public_launch_bundle_root,
+            "release_approval_template_root": release_approval_template_root,
+            "release_authority_registry_template_root": release_authority_registry_template_root,
             "run_checkpoint_root": &summary.mainnet_readiness.run_checkpoint_root,
             "mainnet_readiness_check_root": &summary.mainnet_readiness.check_root,
         },
@@ -30698,6 +30739,14 @@ mod tests {
         let expected_profile = public_bootstrap_profile_template(&summary);
         let expected_runbook = public_deployment_runbook(&summary);
         let expected_bundle = public_launch_bundle(&summary);
+        let expected_release_approval = release_approval_template_for_summary(&summary);
+        let expected_release_approval_root =
+            value_root("release-approval-template", &expected_release_approval);
+        let expected_release_registry = release_authority_registry_template();
+        let expected_release_registry_root = value_root(
+            "release-authority-registry-template",
+            &expected_release_registry,
+        );
         assert_eq!(value["kind"], "nebula-public-launch-artifact-manifest");
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["operator_fill_required"], false);
@@ -30705,7 +30754,7 @@ mod tests {
         assert_eq!(value["usable_as_public_deployment_evidence"], false);
         assert_eq!(value["usable_as_mainnet_custody_approval"], false);
         assert_eq!(value["custody_mode"], "no-mainnet-custody");
-        assert_eq!(value["artifact_count"], 4);
+        assert_eq!(value["artifact_count"], 6);
         assert_eq!(
             value["source_roots"]["public_status_manifest_root"],
             expected_status["public_status_manifest_root"]
@@ -30730,6 +30779,14 @@ mod tests {
             value["source_roots"]["public_launch_bundle_root"],
             expected_bundle["public_launch_bundle_root"]
         );
+        assert_eq!(
+            value["source_roots"]["release_approval_template_root"],
+            expected_release_approval_root
+        );
+        assert_eq!(
+            value["source_roots"]["release_authority_registry_template_root"],
+            expected_release_registry_root
+        );
         let artifacts = value["artifacts"]
             .as_array()
             .expect("public launch artifacts");
@@ -30743,7 +30800,9 @@ mod tests {
                 "public-status-manifest",
                 "public-bootstrap-profile-template",
                 "public-deployment-runbook",
-                "public-launch-bundle"
+                "public-launch-bundle",
+                "release-approval-template",
+                "release-authority-registry-template"
             ]
         );
         assert_eq!(
@@ -30759,6 +30818,8 @@ mod tests {
             artifacts[3]["root"],
             expected_bundle["public_launch_bundle_root"]
         );
+        assert_eq!(artifacts[4]["root"], expected_release_approval_root);
+        assert_eq!(artifacts[5]["root"], expected_release_registry_root);
         let mut expected_record_roots = Vec::new();
         for (index, artifact) in artifacts.iter().enumerate() {
             assert_eq!(artifact["order"], index + 1);
@@ -31492,6 +31553,14 @@ mod tests {
                 "nebula-public-launch-readiness-report.json",
             ),
             (
+                "release-approval-template",
+                "nebula-release-approval-template.json",
+            ),
+            (
+                "release-authority-registry-template",
+                "nebula-release-authority-registry-template.json",
+            ),
+            (
                 "public-deployment-evidence-template",
                 "nebula-public-deployment-template.json",
             ),
@@ -31577,19 +31646,37 @@ mod tests {
         )
         .expect("status json");
         assert_eq!(artifacts[0]["root"], status["public_status_manifest_root"]);
+        let release_approval: Value = serde_json::from_slice(
+            &fs::read(package_dir.join("nebula-release-approval-template.json"))
+                .expect("read release approval template"),
+        )
+        .expect("release approval template json");
+        assert_eq!(
+            artifacts[6]["root"],
+            value_root("release-approval-template", &release_approval)
+        );
+        let release_registry: Value = serde_json::from_slice(
+            &fs::read(package_dir.join("nebula-release-authority-registry-template.json"))
+                .expect("read release authority registry template"),
+        )
+        .expect("release authority registry template json");
+        assert_eq!(
+            artifacts[7]["root"],
+            value_root("release-authority-registry-template", &release_registry)
+        );
         let capture_plan: Value = serde_json::from_slice(
             &fs::read(package_dir.join("nebula-public-deployment-capture-plan.json"))
                 .expect("read capture plan"),
         )
         .expect("capture plan json");
-        assert_eq!(artifacts[7]["root"], capture_plan["capture_plan_root"]);
+        assert_eq!(artifacts[9]["root"], capture_plan["capture_plan_root"]);
         let capture_todo: Value = serde_json::from_slice(
             &fs::read(package_dir.join("nebula-public-capture-todo.json"))
                 .expect("read capture todo"),
         )
         .expect("capture todo json");
         assert_eq!(
-            artifacts[8]["root"],
+            artifacts[10]["root"],
             capture_todo["public_capture_todo_root"]
         );
         assert_eq!(capture_todo["kind"], "nebula-public-capture-todo");

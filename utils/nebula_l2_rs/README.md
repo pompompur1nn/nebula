@@ -408,12 +408,13 @@ runbook root and rejects stale or cross-run procedural handoffs before capture.
 `--mainnet-readiness` and writes a rooted
 `nebula-public-launch-artifact-manifest` over the pre-capture handoff set:
 public status manifest, public bootstrap profile template, typed deployment
-runbook, and public launch bundle. It records each artifact's export flag,
-root field, root, order, required-before-capture flag, publishability flag,
-non-evidence/non-custody flags, record root, and a collection `artifact_set_root`
-without embedding operator-private evidence. The manifest guard recomputes the
-artifact record, set, and manifest roots before export, standalone
-`--verify-public-launch-artifact-manifest`, and package verification. The
+runbook, public launch bundle, release approval template, and release authority
+registry template. It records each artifact's export flag, root field, root,
+order, required-before-capture flag, publishability flag,
+non-evidence/non-custody flags, record root, and a collection
+`artifact_set_root` without embedding operator-private evidence. The manifest
+guard recomputes the artifact record, set, and manifest roots before export,
+standalone `--verify-public-launch-artifact-manifest`, and package verification. The
 capture plan and deployment evidence worksheet bind
 `public_launch_artifact_manifest_root` and `public_launch_artifact_set_root`, so
 deployment CI can freeze the exact files used before public probes, TLS pin
@@ -452,8 +453,9 @@ bindings before deployment CI consumes the report root.
 `--mainnet-readiness` and writes the full redacted public-alpha handoff set into
 one directory: public status manifest, bootstrap profile template, typed
 deployment runbook, launch artifact manifest, launch bundle, schema v5
-local launch-readiness report, deployment evidence template, deployment capture
-plan, and a `nebula-public-launch-package` manifest. The package manifest
+local launch-readiness report, release approval template, release authority
+registry template, deployment evidence template, deployment capture plan, and a
+`nebula-public-launch-package` manifest. The package manifest
 records each filename, root field, artifact root, record root,
 required-before-capture flag, operator-fill flag, and
 non-evidence/non-custody flags under an `artifact_set_root`, plus a
