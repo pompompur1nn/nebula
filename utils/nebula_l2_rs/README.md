@@ -494,13 +494,14 @@ directory. It exports and verifies `nebula-public-launch-package`, writes the
 operator-only launch readiness report, writes the release approval and release
 authority registry handoff templates, and writes
 `nebula-public-testnet-certification.json` with `local_testnet_ready`,
-`public_launch_ready`, package roots, launch report roots, blocking gaps,
-release-template roots, the public deployment evidence root, its
-readiness-report binding boolean, package-bound release-template roots,
-package-binding booleans for both release handoff templates, remediations,
-whether external capture is still required, and the exact capture-audit,
-audit-verification, strict capture-verification, assemble, and launch-gate
-commands plus rooted next steps and a rooted command sequence for that order.
+`public_launch_ready`, `certification_file_set_root`, package roots, launch
+report roots, blocking gaps, release-template roots, the public deployment
+evidence root, its readiness-report binding boolean, package-bound
+release-template roots, package-binding booleans for both release handoff
+templates, remediations, whether external capture is still required, and the
+exact capture-audit, audit-verification, strict capture-verification, assemble,
+and launch-gate commands plus rooted next steps and a rooted command sequence
+for that order.
 The certification artifact is
 operator-local, not public deployment evidence and not mainnet custody approval;
 it truthfully remains `public-launch-blocked` until a filled schema v5
@@ -508,10 +509,10 @@ deployment attestation passes the gate.
 `--verify-public-testnet-certification path\to\cert-dir` also requires
 `--mainnet-readiness`, verifies the nested launch package, recomputes the
 launch readiness report, verifies both release handoff templates, recomputes
-the certification root against the current release-candidate summary, enforces
-the exact top-level directory shape, and fails on stale, tampered, cross-run,
-extra-file, or swapped package/report/template/cert roots before public evidence
-capture starts.
+the certification file-set root and certification root against the current
+release-candidate summary, enforces the exact top-level directory shape, and
+fails on stale, tampered, cross-run, extra-file, or swapped
+package/report/template/cert roots before public evidence capture starts.
 
 `--write-public-deployment-evidence-template path\to\deployment-template.json`
 also requires `--mainnet-readiness` and writes the schema v5 worksheet that a

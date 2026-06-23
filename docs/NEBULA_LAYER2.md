@@ -3275,21 +3275,22 @@ real XMR.
 - A public testnet certification export writes and verifies the rooted launch
   package, emits the operator-only launch readiness report, writes exact release
   approval and release-authority registry handoff templates, and records
-  `local_testnet_ready`, `public_launch_ready`, package/report/template roots,
-  the public deployment evidence root, its readiness-report binding boolean,
-  package-bound release-template roots, package-binding booleans for both
-  release handoff templates, blocking gaps, rooted remediation commands for
-  capture audit, audit verification, strict capture verification, assembly, and
-  launch verification, a rooted command sequence for that order, and whether
-  external capture is still required in
+  `local_testnet_ready`, `public_launch_ready`, the
+  `certification_file_set_root`, package/report/template roots, the public
+  deployment evidence root, its readiness-report binding boolean, package-bound
+  release-template roots, package-binding booleans for both release handoff
+  templates, blocking gaps, rooted remediation commands for capture audit, audit
+  verification, strict capture verification, assembly, and launch verification,
+  a rooted command sequence for that order, and whether external capture is still
+  required in
   `nebula-public-testnet-certification.json`. It is deliberately
   operator-local and remains blocked until the filled schema v5 deployment
   attestation passes.
   The paired `--verify-public-testnet-certification` command verifies the nested
-  package, recomputes the launch report and certification root, verifies both
-  release handoff templates, enforces the exact top-level directory shape, and
-  rejects stale, tampered, cross-run, extra-file, or swapped
-  package/report/template/cert roots.
+  package, recomputes the launch report, certification file-set root, and
+  certification root, verifies both release handoff templates, enforces the
+  exact top-level directory shape, and rejects stale, tampered, cross-run,
+  extra-file, or swapped package/report/template/cert roots.
 - The package-level public capture todo export gives CI a rooted
   `nebula-public-capture-todo` artifact that repeats the exact remaining
   external-capture work without scraping prose: capture-plan, capture-contract,

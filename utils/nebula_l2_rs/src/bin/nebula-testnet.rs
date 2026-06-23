@@ -9987,6 +9987,13 @@ fn verify_public_testnet_certification(path: &str, summary: &TestnetSummary) -> 
             true,
         ),
     )?;
+    let expected_certification_file_set_root =
+        public_testnet_certification_file_set_root(&summary.manifest_id, &summary.testnet_id);
+    ensure(
+        required_root(&actual_certification, "certification_file_set_root")?
+            == expected_certification_file_set_root,
+        "public testnet certification file_set_root mismatch",
+    )?;
     let actual_certification_root =
         required_root(&actual_certification, "certification_root")?.to_string();
     let mut rooted_certification = actual_certification.clone();
@@ -10060,6 +10067,8 @@ fn public_testnet_certification_artifact(
     let command_sequence = public_deployment_capture_command_sequence();
     let command_sequence_root =
         public_deployment_capture_command_sequence_root(&command_sequence);
+    let certification_file_set_root =
+        public_testnet_certification_file_set_root(&summary.manifest_id, &summary.testnet_id);
     let mut certification = json!({
         "kind": "nebula-public-testnet-certification",
         "schema_version": 1,
@@ -10084,6 +10093,7 @@ fn public_testnet_certification_artifact(
         "remediation_count": summary.public_launch_readiness.remediations.len(),
         "remediations": &summary.public_launch_readiness.remediations,
         "external_capture_required": external_capture_required,
+        "certification_file_set_root": certification_file_set_root,
         "package_verified": true,
         "public_launch_package_dir": "nebula-public-launch-package",
         "public_launch_package_file_set_root": package_file_set_root,
@@ -10139,13 +10149,8 @@ fn public_launch_package_artifact_root(
 }
 
 fn ensure_public_testnet_certification_exact_file_set(dir: &PathBuf) -> Result<(), String> {
-    let expected_files = [
-        "nebula-public-launch-readiness-report.json",
-        "nebula-public-testnet-certification.json",
-        "nebula-release-approval-template.json",
-        "nebula-release-authority-registry-template.json",
-    ];
-    let expected_dirs = ["nebula-public-launch-package"];
+    let expected_files = public_testnet_certification_expected_file_names();
+    let expected_dirs = public_testnet_certification_expected_dir_names();
 
     let entries = fs::read_dir(dir).map_err(|error| {
         format!("failed to list public testnet certification directory: {error}")
@@ -10195,6 +10200,53 @@ fn ensure_public_testnet_certification_exact_file_set(dir: &PathBuf) -> Result<(
         )?;
     }
     Ok(())
+}
+
+fn public_testnet_certification_expected_file_names() -> Vec<&'static str> {
+    vec![
+        "nebula-public-launch-readiness-report.json",
+        "nebula-public-testnet-certification.json",
+        "nebula-release-approval-template.json",
+        "nebula-release-authority-registry-template.json",
+    ]
+}
+
+fn public_testnet_certification_expected_dir_names() -> Vec<&'static str> {
+    vec!["nebula-public-launch-package"]
+}
+
+fn public_testnet_certification_file_set_root(manifest_id: &str, testnet_id: &str) -> String {
+    let mut entry_roots = Vec::new();
+    for (index, file_name) in public_testnet_certification_expected_file_names()
+        .iter()
+        .enumerate()
+    {
+        entry_roots.push(root(&[
+            "public-testnet-certification-entry",
+            CHAIN_ID,
+            manifest_id,
+            testnet_id,
+            "file",
+            file_name,
+            &(index + 1).to_string(),
+        ]));
+    }
+    let file_count = entry_roots.len();
+    for (index, dir_name) in public_testnet_certification_expected_dir_names()
+        .iter()
+        .enumerate()
+    {
+        entry_roots.push(root(&[
+            "public-testnet-certification-entry",
+            CHAIN_ID,
+            manifest_id,
+            testnet_id,
+            "directory",
+            dir_name,
+            &(file_count + index + 1).to_string(),
+        ]));
+    }
+    collection_root("public-testnet-certification-file-set", entry_roots)
 }
 
 fn ensure_public_launch_package_exact_file_set(dir: &PathBuf) -> Result<(), String> {
@@ -32828,6 +32880,10 @@ mod tests {
         assert_eq!(certification["package_verified"], true);
         assert_eq!(certification["external_capture_required"], true);
         assert_eq!(
+            certification["certification_file_set_root"],
+            public_testnet_certification_file_set_root(&summary.manifest_id, &summary.testnet_id)
+        );
+        assert_eq!(
             certification["blocking_gaps"][0],
             "public-launch-deployment-attestation"
         );
@@ -33000,6 +33056,27 @@ mod tests {
         let error = verify_public_testnet_certification(&cert_dir_string, &summary)
             .expect_err("tampered package-bound release root should fail verification");
         assert!(error.contains("public testnet certification does not match this run"));
+
+        write_public_testnet_certification(&cert_dir_string, &summary)
+            .expect("rewrite public testnet certification");
+        let mut certification: Value =
+            serde_json::from_slice(&fs::read(&certification_path).expect("read certification"))
+                .expect("certification json");
+        certification["certification_file_set_root"] =
+            json!(root(&["tampered-certification-file-set-root"]));
+        if let Some(object) = certification.as_object_mut() {
+            object.remove("certification_root");
+        }
+        let certification_root = value_root("public-testnet-certification", &certification);
+        certification["certification_root"] = json!(certification_root);
+        fs::write(
+            &certification_path,
+            serde_json::to_string_pretty(&certification).expect("certification json"),
+        )
+        .expect("write file-set tampered certification");
+        let error = verify_public_testnet_certification(&cert_dir_string, &summary)
+            .expect_err("file-set tampered certification should fail verification");
+        assert!(error.contains("file_set_root mismatch"));
 
         write_public_testnet_certification(&cert_dir_string, &summary)
             .expect("rewrite public testnet certification");
