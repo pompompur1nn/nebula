@@ -226,7 +226,7 @@ To produce a one-command local certification directory with the verified
 package, operator launch report, and exact remaining blocker/remediation state:
 
 ```powershell
-cargo run --manifest-path testnet_runner\Cargo.toml -- --blocks 8 --target-finality-ms 200 --mainnet-readiness --adversarial-self-test --write-public-testnet-certification .\nebula-public-testnet-certification --json
+cargo run --manifest-path testnet_runner\Cargo.toml -- --blocks 8 --target-finality-ms 200 --mainnet-readiness --adversarial-self-test --write-public-testnet-certification .\nebula-public-testnet-certification --verify-public-testnet-certification .\nebula-public-testnet-certification --json
 ```
 
 The runner uses the Monero `stagenet` bridge profile by default, produces local
@@ -460,6 +460,12 @@ verify, assemble, and launch-gate commands. The certification artifact is
 operator-local, not public deployment evidence and not mainnet custody approval;
 it truthfully remains `public-launch-blocked` until a filled schema v5
 deployment attestation passes the gate.
+`--verify-public-testnet-certification path\to\cert-dir` also requires
+`--mainnet-readiness`, verifies the nested launch package, recomputes the
+launch readiness report and certification root against the current
+release-candidate summary, enforces the exact top-level directory shape, and
+fails on stale, tampered, cross-run, extra-file, or swapped package/report/cert
+roots before public evidence capture starts.
 
 `--write-public-deployment-evidence-template path\to\deployment-template.json`
 also requires `--mainnet-readiness` and writes the schema v5 worksheet that a

@@ -385,6 +385,7 @@ struct Cli {
     public_launch_package_dir: Option<String>,
     public_launch_package_verify_dir: Option<String>,
     public_testnet_certification_dir: Option<String>,
+    public_testnet_certification_verify_dir: Option<String>,
     public_deployment_evidence_template_path: Option<String>,
     public_deployment_capture_plan_path: Option<String>,
     public_deployment_capture_verify_path: Option<String>,
@@ -454,6 +455,7 @@ impl Default for Cli {
             public_launch_package_dir: None,
             public_launch_package_verify_dir: None,
             public_testnet_certification_dir: None,
+            public_testnet_certification_verify_dir: None,
             public_deployment_evidence_template_path: None,
             public_deployment_capture_plan_path: None,
             public_deployment_capture_verify_path: None,
@@ -7104,6 +7106,9 @@ fn run() -> Result<(), String> {
     if let Some(path) = cli.public_testnet_certification_dir.as_deref() {
         write_public_testnet_certification(path, &summary)?;
     }
+    if let Some(path) = cli.public_testnet_certification_verify_dir.as_deref() {
+        verify_public_testnet_certification(path, &summary)?;
+    }
     if let Some(path) = cli.public_deployment_evidence_template_path.as_deref() {
         write_public_deployment_evidence_template(path, &summary)?;
     }
@@ -9079,10 +9084,76 @@ fn write_public_testnet_certification(path: &str, summary: &TestnetSummary) -> R
         &package_dir.join("nebula-public-launch-package.json"),
         "public launch package manifest",
     )?;
-    let package_file_set_root = required_root(&package_manifest, "package_file_set_root")?;
-    let package_manifest_root = required_root(&package_manifest, "package_manifest_root")?;
+    let certification =
+        public_testnet_certification_artifact(summary, &package_manifest, &launch_report)?;
+    write_json_artifact(
+        &dir.join("nebula-public-testnet-certification.json"),
+        &certification,
+        "public-testnet-certification",
+    )?;
+    Ok(())
+}
+
+fn verify_public_testnet_certification(path: &str, summary: &TestnetSummary) -> Result<(), String> {
+    ensure_local_output_dir_path(path, "--verify-public-testnet-certification")?;
+    let dir = PathBuf::from(path);
+    ensure_public_testnet_certification_exact_file_set(&dir)?;
+
+    let package_dir = dir.join("nebula-public-launch-package");
+    let package_dir_string = package_dir.to_string_lossy().into_owned();
+    verify_public_launch_package(&package_dir_string, summary)?;
+
+    let actual_launch_report = read_json_file(
+        &dir.join("nebula-public-launch-readiness-report.json"),
+        "public testnet certification readiness report",
+    )?;
+    let expected_launch_report = public_launch_readiness_report_artifact(summary);
+    ensure(
+        actual_launch_report == expected_launch_report,
+        "public testnet certification readiness report does not match this run",
+    )?;
+
+    let package_manifest = read_json_file(
+        &package_dir.join("nebula-public-launch-package.json"),
+        "public launch package manifest",
+    )?;
+    let actual_certification = read_json_file(
+        &dir.join("nebula-public-testnet-certification.json"),
+        "public testnet certification",
+    )?;
+    ensure(
+        actual_certification["kind"] == "nebula-public-testnet-certification",
+        "public testnet certification has the wrong kind",
+    )?;
+    let actual_certification_root =
+        required_root(&actual_certification, "certification_root")?.to_string();
+    let mut rooted_certification = actual_certification.clone();
+    if let Some(object) = rooted_certification.as_object_mut() {
+        object.remove("certification_root");
+    }
+    ensure(
+        value_root("public-testnet-certification", &rooted_certification)
+            == actual_certification_root,
+        "public testnet certification root mismatch",
+    )?;
+
+    let expected_certification =
+        public_testnet_certification_artifact(summary, &package_manifest, &actual_launch_report)?;
+    ensure(
+        actual_certification == expected_certification,
+        "public testnet certification does not match this run",
+    )
+}
+
+fn public_testnet_certification_artifact(
+    summary: &TestnetSummary,
+    package_manifest: &Value,
+    launch_report: &Value,
+) -> Result<Value, String> {
+    let package_file_set_root = required_root(package_manifest, "package_file_set_root")?;
+    let package_manifest_root = required_root(package_manifest, "package_manifest_root")?;
     let public_launch_readiness_artifact_root =
-        required_root(&launch_report, "public_launch_readiness_artifact_root")?;
+        required_root(launch_report, "public_launch_readiness_artifact_root")?;
     let external_capture_required = summary
         .public_launch_readiness
         .remediations
@@ -9125,11 +9196,62 @@ fn write_public_testnet_certification(path: &str, summary: &TestnetSummary) -> R
     });
     let certification_root = value_root("public-testnet-certification", &certification);
     certification["certification_root"] = json!(certification_root);
-    write_json_artifact(
-        &dir.join("nebula-public-testnet-certification.json"),
-        &certification,
-        "public-testnet-certification",
-    )?;
+    Ok(certification)
+}
+
+fn ensure_public_testnet_certification_exact_file_set(dir: &PathBuf) -> Result<(), String> {
+    let expected_files = [
+        "nebula-public-launch-readiness-report.json",
+        "nebula-public-testnet-certification.json",
+    ];
+    let expected_dirs = ["nebula-public-launch-package"];
+
+    let entries = fs::read_dir(dir)
+        .map_err(|error| format!("failed to list public testnet certification directory: {error}"))?;
+    let mut actual_files = BTreeSet::new();
+    let mut actual_dirs = BTreeSet::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!("failed to inspect public testnet certification entry: {error}")
+        })?;
+        let path = entry.path();
+        let file_name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| "public testnet certification contains non-utf8 entry".to_string())?;
+        if path.is_file() {
+            ensure(
+                expected_files.iter().any(|expected| *expected == file_name),
+                &format!("public testnet certification contains unexpected file '{file_name}'"),
+            )?;
+            actual_files.insert(file_name);
+        } else if path.is_dir() {
+            ensure(
+                expected_dirs.iter().any(|expected| *expected == file_name),
+                &format!(
+                    "public testnet certification contains unexpected directory '{file_name}'"
+                ),
+            )?;
+            actual_dirs.insert(file_name);
+        } else {
+            return Err(format!(
+                "public testnet certification contains unexpected entry '{file_name}'"
+            ));
+        }
+    }
+
+    for expected in expected_files {
+        ensure(
+            actual_files.contains(expected),
+            &format!("public testnet certification missing expected file '{expected}'"),
+        )?;
+    }
+    for expected in expected_dirs {
+        ensure(
+            actual_dirs.contains(expected),
+            &format!("public testnet certification missing expected directory '{expected}'"),
+        )?;
+    }
     Ok(())
 }
 
@@ -18004,6 +18126,14 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
                     "--write-public-testnet-certification",
                 )?);
             }
+            "--verify-public-testnet-certification" => {
+                index += 1;
+                cli.public_testnet_certification_verify_dir = Some(parse_string(
+                    &args,
+                    index,
+                    "--verify-public-testnet-certification",
+                )?);
+            }
             "--write-public-deployment-evidence-template" => {
                 index += 1;
                 cli.public_deployment_evidence_template_path = Some(parse_string(
@@ -18231,6 +18361,13 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             "--write-public-testnet-certification requires --mainnet-readiness",
         )?;
         ensure_local_output_dir_path(path, "--write-public-testnet-certification")?;
+    }
+    if let Some(path) = cli.public_testnet_certification_verify_dir.as_deref() {
+        ensure(
+            cli.mainnet_readiness,
+            "--verify-public-testnet-certification requires --mainnet-readiness",
+        )?;
+        ensure_local_output_dir_path(path, "--verify-public-testnet-certification")?;
     }
     if let Some(path) = cli.public_deployment_evidence_template_path.as_deref() {
         ensure(
@@ -25627,6 +25764,8 @@ OPTIONS:
                               Verify a public-alpha launch package directory against this run
         --write-public-testnet-certification DIR
                               Write a verified package, launch report, and public-testnet certification summary
+        --verify-public-testnet-certification DIR
+                              Verify a public-testnet certification directory against this run
         --write-public-deployment-evidence-template PATH
                               Write a schema v5 public deployment evidence worksheet for incident-contact probes, runbook receipts, probe transcripts, and observer provenance
         --write-public-deployment-capture-plan PATH
@@ -27923,6 +28062,17 @@ mod tests {
     }
 
     #[test]
+    fn public_testnet_certification_verify_requires_mainnet_readiness_mode() {
+        let path = temp_json_path("nebula-public-testnet-certification-verify-rejected");
+        let error = parse_cli(vec![
+            "--verify-public-testnet-certification".to_string(),
+            path,
+        ])
+        .expect_err("public testnet certification verification should require mainnet-readiness mode");
+        assert!(error.contains("requires --mainnet-readiness"));
+    }
+
+    #[test]
     fn public_deployment_evidence_template_requires_mainnet_readiness_mode() {
         let path = temp_json_path("nebula-public-deployment-template-rejected");
         let error = parse_cli(vec![
@@ -29042,6 +29192,8 @@ mod tests {
             "--mainnet-readiness".to_string(),
             "--write-public-testnet-certification".to_string(),
             cert_dir_string.clone(),
+            "--verify-public-testnet-certification".to_string(),
+            cert_dir_string.clone(),
         ])
         .expect("public testnet certification flag should parse");
         let mut testnet = Testnet::new(cli);
@@ -29049,6 +29201,8 @@ mod tests {
         let summary = testnet.summary(Vec::new());
         write_public_testnet_certification(&cert_dir_string, &summary)
             .expect("write public testnet certification");
+        verify_public_testnet_certification(&cert_dir_string, &summary)
+            .expect("certification directory should verify");
 
         let package_dir = cert_dir.join("nebula-public-launch-package");
         let package_dir_string = package_dir.to_string_lossy().into_owned();
@@ -29109,6 +29263,85 @@ mod tests {
         assert!(cert_dir
             .join("nebula-public-launch-readiness-report.json")
             .exists());
+        let _ = fs::remove_dir_all(cert_dir);
+    }
+
+    #[test]
+    fn public_testnet_certification_verifier_rejects_stale_or_tampered_directory() {
+        let counter = TEST_FILE_COUNTER.fetch_add(1, AtomicOrdering::SeqCst);
+        let cert_dir = env::temp_dir().join(format!(
+            "nebula-public-testnet-certification-verify-{}",
+            root(&[
+                "test-public-testnet-certification-verify",
+                &counter.to_string()
+            ])
+        ));
+        let cert_dir_string = cert_dir.to_string_lossy().into_owned();
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness cli should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_testnet_certification(&cert_dir_string, &summary)
+            .expect("write public testnet certification");
+        verify_public_testnet_certification(&cert_dir_string, &summary)
+            .expect("certification directory should verify");
+
+        let certification_path = cert_dir.join("nebula-public-testnet-certification.json");
+        let mut certification: Value =
+            serde_json::from_slice(&fs::read(&certification_path).expect("read certification"))
+                .expect("certification json");
+        certification["public_launch_ready"] =
+            json!(!summary.public_launch_readiness.public_launch_ready);
+        if let Some(object) = certification.as_object_mut() {
+            object.remove("certification_root");
+        }
+        let certification_root = value_root("public-testnet-certification", &certification);
+        certification["certification_root"] = json!(certification_root);
+        fs::write(
+            &certification_path,
+            serde_json::to_string_pretty(&certification).expect("certification json"),
+        )
+        .expect("write tampered certification");
+        let error = verify_public_testnet_certification(&cert_dir_string, &summary)
+            .expect_err("tampered certification should fail verification");
+        assert!(error.contains("does not match this run"));
+
+        write_public_testnet_certification(&cert_dir_string, &summary)
+            .expect("rewrite public testnet certification");
+        let readiness_path = cert_dir.join("nebula-public-launch-readiness-report.json");
+        let mut readiness_report: Value =
+            serde_json::from_slice(&fs::read(&readiness_path).expect("read readiness report"))
+                .expect("readiness report json");
+        readiness_report["public_launch_ready"] =
+            json!(!summary.public_launch_readiness.public_launch_ready);
+        fs::write(
+            &readiness_path,
+            serde_json::to_string_pretty(&readiness_report).expect("readiness report json"),
+        )
+        .expect("write tampered readiness report");
+        let error = verify_public_testnet_certification(&cert_dir_string, &summary)
+            .expect_err("tampered readiness report should fail verification");
+        assert!(error.contains("readiness report does not match this run"));
+
+        write_public_testnet_certification(&cert_dir_string, &summary)
+            .expect("rewrite public testnet certification");
+        let status_path = cert_dir
+            .join("nebula-public-launch-package")
+            .join("nebula-public-status.json");
+        let mut status: Value =
+            serde_json::from_slice(&fs::read(&status_path).expect("read public status"))
+                .expect("public status json");
+        status["latest_block_height"] = json!(summary.latest_block_height + 1);
+        fs::write(
+            &status_path,
+            serde_json::to_string_pretty(&status).expect("public status json"),
+        )
+        .expect("write tampered public status");
+        let error = verify_public_testnet_certification(&cert_dir_string, &summary)
+            .expect_err("tampered nested package should fail verification");
+        assert!(error.contains("does not match this run") || error.contains("root mismatch"));
+
         let _ = fs::remove_dir_all(cert_dir);
     }
 
