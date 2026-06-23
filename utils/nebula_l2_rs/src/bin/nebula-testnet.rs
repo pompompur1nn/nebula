@@ -10112,7 +10112,21 @@ fn write_public_deployment_capture_scaffold(
         &package_dir.join("nebula-public-launch-readiness-report.json"),
         "public launch readiness report",
     )?;
-    let scaffold = public_deployment_capture_scaffold(summary, &package_manifest, &launch_report)?;
+    let release_approval_template = read_json_file(
+        &package_dir.join("nebula-release-approval-template.json"),
+        "release approval template",
+    )?;
+    let release_authority_registry_template = read_json_file(
+        &package_dir.join("nebula-release-authority-registry-template.json"),
+        "release authority registry template",
+    )?;
+    let scaffold = public_deployment_capture_scaffold(
+        summary,
+        &package_manifest,
+        &launch_report,
+        &release_approval_template,
+        &release_authority_registry_template,
+    )?;
     write_json_artifact(
         &PathBuf::from(path),
         &scaffold,
@@ -10137,6 +10151,14 @@ fn verify_public_deployment_capture_scaffold(
         &package_dir.join("nebula-public-launch-readiness-report.json"),
         "public launch readiness report",
     )?;
+    let release_approval_template = read_json_file(
+        &package_dir.join("nebula-release-approval-template.json"),
+        "release approval template",
+    )?;
+    let release_authority_registry_template = read_json_file(
+        &package_dir.join("nebula-release-authority-registry-template.json"),
+        "release authority registry template",
+    )?;
     let actual = read_json_file(&PathBuf::from(path), "public deployment capture scaffold")?;
     ensure(
         actual["kind"] == "nebula-public-deployment-capture-scaffold",
@@ -10152,7 +10174,13 @@ fn verify_public_deployment_capture_scaffold(
         value_contains_placeholder(&actual),
         "public deployment capture scaffold must retain fill-in placeholders",
     )?;
-    let expected = public_deployment_capture_scaffold(summary, &package_manifest, &launch_report)?;
+    let expected = public_deployment_capture_scaffold(
+        summary,
+        &package_manifest,
+        &launch_report,
+        &release_approval_template,
+        &release_authority_registry_template,
+    )?;
     ensure(
         actual == expected,
         "public deployment capture scaffold does not match this run and package",
@@ -10163,6 +10191,8 @@ fn public_deployment_capture_scaffold(
     summary: &TestnetSummary,
     package_manifest: &Value,
     launch_report: &Value,
+    release_approval_template: &Value,
+    release_authority_registry_template: &Value,
 ) -> Result<Value, String> {
     let capture_plan = public_deployment_capture_plan(summary);
     ensure_public_deployment_capture_plan_redacted(&capture_plan)?;
@@ -10180,6 +10210,12 @@ fn public_deployment_capture_scaffold(
         required_root(package_manifest, "package_manifest_root")?;
     let public_launch_readiness_artifact_root =
         required_root(launch_report, "public_launch_readiness_artifact_root")?;
+    let release_approval_template_root =
+        value_root("release-approval-template", release_approval_template);
+    let release_authority_registry_template_root = value_root(
+        "release-authority-registry-template",
+        release_authority_registry_template,
+    );
     let public_status = public_status_manifest(summary);
     let public_launch_bundle = public_launch_bundle(summary);
     let deployment_runbook = public_deployment_runbook(summary);
@@ -10197,6 +10233,9 @@ fn public_deployment_capture_scaffold(
     scaffold["public_launch_package_manifest_root"] = json!(public_launch_package_manifest_root);
     scaffold["public_launch_readiness_artifact_root"] =
         json!(public_launch_readiness_artifact_root);
+    scaffold["release_approval_template_root"] = json!(release_approval_template_root);
+    scaffold["release_authority_registry_template_root"] =
+        json!(release_authority_registry_template_root);
     let deployment_preflight_checklist_root = scaffold["deployment_preflight_checklist_root"]
         .as_str()
         .unwrap_or_default()
@@ -33293,6 +33332,16 @@ mod tests {
                 .expect("read launch report"),
         )
         .expect("launch report json");
+        let release_approval_template: Value = serde_json::from_slice(
+            &fs::read(package_dir.join("nebula-release-approval-template.json"))
+                .expect("read release approval template"),
+        )
+        .expect("release approval template json");
+        let release_authority_registry_template: Value = serde_json::from_slice(
+            &fs::read(package_dir.join("nebula-release-authority-registry-template.json"))
+                .expect("read release authority registry template"),
+        )
+        .expect("release authority registry template json");
 
         assert_eq!(
             scaffold["kind"],
@@ -33324,6 +33373,17 @@ mod tests {
         assert_eq!(
             scaffold["public_launch_readiness_artifact_root"],
             launch_report["public_launch_readiness_artifact_root"]
+        );
+        assert_eq!(
+            scaffold["release_approval_template_root"],
+            value_root("release-approval-template", &release_approval_template)
+        );
+        assert_eq!(
+            scaffold["release_authority_registry_template_root"],
+            value_root(
+                "release-authority-registry-template",
+                &release_authority_registry_template
+            )
         );
         assert_eq!(
             scaffold["deployment_preflight_receipt"]["capture_contract_root"],
@@ -33380,6 +33440,27 @@ mod tests {
             .expect("write public deployment capture scaffold");
         verify_public_deployment_capture_scaffold(&scaffold_path, &package_dir_string, &summary)
             .expect("verify public deployment capture scaffold");
+
+        let release_template_path = package_dir.join("nebula-release-approval-template.json");
+        let mut release_template: Value = serde_json::from_slice(
+            &fs::read(&release_template_path).expect("read release template"),
+        )
+        .expect("release template json");
+        release_template["testnet_manifest_id"] = json!("tampered-testnet-manifest-id");
+        fs::write(
+            &release_template_path,
+            serde_json::to_string_pretty(&release_template).expect("release template json"),
+        )
+        .expect("write tampered release template");
+        let error = verify_public_deployment_capture_scaffold(
+            &scaffold_path,
+            &package_dir_string,
+            &summary,
+        )
+        .expect_err("tampered release template package should fail scaffold verification");
+        assert!(error.contains("nebula-release-approval-template.json"));
+        write_public_launch_package(&package_dir_string, &summary)
+            .expect("rewrite public launch package after release template tamper");
 
         let mut scaffold: Value =
             serde_json::from_slice(&fs::read(&scaffold_path).expect("read scaffold"))

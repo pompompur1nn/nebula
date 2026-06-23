@@ -3377,7 +3377,9 @@ real XMR.
   capture worksheet with the current capture-plan root, capture-contract root,
   deployment preflight checklist root, package file-set root, package manifest
   root, readiness artifact root, release-template roots, and matching
-  preflight/runbook receipt bindings already filled. The scaffold is still marked operator-fill-required
+  preflight/runbook receipt bindings already filled. The release-template roots
+  are copied from the verified package's release approval and release-authority
+  registry template files. The scaffold is still marked operator-fill-required
   and unusable as public deployment evidence; live endpoints, TLS pins, public
   probes, bootstrap/operator records, observer signatures, freshness, and the
   final evidence root must still be captured before the public launch gate can

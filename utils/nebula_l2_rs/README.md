@@ -593,7 +593,9 @@ then writes a non-evidence schema v5 capture scaffold with the current
 `deployment_preflight_checklist_root`, package file-set root, package manifest
 root, readiness artifact root, release-template roots, and matching
 preflight/runbook receipt bindings already filled from the verified package and
-current release-candidate summary.
+current release-candidate summary. The release-template roots are copied from
+the verified package's release approval and release-authority registry template
+files.
 The scaffold still contains placeholders for the live public endpoints, TLS
 pins, probe transcripts, bootstrap/operator records, observer signatures,
 freshness window, and evidence root, so `--audit-public-deployment-capture`
