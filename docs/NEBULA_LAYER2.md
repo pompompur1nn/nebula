@@ -3317,8 +3317,12 @@ real XMR.
   typed probe-observer records, freshness fields, and policy/status/P2P/ops/
   finality/private-summary/public-surface-probe-set/bootstrap-node-probe-set/
   public-probe-set/operator-registry/observer/provenance/attestation root
-  derivation rules. Templates remain rejected
-  until every placeholder is replaced by captured deployment evidence.
+  derivation rules. Templates remain rejected until every placeholder is
+  replaced by captured deployment evidence. The paired
+  `--verify-public-deployment-evidence-template` command recomputes the
+  template root and rejects stale status, launch-bundle, launch-artifact,
+  package-file-set, runbook, bootstrap, or local probe roots before operators
+  fill public endpoint evidence.
 - A public deployment capture-plan export gives deployment CI a rooted
   `nebula-public-deployment-capture-plan` work order before capture starts. It
   is not evidence; it lists the exact required capture fields, public endpoint

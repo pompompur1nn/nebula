@@ -393,6 +393,7 @@ struct Cli {
     public_testnet_certification_dir: Option<String>,
     public_testnet_certification_verify_dir: Option<String>,
     public_deployment_evidence_template_path: Option<String>,
+    public_deployment_evidence_template_verify_path: Option<String>,
     public_deployment_capture_plan_path: Option<String>,
     public_deployment_capture_plan_verify_path: Option<String>,
     public_deployment_capture_scaffold_path: Option<String>,
@@ -474,6 +475,7 @@ impl Default for Cli {
             public_testnet_certification_dir: None,
             public_testnet_certification_verify_dir: None,
             public_deployment_evidence_template_path: None,
+            public_deployment_evidence_template_verify_path: None,
             public_deployment_capture_plan_path: None,
             public_deployment_capture_plan_verify_path: None,
             public_deployment_capture_scaffold_path: None,
@@ -7158,6 +7160,12 @@ fn run() -> Result<(), String> {
     if let Some(path) = cli.public_deployment_evidence_template_path.as_deref() {
         write_public_deployment_evidence_template(path, &summary)?;
     }
+    if let Some(path) = cli
+        .public_deployment_evidence_template_verify_path
+        .as_deref()
+    {
+        verify_public_deployment_evidence_template(path, &summary)?;
+    }
     if let Some(path) = cli.public_deployment_capture_plan_path.as_deref() {
         write_public_deployment_capture_plan(path, &summary)?;
     }
@@ -9679,12 +9687,33 @@ fn write_public_deployment_evidence_template(
 ) -> Result<(), String> {
     ensure_local_json_path(path, "--write-public-deployment-evidence-template")?;
     let template = public_deployment_evidence_template(summary);
+    ensure_public_deployment_evidence_template_safe(&template)?;
     let encoded = serde_json::to_string_pretty(&template).map_err(|error| {
         format!("failed to encode public deployment evidence template json: {error}")
     })?;
     fs::write(path, format!("{encoded}\n"))
         .map_err(|error| format!("failed to write public deployment evidence template: {error}"))?;
     Ok(())
+}
+
+fn verify_public_deployment_evidence_template(
+    path: &str,
+    summary: &TestnetSummary,
+) -> Result<(), String> {
+    ensure_local_json_path(path, "--verify-public-deployment-evidence-template")?;
+    let actual = read_json_file(&PathBuf::from(path), "public deployment evidence template")?;
+    ensure(
+        actual.get("kind").and_then(Value::as_str)
+            == Some("nebula-public-deployment-attestation"),
+        "public deployment evidence template has the wrong kind",
+    )?;
+    ensure_public_deployment_evidence_template_safe(&actual)?;
+    let expected = public_deployment_evidence_template(summary);
+    ensure_public_deployment_evidence_template_safe(&expected)?;
+    ensure(
+        actual == expected,
+        "public deployment evidence template does not match this run",
+    )
 }
 
 fn write_public_deployment_capture_plan(
@@ -17507,6 +17536,181 @@ fn ensure_public_launch_readiness_report_artifact_safe(value: &Value) -> Result<
     )
 }
 
+fn ensure_public_deployment_evidence_template_safe(value: &Value) -> Result<(), String> {
+    ensure(
+        value.get("kind").and_then(Value::as_str)
+            == Some("nebula-public-deployment-attestation"),
+        "public deployment evidence template kind mismatch",
+    )?;
+    ensure(
+        value.get("schema_version").and_then(Value::as_u64)
+            == Some(PUBLIC_DEPLOYMENT_EVIDENCE_SCHEMA_VERSION as u64),
+        "public deployment evidence template schema version mismatch",
+    )?;
+    ensure(
+        value.get("template_only").and_then(Value::as_bool) == Some(true),
+        "public deployment evidence template must remain template_only",
+    )?;
+    ensure(
+        value
+            .get("operator_fill_required")
+            .and_then(Value::as_bool)
+            == Some(true),
+        "public deployment evidence template must require operator fill-in",
+    )?;
+    ensure(
+        value
+            .get("usable_as_public_deployment_evidence")
+            .and_then(Value::as_bool)
+            == Some(false),
+        "public deployment evidence template must not be accepted as deployment evidence",
+    )?;
+    ensure(
+        value.get("custody_mode").and_then(Value::as_str) == Some("no-mainnet-custody"),
+        "public deployment evidence template custody mode mismatch",
+    )?;
+    ensure(
+        value.get("placeholders_absent").and_then(Value::as_bool) == Some(false),
+        "public deployment evidence template must retain placeholder marker",
+    )?;
+    ensure(
+        value.get("mainnet_custody_disabled").and_then(Value::as_bool) == Some(true),
+        "public deployment evidence template must keep mainnet custody disabled",
+    )?;
+    ensure(
+        value
+            .get("public_status_manifest_redacted")
+            .and_then(Value::as_bool)
+            == Some(true),
+        "public deployment evidence template must require redacted public status manifest",
+    )?;
+    ensure(
+        value
+            .get("no_private_summary_exposed")
+            .and_then(Value::as_bool)
+            == Some(true),
+        "public deployment evidence template must deny private summary exposure",
+    )?;
+    ensure(
+        value.get("evidence_root").and_then(Value::as_str) == Some(ROOT_PLACEHOLDER),
+        "public deployment evidence template evidence_root must remain a placeholder",
+    )?;
+    ensure(
+        value.get("capture_plan_root").and_then(Value::as_str) == Some(ROOT_PLACEHOLDER),
+        "public deployment evidence template capture_plan_root must remain a placeholder",
+    )?;
+    ensure(
+        value.get("capture_contract_root").and_then(Value::as_str) == Some(ROOT_PLACEHOLDER),
+        "public deployment evidence template capture_contract_root must remain a placeholder",
+    )?;
+    ensure(
+        value
+            .get("public_launch_package_manifest_root")
+            .and_then(Value::as_str)
+            == Some(ROOT_PLACEHOLDER),
+        "public deployment evidence template package manifest root must remain a placeholder",
+    )?;
+    ensure(
+        value
+            .get("public_launch_readiness_artifact_root")
+            .and_then(Value::as_str)
+            == Some(ROOT_PLACEHOLDER),
+        "public deployment evidence template readiness artifact root must remain a placeholder",
+    )?;
+    for key in PUBLIC_STATUS_FORBIDDEN_KEYS {
+        ensure(
+            !value_contains_exact_key(value, key),
+            &format!("public deployment evidence template contains forbidden key '{key}'"),
+        )?;
+    }
+    for marker in SENSITIVE_FIELD_MARKERS {
+        ensure(
+            !value_contains_key_marker(value, marker),
+            &format!("public deployment evidence template contains sensitive marker '{marker}'"),
+        )?;
+    }
+    ensure_public_status_manifest_redacted(
+        value
+            .get("public_status_manifest")
+            .ok_or_else(|| {
+                "public deployment evidence template missing public status manifest".to_string()
+            })?,
+    )?;
+    ensure(
+        value
+            .get("public_status_manifest_root")
+            .and_then(Value::as_str)
+            == value
+                .pointer("/public_status_manifest/public_status_manifest_root")
+                .and_then(Value::as_str),
+        "public deployment evidence template status manifest root mismatch",
+    )?;
+    ensure(
+        value
+            .pointer("/proxy_policy_claims/runner_public_listener_allowed")
+            .and_then(Value::as_bool)
+            == Some(false),
+        "public deployment evidence template must not allow runner public listeners",
+    )?;
+    ensure(
+        value
+            .pointer("/proxy_policy_claims/serve_public_status_manifest_only")
+            .and_then(Value::as_bool)
+            == Some(true),
+        "public deployment evidence template must serve only the public status manifest",
+    )?;
+    ensure(
+        value
+            .pointer("/firewall_policy_claims/private_summary_paths_blocked")
+            .and_then(Value::as_bool)
+            == Some(true),
+        "public deployment evidence template must block private summary paths",
+    )?;
+    ensure(
+        value
+            .pointer("/private_summary_probe/no_private_summary_exposed")
+            .and_then(Value::as_bool)
+            == Some(true),
+        "public deployment evidence template must require private summary denial",
+    )?;
+    ensure(
+        value
+            .get("deployment_preflight_phase_count")
+            .and_then(Value::as_u64)
+            == Some(REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len() as u64),
+        "public deployment evidence template preflight phase count mismatch",
+    )?;
+    ensure(
+        value
+            .get("public_deployment_runbook_step_receipt_count")
+            .and_then(Value::as_u64)
+            == Some(PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64),
+        "public deployment evidence template runbook step count mismatch",
+    )?;
+    ensure(
+        value
+            .get("observer_quorum_threshold")
+            .and_then(Value::as_u64)
+            == Some(MIN_PUBLIC_DEPLOYMENT_OBSERVER_COUNT as u64),
+        "public deployment evidence template observer quorum mismatch",
+    )?;
+    ensure(
+        value.get("freshness_window_ms").and_then(Value::as_u64)
+            == Some(MAX_PUBLIC_DEPLOYMENT_FRESHNESS_MS),
+        "public deployment evidence template freshness window mismatch",
+    )?;
+    let mut rootless = value.clone();
+    let Some(map) = rootless.as_object_mut() else {
+        return Err("public deployment evidence template must be an object".to_string());
+    };
+    map.remove("template_root");
+    let expected_root = value_root("public-deployment-evidence-template", &rootless);
+    ensure(
+        value.get("template_root").and_then(Value::as_str) == Some(expected_root.as_str()),
+        "public deployment evidence template root mismatch",
+    )
+}
+
 fn ensure_public_deployment_capture_plan_redacted(value: &Value) -> Result<(), String> {
     ensure(
         value.get("kind").and_then(Value::as_str)
@@ -18781,6 +18985,14 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
                     "--write-public-deployment-evidence-template",
                 )?);
             }
+            "--verify-public-deployment-evidence-template" => {
+                index += 1;
+                cli.public_deployment_evidence_template_verify_path = Some(parse_string(
+                    &args,
+                    index,
+                    "--verify-public-deployment-evidence-template",
+                )?);
+            }
             "--write-public-deployment-capture-plan" => {
                 index += 1;
                 cli.public_deployment_capture_plan_path = Some(parse_string(
@@ -19099,6 +19311,16 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             "--write-public-deployment-evidence-template requires --mainnet-readiness",
         )?;
         ensure_local_json_path(path, "--write-public-deployment-evidence-template")?;
+    }
+    if let Some(path) = cli
+        .public_deployment_evidence_template_verify_path
+        .as_deref()
+    {
+        ensure(
+            cli.mainnet_readiness,
+            "--verify-public-deployment-evidence-template requires --mainnet-readiness",
+        )?;
+        ensure_local_json_path(path, "--verify-public-deployment-evidence-template")?;
     }
     if let Some(path) = cli.public_deployment_capture_plan_path.as_deref() {
         ensure(
@@ -26559,6 +26781,8 @@ OPTIONS:
                               Verify a public-testnet certification directory against this run
         --write-public-deployment-evidence-template PATH
                               Write a schema v5 public deployment evidence worksheet for incident-contact probes, runbook receipts, probe transcripts, and observer provenance
+        --verify-public-deployment-evidence-template PATH
+                              Verify a schema v5 public deployment evidence worksheet template against this run
         --write-public-deployment-capture-plan PATH
                               Write a redacted deployment CI capture plan listing required public evidence and probe coverage
         --verify-public-deployment-capture-plan PATH
@@ -28943,6 +29167,19 @@ mod tests {
     }
 
     #[test]
+    fn public_deployment_evidence_template_verify_requires_mainnet_readiness_mode() {
+        let path = temp_json_path("nebula-public-deployment-template-verify-rejected");
+        let error = parse_cli(vec![
+            "--verify-public-deployment-evidence-template".to_string(),
+            path,
+        ])
+        .expect_err(
+            "public deployment evidence template verification should require mainnet-readiness mode",
+        );
+        assert!(error.contains("requires --mainnet-readiness"));
+    }
+
+    #[test]
     fn public_deployment_capture_plan_requires_mainnet_readiness_mode() {
         let path = temp_json_path("nebula-public-deployment-capture-plan-rejected");
         let error = parse_cli(vec![
@@ -30815,6 +31052,8 @@ mod tests {
         let summary = testnet.summary(Vec::new());
         write_public_deployment_evidence_template(&path, &summary)
             .expect("write public deployment evidence template");
+        verify_public_deployment_evidence_template(&path, &summary)
+            .expect("verify public deployment evidence template");
         let value: Value = serde_json::from_slice(&fs::read(&path).expect("read template"))
             .expect("public deployment evidence template json");
         let expected_artifact_manifest = public_launch_artifact_manifest(&summary);
@@ -31040,9 +31279,50 @@ mod tests {
         assert!(is_hex_root(
             value["template_root"].as_str().expect("template root")
         ));
+        ensure_public_deployment_evidence_template_safe(&value)
+            .expect("safe public deployment evidence template");
         let error = load_public_deployment_evidence(&path)
             .expect_err("template must not be accepted as deployment evidence");
         assert!(error.contains("placeholders"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_evidence_template_verifier_rejects_re_rooted_stale_template() {
+        let path = temp_json_path("nebula-public-deployment-template-stale");
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet-readiness CLI should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_deployment_evidence_template(&path, &summary)
+            .expect("write public deployment evidence template");
+        verify_public_deployment_evidence_template(&path, &summary)
+            .expect("fresh public deployment evidence template should verify");
+
+        let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read template"))
+            .expect("public deployment evidence template json");
+        stale["public_launch_package_file_set_root"] =
+            json!(root(&["tampered-public-deployment-template-package", &summary.manifest_id]));
+        let mut rootless = stale.clone();
+        if let Some(map) = rootless.as_object_mut() {
+            map.remove("template_root");
+        }
+        stale["template_root"] = json!(value_root("public-deployment-evidence-template", &rootless));
+        ensure_public_deployment_evidence_template_safe(&stale)
+            .expect("re-rooted template should remain structurally safe");
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&stale).expect("encode stale template")
+            ),
+        )
+        .expect("write stale template");
+
+        let error = verify_public_deployment_evidence_template(&path, &summary)
+            .expect_err("re-rooted stale template should fail exact verification");
+        assert!(error.contains("does not match this run"));
         let _ = fs::remove_file(path);
     }
 
