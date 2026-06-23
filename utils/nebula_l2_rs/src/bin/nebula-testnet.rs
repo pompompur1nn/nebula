@@ -1215,8 +1215,11 @@ struct PublicDeploymentReport {
     faucet_url: Option<String>,
     reset_runbook_url: Option<String>,
     tls_spki_pin_root: Option<String>,
+    expected_tls_spki_pin_root: Option<String>,
     tls_endpoint_pin_set_root: Option<String>,
+    expected_tls_endpoint_pin_set_root: Option<String>,
     tls_endpoint_pin_count: u64,
+    expected_tls_endpoint_pin_count: Option<u64>,
     proxy_policy_claims_root: Option<String>,
     firewall_policy_claims_root: Option<String>,
     rate_limit_policy_claims_root: Option<String>,
@@ -5753,10 +5756,23 @@ impl Testnet {
             && incident_contact_url_public
             && faucet_url_public
             && reset_runbook_url_public;
-        let tls_spki_pin_root_bound = is_hex_root(&evidence.tls_spki_pin_root);
-        let tls_endpoint_pin_set_root_bound =
-            is_hex_root(&evidence.tls_endpoint_pin_set_root);
-        let tls_endpoint_pin_count_sufficient = evidence.tls_endpoint_pin_count >= 7;
+        let expected_tls_pin_validation = expected_tls_pin_validation_for_evidence(evidence).ok();
+        let expected_tls_spki_pin_root = expected_tls_pin_validation
+            .as_ref()
+            .map(|validation| validation.tls_spki_pin_root.clone());
+        let expected_tls_endpoint_pin_set_root = expected_tls_pin_validation
+            .as_ref()
+            .map(|validation| validation.tls_endpoint_pin_set_root.clone());
+        let expected_tls_endpoint_pin_count = expected_tls_pin_validation
+            .as_ref()
+            .map(|validation| validation.tls_endpoint_pin_count);
+        let tls_spki_pin_root_bound = is_hex_root(&evidence.tls_spki_pin_root)
+            && expected_tls_spki_pin_root.as_deref() == Some(evidence.tls_spki_pin_root.as_str());
+        let tls_endpoint_pin_set_root_bound = is_hex_root(&evidence.tls_endpoint_pin_set_root)
+            && expected_tls_endpoint_pin_set_root.as_deref()
+                == Some(evidence.tls_endpoint_pin_set_root.as_str());
+        let tls_endpoint_pin_count_sufficient =
+            Some(evidence.tls_endpoint_pin_count) == expected_tls_endpoint_pin_count;
         let tls_required = evidence.tls_required;
         let tls_pins_bound = tls_spki_pin_root_bound
             && tls_endpoint_pin_set_root_bound
@@ -5906,6 +5922,9 @@ impl Testnet {
             summary.public_bootstrap_profile.bootstrap_node_count.to_string();
         let expected_bootstrap_operator_count_string =
             summary.public_bootstrap_profile.bootstrap_operator_count.to_string();
+        let expected_tls_endpoint_pin_count_string = expected_tls_endpoint_pin_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "missing-tls-endpoint-pin-count".to_string());
         let expected_public_surface_probe_count_string = expected_public_surface_probe_count
             .map(|count| count.to_string())
             .unwrap_or_else(|| "missing-public-surface-probe-count".to_string());
@@ -5956,6 +5975,16 @@ impl Testnet {
             &evidence.public_status_manifest_root,
             &expected_public_status_manifest_root,
             &summary.public_bootstrap_profile.report_root,
+            &evidence.tls_spki_pin_root,
+            expected_tls_spki_pin_root
+                .as_deref()
+                .unwrap_or("missing-tls-spki-pin-root"),
+            &evidence.tls_endpoint_pin_set_root,
+            expected_tls_endpoint_pin_set_root
+                .as_deref()
+                .unwrap_or("missing-tls-endpoint-pin-set-root"),
+            &evidence.tls_endpoint_pin_count.to_string(),
+            &expected_tls_endpoint_pin_count_string,
             &evidence.bootstrap_node_set_root,
             &summary.public_bootstrap_profile.bootstrap_node_set_root,
             &evidence.bootstrap_node_count.to_string(),
@@ -6115,8 +6144,11 @@ impl Testnet {
             faucet_url: Some(evidence.faucet_url.clone()),
             reset_runbook_url: Some(evidence.reset_runbook_url.clone()),
             tls_spki_pin_root: Some(evidence.tls_spki_pin_root.clone()),
+            expected_tls_spki_pin_root,
             tls_endpoint_pin_set_root: Some(evidence.tls_endpoint_pin_set_root.clone()),
+            expected_tls_endpoint_pin_set_root,
             tls_endpoint_pin_count: evidence.tls_endpoint_pin_count,
+            expected_tls_endpoint_pin_count,
             proxy_policy_claims_root: Some(evidence.proxy_policy_claims_root.clone()),
             firewall_policy_claims_root: Some(evidence.firewall_policy_claims_root.clone()),
             rate_limit_policy_claims_root: Some(
@@ -7201,8 +7233,11 @@ fn missing_public_deployment_report(manifest_id: &str) -> PublicDeploymentReport
         faucet_url: None,
         reset_runbook_url: None,
         tls_spki_pin_root: None,
+        expected_tls_spki_pin_root: None,
         tls_endpoint_pin_set_root: None,
+        expected_tls_endpoint_pin_set_root: None,
         tls_endpoint_pin_count: 0,
+        expected_tls_endpoint_pin_count: None,
         proxy_policy_claims_root: None,
         firewall_policy_claims_root: None,
         rate_limit_policy_claims_root: None,
@@ -7635,6 +7670,14 @@ fn public_deployment_repair_roots(
         (
             "public_status_manifest_root_bound",
             report.expected_public_status_manifest_root.as_deref(),
+        ),
+        (
+            "tls_spki_pin_root_bound",
+            report.expected_tls_spki_pin_root.as_deref(),
+        ),
+        (
+            "tls_endpoint_pin_set_root_bound",
+            report.expected_tls_endpoint_pin_set_root.as_deref(),
         ),
         (
             "public_deployment_runbook_root_bound",
@@ -21590,6 +21633,28 @@ fn validate_public_tls_endpoint_pins(
     })
 }
 
+fn expected_tls_pin_validation_for_evidence(
+    evidence: &PublicDeploymentEvidence,
+) -> Result<PublicTlsPinValidation, String> {
+    let endpoint_specs = public_tls_endpoint_specs(
+        &evidence.public_rpc_url,
+        &evidence.status_page_url,
+        &evidence.health_check_url,
+        &evidence.metrics_url,
+        &evidence.incident_contact_url,
+        &evidence.faucet_url,
+        &evidence.reset_runbook_url,
+    );
+    validate_public_tls_endpoint_pins(
+        &evidence.tls_endpoint_pins,
+        &endpoint_specs,
+        &evidence.public_launch_bundle_root,
+        &evidence.deployment_run_id,
+        evidence.observed_at_unix_ms,
+        evidence.expires_at_unix_ms,
+    )
+}
+
 fn public_tls_endpoint_pin_record_root(pin: &Value) -> Result<String, String> {
     Ok(root(&[
         "public-deployment-tls-endpoint-pin",
@@ -32443,6 +32508,9 @@ mod tests {
         ));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
+        let expected_tls_spki_pin_root = evidence.tls_spki_pin_root.clone();
+        let expected_tls_endpoint_pin_set_root = evidence.tls_endpoint_pin_set_root.clone();
+        let expected_tls_endpoint_pin_count = evidence.tls_endpoint_pin_count;
         evidence.tls_spki_pin_root = "missing-tls-spki-pin-root".to_string();
         evidence.tls_endpoint_pin_set_root = "missing-tls-endpoint-pin-set-root".to_string();
         evidence.tls_endpoint_pin_count = 1;
@@ -32465,6 +32533,24 @@ mod tests {
                 .as_deref()
                 .expect("tls spki pin root"),
             "missing-tls-spki-pin-root"
+        );
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_tls_spki_pin_root
+                .as_deref(),
+            Some(expected_tls_spki_pin_root.as_str())
+        );
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_tls_endpoint_pin_set_root
+                .as_deref(),
+            Some(expected_tls_endpoint_pin_set_root.as_str())
+        );
+        assert_eq!(
+            summary.public_deployment.expected_tls_endpoint_pin_count,
+            Some(expected_tls_endpoint_pin_count)
         );
         assert_eq!(
             summary.public_launch_readiness.blocking_gaps,
@@ -32490,6 +32576,104 @@ mod tests {
                 "missing failed subcheck {failed_subcheck}"
             );
         }
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("tls_spki_pin_root_bound")
+                .map(String::as_str),
+            Some(expected_tls_spki_pin_root.as_str())
+        );
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("tls_endpoint_pin_set_root_bound")
+                .map(String::as_str),
+            Some(expected_tls_endpoint_pin_set_root.as_str())
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_report_rejects_valid_shaped_stale_tls_roots() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
+            &base_summary,
+        ));
+        let mut evidence =
+            load_public_deployment_evidence(&path).expect("public deployment evidence");
+        let expected_tls_spki_pin_root = evidence.tls_spki_pin_root.clone();
+        let expected_tls_endpoint_pin_set_root = evidence.tls_endpoint_pin_set_root.clone();
+        let expected_tls_endpoint_pin_count = evidence.tls_endpoint_pin_count;
+        evidence.tls_spki_pin_root =
+            root(&["test-public-deployment", "stale-tls-spki-pin-root"]);
+        evidence.tls_endpoint_pin_set_root =
+            root(&["test-public-deployment", "stale-tls-endpoint-pin-set-root"]);
+        base_testnet.cli.public_deployment_evidence = Some(evidence);
+        let summary = base_testnet.summary(Vec::new());
+        assert!(!summary.public_deployment.passed);
+        assert!(!summary.public_deployment.tls_pins_bound);
+        assert!(!summary.public_deployment.tls_spki_pin_root_bound);
+        assert!(!summary.public_deployment.tls_endpoint_pin_set_root_bound);
+        assert!(summary
+            .public_deployment
+            .tls_endpoint_pin_count_sufficient);
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_tls_spki_pin_root
+                .as_deref(),
+            Some(expected_tls_spki_pin_root.as_str())
+        );
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_tls_endpoint_pin_set_root
+                .as_deref(),
+            Some(expected_tls_endpoint_pin_set_root.as_str())
+        );
+        assert_eq!(
+            summary.public_deployment.expected_tls_endpoint_pin_count,
+            Some(expected_tls_endpoint_pin_count)
+        );
+        let remediation = summary
+            .public_launch_readiness
+            .remediations
+            .iter()
+            .find(|remediation| remediation.blocker_id == "public-launch-deployment-attestation")
+            .expect("deployment remediation");
+        for failed_subcheck in [
+            "tls_pins_bound",
+            "tls_spki_pin_root_bound",
+            "tls_endpoint_pin_set_root_bound",
+        ] {
+            assert!(
+                remediation
+                    .failed_subchecks
+                    .contains(&failed_subcheck.to_string()),
+                "missing failed subcheck {failed_subcheck}"
+            );
+        }
+        assert!(!remediation
+            .failed_subchecks
+            .contains(&"tls_endpoint_pin_count_sufficient".to_string()));
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("tls_spki_pin_root_bound")
+                .map(String::as_str),
+            Some(expected_tls_spki_pin_root.as_str())
+        );
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("tls_endpoint_pin_set_root_bound")
+                .map(String::as_str),
+            Some(expected_tls_endpoint_pin_set_root.as_str())
+        );
         let _ = fs::remove_file(path);
     }
 
