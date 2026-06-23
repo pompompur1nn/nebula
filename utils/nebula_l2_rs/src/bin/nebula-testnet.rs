@@ -380,6 +380,7 @@ struct Cli {
     public_launch_artifact_manifest_path: Option<String>,
     public_launch_artifact_manifest_verify_path: Option<String>,
     public_launch_bundle_path: Option<String>,
+    public_launch_bundle_verify_path: Option<String>,
     public_launch_readiness_report_path: Option<String>,
     public_capture_todo_path: Option<String>,
     public_capture_todo_verify_path: Option<String>,
@@ -456,6 +457,7 @@ impl Default for Cli {
             public_launch_artifact_manifest_path: None,
             public_launch_artifact_manifest_verify_path: None,
             public_launch_bundle_path: None,
+            public_launch_bundle_verify_path: None,
             public_launch_readiness_report_path: None,
             public_capture_todo_path: None,
             public_capture_todo_verify_path: None,
@@ -7106,6 +7108,9 @@ fn run() -> Result<(), String> {
     if let Some(path) = cli.public_launch_bundle_path.as_deref() {
         write_public_launch_bundle(path, &summary)?;
     }
+    if let Some(path) = cli.public_launch_bundle_verify_path.as_deref() {
+        verify_public_launch_bundle(path, &summary)?;
+    }
     if let Some(path) = cli.public_launch_readiness_report_path.as_deref() {
         write_public_launch_readiness_report(path, &summary)?;
     }
@@ -8491,6 +8496,23 @@ fn write_public_launch_bundle(path: &str, summary: &TestnetSummary) -> Result<()
     fs::write(path, format!("{encoded}\n"))
         .map_err(|error| format!("failed to write public launch bundle: {error}"))?;
     Ok(())
+}
+
+fn verify_public_launch_bundle(path: &str, summary: &TestnetSummary) -> Result<(), String> {
+    ensure_local_json_path(path, "--verify-public-launch-bundle")?;
+    let actual = read_json_file(&PathBuf::from(path), "public launch bundle")?;
+    ensure(
+        actual.get("kind").and_then(Value::as_str)
+            == Some("nebula-public-testnet-launch-bundle"),
+        "public launch bundle has the wrong kind",
+    )?;
+    ensure_public_launch_bundle_redacted(&actual)?;
+    let expected = public_launch_bundle(summary);
+    ensure_public_launch_bundle_redacted(&expected)?;
+    ensure(
+        actual == expected,
+        "public launch bundle does not match this run",
+    )
 }
 
 fn write_public_launch_readiness_report(
@@ -18354,6 +18376,11 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
                 cli.public_launch_bundle_path =
                     Some(parse_string(&args, index, "--write-public-launch-bundle")?);
             }
+            "--verify-public-launch-bundle" => {
+                index += 1;
+                cli.public_launch_bundle_verify_path =
+                    Some(parse_string(&args, index, "--verify-public-launch-bundle")?);
+            }
             "--write-public-launch-readiness-report" => {
                 index += 1;
                 cli.public_launch_readiness_report_path = Some(parse_string(
@@ -18633,6 +18660,13 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             "--write-public-launch-bundle requires --mainnet-readiness",
         )?;
         ensure_local_json_path(path, "--write-public-launch-bundle")?;
+    }
+    if let Some(path) = cli.public_launch_bundle_verify_path.as_deref() {
+        ensure(
+            cli.mainnet_readiness,
+            "--verify-public-launch-bundle requires --mainnet-readiness",
+        )?;
+        ensure_local_json_path(path, "--verify-public-launch-bundle")?;
     }
     if let Some(path) = cli.public_launch_readiness_report_path.as_deref() {
         ensure(
@@ -26123,6 +26157,8 @@ OPTIONS:
                               Verify a rooted pre-capture artifact manifest against this run
         --write-public-launch-bundle PATH
                               Write a redacted public-alpha deployment handoff bundle
+        --verify-public-launch-bundle PATH
+                              Verify a redacted public-alpha deployment handoff bundle against this run
         --write-public-launch-readiness-report PATH
                               Write a local operator-only public launch gate report and remediation list
         --write-public-capture-todo PATH
@@ -28402,6 +28438,14 @@ mod tests {
     }
 
     #[test]
+    fn public_launch_bundle_verify_requires_mainnet_readiness_mode() {
+        let path = temp_json_path("nebula-public-launch-bundle-verify-rejected");
+        let error = parse_cli(vec!["--verify-public-launch-bundle".to_string(), path])
+            .expect_err("public launch bundle verification should require mainnet-readiness mode");
+        assert!(error.contains("requires --mainnet-readiness"));
+    }
+
+    #[test]
     fn public_launch_readiness_report_requires_mainnet_readiness_mode() {
         let path = temp_json_path("nebula-public-launch-readiness-report-rejected");
         let error = parse_cli(vec![
@@ -29252,6 +29296,64 @@ mod tests {
         let error = ensure_public_launch_bundle_redacted(&root_tampered)
             .expect_err("root-tampered launch bundle should fail");
         assert!(error.contains("public launch bundle root mismatch"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_launch_bundle_verifier_accepts_current_run_export() {
+        let path = temp_json_path("nebula-public-launch-bundle-verify-current");
+        let cli = parse_cli(vec![
+            "--mainnet-readiness".to_string(),
+            "--write-public-launch-bundle".to_string(),
+            path.clone(),
+            "--verify-public-launch-bundle".to_string(),
+            path.clone(),
+        ])
+        .expect("public launch bundle write+verify flags should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_launch_bundle(&path, &summary).expect("write public launch bundle");
+        verify_public_launch_bundle(&path, &summary)
+            .expect("current-run public launch bundle should verify");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_launch_bundle_verifier_rejects_re_rooted_stale_bundle() {
+        let path = temp_json_path("nebula-public-launch-bundle-stale");
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet-readiness CLI should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_launch_bundle(&path, &summary).expect("write public launch bundle");
+        verify_public_launch_bundle(&path, &summary)
+            .expect("fresh public launch bundle should verify");
+
+        let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read bundle"))
+            .expect("launch bundle json");
+        stale["source_roots"]["run_checkpoint_root"] =
+            json!(root(&["tampered-public-launch-bundle", &summary.manifest_id]));
+        let mut rootless = stale.clone();
+        if let Some(map) = rootless.as_object_mut() {
+            map.remove("public_launch_bundle_root");
+        }
+        stale["public_launch_bundle_root"] = json!(value_root("public-launch-bundle", &rootless));
+        ensure_public_launch_bundle_redacted(&stale)
+            .expect("re-rooted bundle should still be structurally redacted");
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&stale).expect("encode stale bundle")
+            ),
+        )
+        .expect("write stale bundle");
+
+        let error = verify_public_launch_bundle(&path, &summary)
+            .expect_err("re-rooted stale bundle should fail exact verification");
+        assert!(error.contains("does not match this run"));
         let _ = fs::remove_file(path);
     }
 

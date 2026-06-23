@@ -206,7 +206,7 @@ public status manifest, typed deployment runbook, combined launch handoff bundle
 schema v5 deployment evidence worksheet, and standalone capture todo:
 
 ```powershell
-cargo run --manifest-path testnet_runner\Cargo.toml -- --blocks 8 --target-finality-ms 200 --mainnet-readiness --adversarial-self-test --write-public-bootstrap-profile .\nebula-public-bootstrap.json --write-public-status-manifest .\nebula-public-status.json --write-public-deployment-runbook .\nebula-public-deployment-runbook.json --write-public-launch-artifact-manifest .\nebula-public-launch-artifacts.json --verify-public-launch-artifact-manifest .\nebula-public-launch-artifacts.json --write-public-launch-bundle .\nebula-public-launch-bundle.json --write-public-capture-todo .\nebula-public-capture-todo.json --verify-public-capture-todo .\nebula-public-capture-todo.json --write-public-deployment-evidence-template .\nebula-public-deployment-template.json --write-public-deployment-capture-plan .\nebula-public-deployment-capture-plan.json --verify-public-deployment-capture-plan .\nebula-public-deployment-capture-plan.json --json
+cargo run --manifest-path testnet_runner\Cargo.toml -- --blocks 8 --target-finality-ms 200 --mainnet-readiness --adversarial-self-test --write-public-bootstrap-profile .\nebula-public-bootstrap.json --write-public-status-manifest .\nebula-public-status.json --write-public-deployment-runbook .\nebula-public-deployment-runbook.json --write-public-launch-artifact-manifest .\nebula-public-launch-artifacts.json --verify-public-launch-artifact-manifest .\nebula-public-launch-artifacts.json --write-public-launch-bundle .\nebula-public-launch-bundle.json --verify-public-launch-bundle .\nebula-public-launch-bundle.json --write-public-capture-todo .\nebula-public-capture-todo.json --verify-public-capture-todo .\nebula-public-capture-todo.json --write-public-deployment-evidence-template .\nebula-public-deployment-template.json --write-public-deployment-capture-plan .\nebula-public-deployment-capture-plan.json --verify-public-deployment-capture-plan .\nebula-public-deployment-capture-plan.json --json
 ```
 
 The same public-alpha handoff can be exported as one rooted package directory:
@@ -409,7 +409,8 @@ evidence can pass. The bundle is
 `template_only`, keeps public runner listeners disabled, requires deployment
 proxies to publish only the public status manifest, is not public deployment
 evidence, is not a mainnet custody approval, and is root-recomputed by the
-bundle guard before export/package verification.
+bundle guard before export, standalone `--verify-public-launch-bundle`, or
+package verification.
 
 `--write-public-launch-readiness-report path\to\launch-report.json` also
 requires `--mainnet-readiness` and writes a local operator-only
