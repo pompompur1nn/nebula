@@ -195,10 +195,11 @@ quorum-certificate latency target set to under 200ms:
 cargo run --manifest-path testnet_runner\Cargo.toml -- --blocks 8 --target-finality-ms 200 --mainnet-readiness --adversarial-self-test --self-test --listen-ms 150 --json
 ```
 
-The same dry run can write an operator checklist and redacted evidence template:
+The same dry run can write an operator checklist, redacted evidence template,
+standalone release approval template, and release authority registry template:
 
 ```powershell
-cargo run --manifest-path testnet_runner\Cargo.toml -- --blocks 8 --target-finality-ms 200 --mainnet-readiness --adversarial-self-test --self-test --listen-ms 150 --write-readiness-template .\nebula-readiness-template.json --verify-readiness-template .\nebula-readiness-template.json --json
+cargo run --manifest-path testnet_runner\Cargo.toml -- --blocks 8 --target-finality-ms 200 --mainnet-readiness --adversarial-self-test --self-test --listen-ms 150 --write-readiness-template .\nebula-readiness-template.json --verify-readiness-template .\nebula-readiness-template.json --write-release-approval-template .\nebula-release-approval-template.json --verify-release-approval-template .\nebula-release-approval-template.json --write-release-authority-registry-template .\nebula-release-authority-registry-template.json --verify-release-authority-registry-template .\nebula-release-authority-registry-template.json --json
 ```
 
 For a controlled public-alpha bootstrap, write the redacted deployment profile,
@@ -346,6 +347,18 @@ generated file is a collection worksheet; it is intentionally not accepted by
 recomputes the template root and rejects stale run-checkpoint,
 mainnet-readiness-check, public-bootstrap, local binding, release-approval, or
 authority-registry worksheet roots before operators collect external evidence.
+
+`--write-release-approval-template path\to\approval-template.json` and
+`--write-release-authority-registry-template path\to\registry-template.json`
+also require `--mainnet-readiness`. They export the external release handoff as
+separate JSON files: the approval template is unapproved, fill-required, bound
+to the current manifest and run checkpoint, and includes every required
+release-signoff role; the registry template includes every required authority
+role with placeholder signer commitments and PQ public-key roots. The paired
+`--verify-release-approval-template` and
+`--verify-release-authority-registry-template` commands reject stale,
+cross-run, filled, or incomplete signoff handoffs before external authorities
+turn them into real approval and registry artifacts.
 
 `--write-public-bootstrap-profile path\to\bootstrap.json` also requires
 `--mainnet-readiness` and writes a `kind:

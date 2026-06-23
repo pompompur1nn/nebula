@@ -91,8 +91,7 @@ const REQUIRED_PUBLIC_SURFACE_PROBE_ROLES: [&str; 10] = [
     "reset_runbook",
     "private_summary_denial",
 ];
-const REQUIRED_PUBLIC_SURFACE_PROBE_COUNT: u64 =
-    REQUIRED_PUBLIC_SURFACE_PROBE_ROLES.len() as u64;
+const REQUIRED_PUBLIC_SURFACE_PROBE_COUNT: u64 = REQUIRED_PUBLIC_SURFACE_PROBE_ROLES.len() as u64;
 const REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES: [&str; 12] = [
     "freeze-launch-roots",
     "publish-redacted-status-manifest",
@@ -376,6 +375,10 @@ struct Cli {
     public_deployment_evidence: Option<PublicDeploymentEvidence>,
     readiness_template_path: Option<String>,
     readiness_template_verify_path: Option<String>,
+    release_approval_template_path: Option<String>,
+    release_approval_template_verify_path: Option<String>,
+    release_authority_registry_template_path: Option<String>,
+    release_authority_registry_template_verify_path: Option<String>,
     public_bootstrap_profile_path: Option<String>,
     public_bootstrap_profile_verify_path: Option<String>,
     public_status_manifest_path: Option<String>,
@@ -460,6 +463,10 @@ impl Default for Cli {
             public_deployment_evidence: None,
             readiness_template_path: None,
             readiness_template_verify_path: None,
+            release_approval_template_path: None,
+            release_approval_template_verify_path: None,
+            release_authority_registry_template_path: None,
+            release_authority_registry_template_verify_path: None,
             public_bootstrap_profile_path: None,
             public_bootstrap_profile_verify_path: None,
             public_status_manifest_path: None,
@@ -5080,7 +5087,8 @@ impl Testnet {
             probes,
         };
         summary.public_deployment = self.public_deployment_report(&summary);
-        summary.acceptance.public_deployment_attestation_available = summary.public_deployment.passed;
+        summary.acceptance.public_deployment_attestation_available =
+            summary.public_deployment.passed;
         summary.public_launch_readiness = public_launch_readiness_report(&summary);
         summary
     }
@@ -5406,7 +5414,8 @@ impl Testnet {
             &self.cli.operator_label,
         ]);
         let bootstrap_node_count = self.cli.public_bootstrap_node_count;
-        let bootstrap_node_count_valid = bootstrap_node_count >= DEFAULT_PUBLIC_BOOTSTRAP_NODE_COUNT;
+        let bootstrap_node_count_valid =
+            bootstrap_node_count >= DEFAULT_PUBLIC_BOOTSTRAP_NODE_COUNT;
         let bootstrap_node_commitments = public_bootstrap_node_commitments(
             &self.testnet_id(),
             &self.manifest_id(),
@@ -5634,16 +5643,17 @@ impl Testnet {
             return missing_public_deployment_report(&summary.manifest_id);
         };
         let expected_public_status = public_status_manifest(summary);
-        let expected_public_status_manifest_root = expected_public_status["public_status_manifest_root"]
+        let expected_public_status_manifest_root = expected_public_status
+            ["public_status_manifest_root"]
             .as_str()
             .unwrap_or_default()
             .to_string();
         let expected_public_launch_bundle = public_launch_bundle(summary);
-        let expected_public_launch_bundle_root =
-            expected_public_launch_bundle["public_launch_bundle_root"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
+        let expected_public_launch_bundle_root = expected_public_launch_bundle
+            ["public_launch_bundle_root"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         let expected_public_launch_package_file_set_root =
             public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id);
         let expected_public_launch_package_manifest_root =
@@ -5659,22 +5669,22 @@ impl Testnet {
             .as_str()
             .unwrap_or_default()
             .to_string();
-        let expected_preflight_checklist_root =
-            expected_capture_plan["deployment_preflight"]["checklist_root"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
+        let expected_preflight_checklist_root = expected_capture_plan["deployment_preflight"]
+            ["checklist_root"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         let expected_deployment_runbook = public_deployment_runbook(summary);
         let expected_deployment_runbook_root = expected_deployment_runbook
             ["public_deployment_runbook_root"]
             .as_str()
             .unwrap_or_default()
             .to_string();
-        let expected_deployment_runbook_step_set_root =
-            expected_deployment_runbook["step_set_root"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
+        let expected_deployment_runbook_step_set_root = expected_deployment_runbook
+            ["step_set_root"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         let matches_current_manifest = evidence.testnet_manifest_id == summary.manifest_id;
         let capture_plan_root_bound = evidence.capture_plan_root == expected_capture_plan_root;
         let capture_contract_root_bound =
@@ -5705,9 +5715,8 @@ impl Testnet {
             is_hex_root(&evidence.deployment_preflight_phase_set_root)
                 && expected_deployment_preflight_phase_set_root.as_deref()
                     == Some(evidence.deployment_preflight_phase_set_root.as_str());
-        let deployment_preflight_phase_count_bound =
-            expected_deployment_preflight_phase_count
-                == Some(evidence.deployment_preflight_phase_count);
+        let deployment_preflight_phase_count_bound = expected_deployment_preflight_phase_count
+            == Some(evidence.deployment_preflight_phase_count);
         let preflight_receipt_bound = preflight_receipt_root_bound
             && deployment_preflight_phase_set_root_bound
             && deployment_preflight_phase_count_bound
@@ -5715,9 +5724,9 @@ impl Testnet {
                 == REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len() as u64;
         let public_deployment_runbook_root_bound =
             evidence.public_deployment_runbook_root == expected_deployment_runbook_root;
-        let public_deployment_runbook_step_set_root_bound =
-            evidence.public_deployment_runbook_step_set_root
-                == expected_deployment_runbook_step_set_root;
+        let public_deployment_runbook_step_set_root_bound = evidence
+            .public_deployment_runbook_step_set_root
+            == expected_deployment_runbook_step_set_root;
         let expected_public_deployment_runbook_receipt_root = evidence
             .public_deployment_runbook_receipt
             .get("receipt_root")
@@ -5747,33 +5756,35 @@ impl Testnet {
         let public_deployment_runbook_step_receipt_count_bound =
             expected_public_deployment_runbook_step_receipt_count
                 == Some(evidence.public_deployment_runbook_step_receipt_count);
-        let runbook_receipt_bound =
-            public_deployment_runbook_root_bound
-                && public_deployment_runbook_step_set_root_bound
-                && public_deployment_runbook_receipt_root_bound
-                && public_deployment_runbook_step_receipt_set_root_bound
-                && public_deployment_runbook_step_receipt_count_bound
-                && evidence.public_deployment_runbook_step_receipt_count
-                    == PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64
-                && public_deployment_runbook_receipt_matches_runbook(
-                    &evidence.public_deployment_runbook_receipt,
-                    &expected_deployment_runbook,
-                );
+        let runbook_receipt_bound = public_deployment_runbook_root_bound
+            && public_deployment_runbook_step_set_root_bound
+            && public_deployment_runbook_receipt_root_bound
+            && public_deployment_runbook_step_receipt_set_root_bound
+            && public_deployment_runbook_step_receipt_count_bound
+            && evidence.public_deployment_runbook_step_receipt_count
+                == PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64
+            && public_deployment_runbook_receipt_matches_runbook(
+                &evidence.public_deployment_runbook_receipt,
+                &expected_deployment_runbook,
+            );
         let public_launch_bundle_root_bound =
             evidence.public_launch_bundle_root == expected_public_launch_bundle_root;
-        let public_launch_package_file_set_root_bound =
-            evidence.public_launch_package_file_set_root == expected_public_launch_package_file_set_root;
-        let public_launch_package_manifest_root_bound =
-            evidence.public_launch_package_manifest_root == expected_public_launch_package_manifest_root;
-        let public_launch_readiness_artifact_root_bound =
-            evidence.public_launch_readiness_artifact_root == expected_public_launch_readiness_artifact_root;
+        let public_launch_package_file_set_root_bound = evidence
+            .public_launch_package_file_set_root
+            == expected_public_launch_package_file_set_root;
+        let public_launch_package_manifest_root_bound = evidence
+            .public_launch_package_manifest_root
+            == expected_public_launch_package_manifest_root;
+        let public_launch_readiness_artifact_root_bound = evidence
+            .public_launch_readiness_artifact_root
+            == expected_public_launch_readiness_artifact_root;
         let public_bootstrap_profile_root_bound =
             evidence.public_bootstrap_profile_root == summary.public_bootstrap_profile.profile_root;
         let public_bootstrap_profile_report_root_bound = evidence
             .public_bootstrap_profile_report_root
             == summary.public_bootstrap_profile.report_root;
-        let rate_limit_policy_root_bound =
-            evidence.rate_limit_policy_root == summary.public_bootstrap_profile.rate_limit_policy_root;
+        let rate_limit_policy_root_bound = evidence.rate_limit_policy_root
+            == summary.public_bootstrap_profile.rate_limit_policy_root;
         let bootstrap_profile_bound = public_bootstrap_profile_root_bound
             && public_bootstrap_profile_report_root_bound
             && rate_limit_policy_root_bound;
@@ -5788,8 +5799,7 @@ impl Testnet {
         let status_page_url_public = public_https_endpoint(&evidence.status_page_url);
         let health_check_url_public = public_https_endpoint(&evidence.health_check_url);
         let metrics_url_public = public_https_endpoint(&evidence.metrics_url);
-        let incident_contact_url_public =
-            public_https_endpoint(&evidence.incident_contact_url);
+        let incident_contact_url_public = public_https_endpoint(&evidence.incident_contact_url);
         let faucet_url_public = public_https_endpoint(&evidence.faucet_url);
         let reset_runbook_url_public = public_https_endpoint(&evidence.reset_runbook_url);
         let endpoint_set_public = public_rpc_url_public
@@ -5848,8 +5858,7 @@ impl Testnet {
             is_hex_root(&evidence.rate_limit_policy_claims_root)
                 && expected_rate_limit_policy_claims_root.as_deref()
                     == Some(evidence.rate_limit_policy_claims_root.as_str());
-        let private_summary_probe_root_bound =
-            is_hex_root(&evidence.private_summary_probe_root);
+        let private_summary_probe_root_bound = is_hex_root(&evidence.private_summary_probe_root);
         let proxy_policy_verified = rate_limits_enforced
             && firewall_allows_public_only
             && no_private_summary_exposed
@@ -5864,9 +5873,8 @@ impl Testnet {
             evidence.bootstrap_node_count >= summary.public_bootstrap_profile.bootstrap_node_count;
         let bootstrap_operator_set_root_bound = evidence.bootstrap_operator_set_root
             == summary.public_bootstrap_profile.bootstrap_operator_set_root;
-        let bootstrap_operator_count_bound =
-            evidence.bootstrap_operator_count
-                == summary.public_bootstrap_profile.bootstrap_operator_count;
+        let bootstrap_operator_count_bound = evidence.bootstrap_operator_count
+            == summary.public_bootstrap_profile.bootstrap_operator_count;
         let bootstrap_operator_registry_count_bound =
             evidence.bootstrap_operator_registry_count == evidence.bootstrap_operator_count;
         let bootstrap_operator_registry_root_bound =
@@ -5914,11 +5922,9 @@ impl Testnet {
         let metrics_probe_root_bound = is_hex_root(&evidence.metrics_probe_root);
         let deployed_finality_probe_root_bound =
             is_hex_root(&evidence.deployed_finality_probe_root);
-        let incident_contact_probe_root_bound =
-            is_hex_root(&evidence.incident_contact_probe_root);
+        let incident_contact_probe_root_bound = is_hex_root(&evidence.incident_contact_probe_root);
         let faucet_probe_root_bound = is_hex_root(&evidence.faucet_probe_root);
-        let reset_runbook_probe_root_bound =
-            is_hex_root(&evidence.reset_runbook_probe_root);
+        let reset_runbook_probe_root_bound = is_hex_root(&evidence.reset_runbook_probe_root);
         let live_private_summary_probe_root_bound =
             is_hex_root(&evidence.private_summary_probe_root);
         let public_surface_probe_set_root_bound =
@@ -5979,10 +5985,14 @@ impl Testnet {
                 .unwrap_or_else(|| {
                     "missing-public-deployment-runbook-step-receipt-count".to_string()
                 });
-        let expected_bootstrap_node_count_string =
-            summary.public_bootstrap_profile.bootstrap_node_count.to_string();
-        let expected_bootstrap_operator_count_string =
-            summary.public_bootstrap_profile.bootstrap_operator_count.to_string();
+        let expected_bootstrap_node_count_string = summary
+            .public_bootstrap_profile
+            .bootstrap_node_count
+            .to_string();
+        let expected_bootstrap_operator_count_string = summary
+            .public_bootstrap_profile
+            .bootstrap_operator_count
+            .to_string();
         let expected_tls_endpoint_pin_count_string = expected_tls_endpoint_pin_count
             .map(|count| count.to_string())
             .unwrap_or_else(|| "missing-tls-endpoint-pin-count".to_string());
@@ -6087,7 +6097,8 @@ impl Testnet {
             passed,
             report_root,
             evidence_root: Some(evidence.evidence_root.clone()),
-            evidence_shape_verified: evidence.schema_version == PUBLIC_DEPLOYMENT_EVIDENCE_SCHEMA_VERSION,
+            evidence_shape_verified: evidence.schema_version
+                == PUBLIC_DEPLOYMENT_EVIDENCE_SCHEMA_VERSION,
             placeholders_absent,
             public_bootstrap_profile_passed,
             finality_latency_profile_passed,
@@ -6196,7 +6207,10 @@ impl Testnet {
             ),
             rate_limit_policy_root: Some(evidence.rate_limit_policy_root.clone()),
             expected_rate_limit_policy_root: Some(
-                summary.public_bootstrap_profile.rate_limit_policy_root.clone(),
+                summary
+                    .public_bootstrap_profile
+                    .rate_limit_policy_root
+                    .clone(),
             ),
             capture_plan_root: Some(evidence.capture_plan_root.clone()),
             capture_contract_root: Some(evidence.capture_contract_root.clone()),
@@ -6205,9 +6219,7 @@ impl Testnet {
             ),
             expected_capture_plan_root: Some(expected_capture_plan_root),
             expected_capture_contract_root: Some(expected_capture_contract_root),
-            expected_deployment_preflight_checklist_root: Some(
-                expected_preflight_checklist_root,
-            ),
+            expected_deployment_preflight_checklist_root: Some(expected_preflight_checklist_root),
             public_rpc_url: Some(evidence.public_rpc_url.clone()),
             public_p2p_endpoint: Some(evidence.public_p2p_endpoint.clone()),
             status_page_url: Some(evidence.status_page_url.clone()),
@@ -6226,9 +6238,7 @@ impl Testnet {
             expected_proxy_policy_claims_root,
             firewall_policy_claims_root: Some(evidence.firewall_policy_claims_root.clone()),
             expected_firewall_policy_claims_root,
-            rate_limit_policy_claims_root: Some(
-                evidence.rate_limit_policy_claims_root.clone(),
-            ),
+            rate_limit_policy_claims_root: Some(evidence.rate_limit_policy_claims_root.clone()),
             expected_rate_limit_policy_claims_root,
             private_summary_probe_root: Some(evidence.private_summary_probe_root.clone()),
             preflight_receipt_bound,
@@ -6274,7 +6284,10 @@ impl Testnet {
             expected_public_deployment_runbook_step_receipt_count,
             bootstrap_node_set_root: Some(evidence.bootstrap_node_set_root.clone()),
             expected_bootstrap_node_set_root: Some(
-                summary.public_bootstrap_profile.bootstrap_node_set_root.clone(),
+                summary
+                    .public_bootstrap_profile
+                    .bootstrap_node_set_root
+                    .clone(),
             ),
             bootstrap_node_count: evidence.bootstrap_node_count,
             expected_bootstrap_node_count: Some(
@@ -6300,17 +6313,16 @@ impl Testnet {
             ),
             bootstrap_region_set_root: Some(evidence.bootstrap_region_set_root.clone()),
             expected_bootstrap_region_set_root: Some(
-                summary.public_bootstrap_profile.bootstrap_region_set_root.clone(),
+                summary
+                    .public_bootstrap_profile
+                    .bootstrap_region_set_root
+                    .clone(),
             ),
             bootstrap_public_endpoint_count: evidence.bootstrap_public_endpoint_count,
             bootstrap_node_probe_set_root: Some(evidence.bootstrap_node_probe_set_root.clone()),
             bootstrap_node_probe_count: evidence.bootstrap_node_probe_count,
-            bootstrap_p2p_endpoint_set_root: Some(
-                evidence.bootstrap_p2p_endpoint_set_root.clone(),
-            ),
-            bootstrap_status_page_set_root: Some(
-                evidence.bootstrap_status_page_set_root.clone(),
-            ),
+            bootstrap_p2p_endpoint_set_root: Some(evidence.bootstrap_p2p_endpoint_set_root.clone()),
+            bootstrap_status_page_set_root: Some(evidence.bootstrap_status_page_set_root.clone()),
             status_probe_root: Some(evidence.status_probe_root.clone()),
             p2p_handshake_root: Some(evidence.p2p_handshake_root.clone()),
             health_probe_root: Some(evidence.health_probe_root.clone()),
@@ -6957,8 +6969,14 @@ impl Testnet {
             "readiness_evidence_fresh_for_run",
             readiness_evidence_fresh_for_run
         );
-        readiness_root_field!("distributed_finality_covers_run", distributed_finality_covers_run);
-        readiness_root_field!("adversarial_coverage_covers_run", adversarial_coverage_covers_run);
+        readiness_root_field!(
+            "distributed_finality_covers_run",
+            distributed_finality_covers_run
+        );
+        readiness_root_field!(
+            "adversarial_coverage_covers_run",
+            adversarial_coverage_covers_run
+        );
         readiness_root_field!("privacy_surface_local_passed", privacy_surface.passed);
         readiness_root_field!(
             "privacy_policy_transcript_shape_verified",
@@ -6969,14 +6987,23 @@ impl Testnet {
             "operations_readiness_transcript_shape_verified",
             operations_readiness_transcript_shape_verified
         );
-        readiness_root_field!("operations_readiness_covers_run", operations_readiness_covers_run);
+        readiness_root_field!(
+            "operations_readiness_covers_run",
+            operations_readiness_covers_run
+        );
         readiness_root_field!(
             "crypto_policy_transcript_shape_verified",
             crypto_policy_transcript_shape_verified
         );
         readiness_root_field!("crypto_policy_covers_run", crypto_policy_covers_run);
-        readiness_root_field!("pq_no_pairing_local_inventory_passed", crypto_inventory.passed);
-        readiness_root_field!("fee_efficiency_local_estimate_passed", fee_efficiency.passed);
+        readiness_root_field!(
+            "pq_no_pairing_local_inventory_passed",
+            crypto_inventory.passed
+        );
+        readiness_root_field!(
+            "fee_efficiency_local_estimate_passed",
+            fee_efficiency.passed
+        );
         readiness_root_field!(
             "fee_efficiency_evidence_covers_run",
             fee_efficiency_evidence_covers_run
@@ -6986,7 +7013,10 @@ impl Testnet {
             "anchor_capacity_evidence_covers_run",
             anchor_capacity_evidence_covers_run
         );
-        readiness_root_field!("wallet_recovery_audit_local_passed", wallet_recovery_audit.passed);
+        readiness_root_field!(
+            "wallet_recovery_audit_local_passed",
+            wallet_recovery_audit.passed
+        );
         readiness_root_field!("reserve_monitoring_local_passed", reserve_monitoring.passed);
         readiness_root_field!(
             "operations_readiness_local_passed",
@@ -7006,7 +7036,10 @@ impl Testnet {
         );
         readiness_root_field!("external_review_covers_run", external_review_covers_run);
         readiness_root_field!("evidence_provenance_verified", evidence_provenance_verified);
-        readiness_root_field!("release_approval_shape_verified", release_approval_shape_verified);
+        readiness_root_field!(
+            "release_approval_shape_verified",
+            release_approval_shape_verified
+        );
         readiness_root_field!(
             "synthetic_monero_observed_height",
             synthetic_monero_observed_height
@@ -7110,6 +7143,21 @@ fn run() -> Result<(), String> {
     if let Some(path) = cli.readiness_template_verify_path.as_deref() {
         verify_readiness_template(path, &summary)?;
     }
+    if let Some(path) = cli.release_approval_template_path.as_deref() {
+        write_release_approval_template(path, &summary)?;
+    }
+    if let Some(path) = cli.release_approval_template_verify_path.as_deref() {
+        verify_release_approval_template(path, &summary)?;
+    }
+    if let Some(path) = cli.release_authority_registry_template_path.as_deref() {
+        write_release_authority_registry_template(path)?;
+    }
+    if let Some(path) = cli
+        .release_authority_registry_template_verify_path
+        .as_deref()
+    {
+        verify_release_authority_registry_template(path)?;
+    }
     if let Some(path) = cli.public_bootstrap_profile_path.as_deref() {
         write_public_bootstrap_profile(path, &summary)?;
     }
@@ -7131,10 +7179,7 @@ fn run() -> Result<(), String> {
     if let Some(path) = cli.public_launch_artifact_manifest_path.as_deref() {
         write_public_launch_artifact_manifest(path, &summary)?;
     }
-    if let Some(path) = cli
-        .public_launch_artifact_manifest_verify_path
-        .as_deref()
-    {
+    if let Some(path) = cli.public_launch_artifact_manifest_verify_path.as_deref() {
         verify_public_launch_artifact_manifest(path, &summary)?;
     }
     if let Some(path) = cli.public_launch_bundle_path.as_deref() {
@@ -7146,10 +7191,7 @@ fn run() -> Result<(), String> {
     if let Some(path) = cli.public_launch_readiness_report_path.as_deref() {
         write_public_launch_readiness_report(path, &summary)?;
     }
-    if let Some(path) = cli
-        .public_launch_readiness_report_verify_path
-        .as_deref()
-    {
+    if let Some(path) = cli.public_launch_readiness_report_verify_path.as_deref() {
         verify_public_launch_readiness_report(path, &summary)?;
     }
     if let Some(path) = cli.public_capture_todo_path.as_deref() {
@@ -7467,10 +7509,7 @@ fn ensure_public_launch_gates(summary: &TestnetSummary) -> Result<(), String> {
     let gaps = &summary.public_launch_readiness.blocking_gaps;
     ensure(
         gaps.is_empty(),
-        &format!(
-            "public launch gates remain blocked: {}",
-            gaps.join(",")
-        ),
+        &format!("public launch gates remain blocked: {}", gaps.join(",")),
     )
 }
 
@@ -7790,7 +7829,9 @@ fn public_deployment_repair_roots(
         ),
         (
             "deployment_preflight_checklist_root_bound",
-            report.expected_deployment_preflight_checklist_root.as_deref(),
+            report
+                .expected_deployment_preflight_checklist_root
+                .as_deref(),
         ),
         (
             "preflight_receipt_root_bound",
@@ -7798,19 +7839,27 @@ fn public_deployment_repair_roots(
         ),
         (
             "deployment_preflight_phase_set_root_bound",
-            report.expected_deployment_preflight_phase_set_root.as_deref(),
+            report
+                .expected_deployment_preflight_phase_set_root
+                .as_deref(),
         ),
         (
             "public_launch_package_file_set_root_bound",
-            report.expected_public_launch_package_file_set_root.as_deref(),
+            report
+                .expected_public_launch_package_file_set_root
+                .as_deref(),
         ),
         (
             "public_launch_package_manifest_root_bound",
-            report.expected_public_launch_package_manifest_root.as_deref(),
+            report
+                .expected_public_launch_package_manifest_root
+                .as_deref(),
         ),
         (
             "public_launch_readiness_artifact_root_bound",
-            report.expected_public_launch_readiness_artifact_root.as_deref(),
+            report
+                .expected_public_launch_readiness_artifact_root
+                .as_deref(),
         ),
         (
             "public_bootstrap_profile_root_bound",
@@ -7818,7 +7867,9 @@ fn public_deployment_repair_roots(
         ),
         (
             "public_bootstrap_profile_report_root_bound",
-            report.expected_public_bootstrap_profile_report_root.as_deref(),
+            report
+                .expected_public_bootstrap_profile_report_root
+                .as_deref(),
         ),
         (
             "rate_limit_policy_root_bound",
@@ -7922,7 +7973,10 @@ fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<St
         ),
         ("capture_plan_bound", report.capture_plan_bound),
         ("capture_plan_root_bound", report.capture_plan_root_bound),
-        ("capture_contract_root_bound", report.capture_contract_root_bound),
+        (
+            "capture_contract_root_bound",
+            report.capture_contract_root_bound,
+        ),
         (
             "deployment_preflight_checklist_root_bound",
             report.deployment_preflight_checklist_root_bound,
@@ -7957,7 +8011,10 @@ fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<St
             "rate_limit_policy_root_bound",
             report.rate_limit_policy_root_bound,
         ),
-        ("status_manifest_root_bound", report.status_manifest_root_bound),
+        (
+            "status_manifest_root_bound",
+            report.status_manifest_root_bound,
+        ),
         (
             "public_status_manifest_root_bound",
             report.public_status_manifest_root_bound,
@@ -7980,15 +8037,9 @@ fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<St
             report.incident_contact_url_public,
         ),
         ("faucet_url_public", report.faucet_url_public),
-        (
-            "reset_runbook_url_public",
-            report.reset_runbook_url_public,
-        ),
+        ("reset_runbook_url_public", report.reset_runbook_url_public),
         ("tls_pins_bound", report.tls_pins_bound),
-        (
-            "tls_spki_pin_root_bound",
-            report.tls_spki_pin_root_bound,
-        ),
+        ("tls_spki_pin_root_bound", report.tls_spki_pin_root_bound),
         (
             "tls_endpoint_pin_set_root_bound",
             report.tls_endpoint_pin_set_root_bound,
@@ -8481,6 +8532,72 @@ fn verify_readiness_template(path: &str, summary: &TestnetSummary) -> Result<(),
     )
 }
 
+fn write_release_approval_template(path: &str, summary: &TestnetSummary) -> Result<(), String> {
+    ensure_local_json_path(path, "--write-release-approval-template")?;
+    let template = release_approval_template_for_summary(summary);
+    ensure_release_approval_template_safe(&template)?;
+    let encoded = serde_json::to_string_pretty(&template)
+        .map_err(|error| format!("failed to encode release approval template json: {error}"))?;
+    fs::write(path, format!("{encoded}\n"))
+        .map_err(|error| format!("failed to write release approval template: {error}"))?;
+    Ok(())
+}
+
+fn verify_release_approval_template(path: &str, summary: &TestnetSummary) -> Result<(), String> {
+    ensure_local_json_path(path, "--verify-release-approval-template")?;
+    let actual = read_json_file(&PathBuf::from(path), "release approval template")?;
+    ensure(
+        actual.get("approval_kind").and_then(Value::as_str)
+            == Some("nebula-mainnet-release-approval"),
+        "release approval template has the wrong kind",
+    )?;
+    ensure_release_approval_template_safe(&actual)?;
+    let expected = release_approval_template_for_summary(summary);
+    ensure_release_approval_template_safe(&expected)?;
+    ensure(
+        actual == expected,
+        "release approval template does not match this run",
+    )
+}
+
+fn write_release_authority_registry_template(path: &str) -> Result<(), String> {
+    ensure_local_json_path(path, "--write-release-authority-registry-template")?;
+    let template = release_authority_registry_template();
+    ensure_release_authority_registry_template_safe(&template)?;
+    let encoded = serde_json::to_string_pretty(&template).map_err(|error| {
+        format!("failed to encode release authority registry template json: {error}")
+    })?;
+    fs::write(path, format!("{encoded}\n"))
+        .map_err(|error| format!("failed to write release authority registry template: {error}"))?;
+    Ok(())
+}
+
+fn verify_release_authority_registry_template(path: &str) -> Result<(), String> {
+    ensure_local_json_path(path, "--verify-release-authority-registry-template")?;
+    let actual = read_json_file(&PathBuf::from(path), "release authority registry template")?;
+    ensure(
+        actual.get("registry_kind").and_then(Value::as_str)
+            == Some("nebula-release-authority-registry"),
+        "release authority registry template has the wrong kind",
+    )?;
+    ensure_release_authority_registry_template_safe(&actual)?;
+    let expected = release_authority_registry_template();
+    ensure_release_authority_registry_template_safe(&expected)?;
+    ensure(
+        actual == expected,
+        "release authority registry template does not match the expected release role set",
+    )
+}
+
+fn release_approval_template_for_summary(summary: &TestnetSummary) -> Value {
+    let local_adversarial_root = summary
+        .fault_injection
+        .as_ref()
+        .map(|report| report.report_root.as_str())
+        .unwrap_or(ROOT_PLACEHOLDER);
+    release_approval_template(summary, local_adversarial_root)
+}
+
 fn write_public_bootstrap_profile(path: &str, summary: &TestnetSummary) -> Result<(), String> {
     ensure_local_json_path(path, "--write-public-bootstrap-profile")?;
     let profile = public_bootstrap_profile_template(summary);
@@ -8598,9 +8715,8 @@ fn write_public_launch_artifact_manifest(
     let encoded = serde_json::to_string_pretty(&manifest).map_err(|error| {
         format!("failed to encode public launch artifact manifest json: {error}")
     })?;
-    fs::write(path, format!("{encoded}\n")).map_err(|error| {
-        format!("failed to write public launch artifact manifest: {error}")
-    })?;
+    fs::write(path, format!("{encoded}\n"))
+        .map_err(|error| format!("failed to write public launch artifact manifest: {error}"))?;
     Ok(())
 }
 
@@ -8609,10 +8725,7 @@ fn verify_public_launch_artifact_manifest(
     summary: &TestnetSummary,
 ) -> Result<(), String> {
     ensure_local_json_path(path, "--verify-public-launch-artifact-manifest")?;
-    let actual = read_json_file(
-        &PathBuf::from(path),
-        "public launch artifact manifest",
-    )?;
+    let actual = read_json_file(&PathBuf::from(path), "public launch artifact manifest")?;
     ensure(
         actual.get("kind").and_then(Value::as_str)
             == Some("nebula-public-launch-artifact-manifest"),
@@ -8642,8 +8755,7 @@ fn verify_public_launch_bundle(path: &str, summary: &TestnetSummary) -> Result<(
     ensure_local_json_path(path, "--verify-public-launch-bundle")?;
     let actual = read_json_file(&PathBuf::from(path), "public launch bundle")?;
     ensure(
-        actual.get("kind").and_then(Value::as_str)
-            == Some("nebula-public-testnet-launch-bundle"),
+        actual.get("kind").and_then(Value::as_str) == Some("nebula-public-testnet-launch-bundle"),
         "public launch bundle has the wrong kind",
     )?;
     ensure_public_launch_bundle_redacted(&actual)?;
@@ -8669,12 +8781,14 @@ fn write_public_launch_readiness_report(
         .map_err(|error| format!("failed to write public launch readiness report: {error}"))
 }
 
-fn verify_public_launch_readiness_report(path: &str, summary: &TestnetSummary) -> Result<(), String> {
+fn verify_public_launch_readiness_report(
+    path: &str,
+    summary: &TestnetSummary,
+) -> Result<(), String> {
     ensure_local_json_path(path, "--verify-public-launch-readiness-report")?;
     let actual = read_json_file(&PathBuf::from(path), "public launch readiness report")?;
     ensure(
-        actual.get("kind").and_then(Value::as_str)
-            == Some("nebula-public-launch-readiness-report"),
+        actual.get("kind").and_then(Value::as_str) == Some("nebula-public-launch-readiness-report"),
         "public launch readiness report has the wrong kind",
     )?;
     ensure_public_launch_readiness_report_artifact_safe(&actual)?;
@@ -8874,10 +8988,7 @@ fn ensure_public_capture_todo_artifact(value: &Value) -> Result<(), String> {
         "public capture todo chain_id mismatch",
     )?;
     ensure(
-        value
-            .get("operator_fill_required")
-            .and_then(Value::as_bool)
-            == Some(true),
+        value.get("operator_fill_required").and_then(Value::as_bool) == Some(true),
         "public capture todo must require operator fill-in",
     )?;
     ensure(
@@ -8919,7 +9030,10 @@ fn ensure_public_capture_todo_artifact(value: &Value) -> Result<(), String> {
             "required_preflight_phase_ids",
             REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len(),
         ),
-        ("required_runbook_step_ids", PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len()),
+        (
+            "required_runbook_step_ids",
+            PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len(),
+        ),
         (
             "required_tls_endpoint_pin_roles",
             PUBLIC_TLS_ENDPOINT_PIN_ROLES.len(),
@@ -8935,7 +9049,10 @@ fn ensure_public_capture_todo_artifact(value: &Value) -> Result<(), String> {
         )?;
     }
     ensure(
-        value.get("capture_contract").and_then(Value::as_object).is_some(),
+        value
+            .get("capture_contract")
+            .and_then(Value::as_object)
+            .is_some(),
         "public capture todo missing capture_contract",
     )?;
     ensure(
@@ -9177,8 +9294,10 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
         "public launch package readiness report root mismatch",
     )?;
     let expected_readiness_report = public_launch_readiness_report_artifact(summary);
-    let expected_readiness_artifact_root =
-        required_root(&expected_readiness_report, "public_launch_readiness_artifact_root")?;
+    let expected_readiness_artifact_root = required_root(
+        &expected_readiness_report,
+        "public_launch_readiness_artifact_root",
+    )?;
     ensure(
         required_root(&manifest, "public_launch_readiness_artifact_root")?
             == expected_readiness_artifact_root,
@@ -9296,8 +9415,16 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
         &expected_package_file_set_root,
         &summary.public_launch_readiness.level,
         bool_str(summary.public_launch_readiness.public_launch_ready),
-        &summary.public_launch_readiness.blocking_gaps.len().to_string(),
-        &summary.public_launch_readiness.remediations.len().to_string(),
+        &summary
+            .public_launch_readiness
+            .blocking_gaps
+            .len()
+            .to_string(),
+        &summary
+            .public_launch_readiness
+            .remediations
+            .len()
+            .to_string(),
         &summary.public_launch_readiness.report_root,
         &expected_readiness_artifact_root,
         bool_str(summary.acceptance.no_mainnet_custody),
@@ -9451,8 +9578,9 @@ fn ensure_public_testnet_certification_exact_file_set(dir: &PathBuf) -> Result<(
     ];
     let expected_dirs = ["nebula-public-launch-package"];
 
-    let entries = fs::read_dir(dir)
-        .map_err(|error| format!("failed to list public testnet certification directory: {error}"))?;
+    let entries = fs::read_dir(dir).map_err(|error| {
+        format!("failed to list public testnet certification directory: {error}")
+    })?;
     let mut actual_files = BTreeSet::new();
     let mut actual_dirs = BTreeSet::new();
     for entry in entries {
@@ -9626,8 +9754,10 @@ fn public_launch_package_manifest_root_for_summary(summary: &TestnetSummary) -> 
         record_roots.push(record_root);
     }
     let artifact_set_root = collection_root("public-launch-package-artifacts", record_roots);
-    let package_file_set_root =
-        public_launch_package_file_set_root(&handoff_summary.manifest_id, &handoff_summary.testnet_id);
+    let package_file_set_root = public_launch_package_file_set_root(
+        &handoff_summary.manifest_id,
+        &handoff_summary.testnet_id,
+    );
     let public_launch_readiness_artifact_root =
         public_launch_readiness_artifact_root_for_summary(&handoff_summary);
     root(&[
@@ -9639,8 +9769,16 @@ fn public_launch_package_manifest_root_for_summary(summary: &TestnetSummary) -> 
         &package_file_set_root,
         &handoff_summary.public_launch_readiness.level,
         bool_str(handoff_summary.public_launch_readiness.public_launch_ready),
-        &handoff_summary.public_launch_readiness.blocking_gaps.len().to_string(),
-        &handoff_summary.public_launch_readiness.remediations.len().to_string(),
+        &handoff_summary
+            .public_launch_readiness
+            .blocking_gaps
+            .len()
+            .to_string(),
+        &handoff_summary
+            .public_launch_readiness
+            .remediations
+            .len()
+            .to_string(),
         &handoff_summary.public_launch_readiness.report_root,
         &public_launch_readiness_artifact_root,
         bool_str(handoff_summary.acceptance.no_mainnet_custody),
@@ -9672,7 +9810,9 @@ fn public_launch_package_required_before_capture(artifact_id: &str) -> bool {
 fn public_launch_package_operator_fill_required(artifact_id: &str) -> bool {
     matches!(
         artifact_id,
-        "public-deployment-evidence-template" | "public-deployment-capture-plan" | "public-capture-todo"
+        "public-deployment-evidence-template"
+            | "public-deployment-capture-plan"
+            | "public-capture-todo"
     )
 }
 
@@ -9704,7 +9844,8 @@ fn public_launch_package_artifact_value(
 
 fn read_json_file(path: &PathBuf, description: &str) -> Result<Value, String> {
     let bytes = fs::read(path).map_err(|error| format!("failed to read {description}: {error}"))?;
-    serde_json::from_slice(&bytes).map_err(|error| format!("failed to parse {description}: {error}"))
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse {description}: {error}"))
 }
 
 fn write_json_artifact(path: &PathBuf, value: &Value, description: &str) -> Result<(), String> {
@@ -9736,8 +9877,7 @@ fn verify_public_deployment_evidence_template(
     ensure_local_json_path(path, "--verify-public-deployment-evidence-template")?;
     let actual = read_json_file(&PathBuf::from(path), "public deployment evidence template")?;
     ensure(
-        actual.get("kind").and_then(Value::as_str)
-            == Some("nebula-public-deployment-attestation"),
+        actual.get("kind").and_then(Value::as_str) == Some("nebula-public-deployment-attestation"),
         "public deployment evidence template has the wrong kind",
     )?;
     ensure_public_deployment_evidence_template_safe(&actual)?;
@@ -9769,10 +9909,7 @@ fn verify_public_deployment_capture_plan(
     summary: &TestnetSummary,
 ) -> Result<(), String> {
     ensure_local_json_path(path, "--verify-public-deployment-capture-plan")?;
-    let actual = read_json_file(
-        &PathBuf::from(path),
-        "public deployment capture plan",
-    )?;
+    let actual = read_json_file(&PathBuf::from(path), "public deployment capture plan")?;
     ensure(
         actual["kind"] == "nebula-public-deployment-capture-plan",
         "public deployment capture plan has the wrong kind",
@@ -9802,8 +9939,7 @@ fn write_public_deployment_capture_scaffold(
         &package_dir.join("nebula-public-launch-readiness-report.json"),
         "public launch readiness report",
     )?;
-    let scaffold =
-        public_deployment_capture_scaffold(summary, &package_manifest, &launch_report)?;
+    let scaffold = public_deployment_capture_scaffold(summary, &package_manifest, &launch_report)?;
     write_json_artifact(
         &PathBuf::from(path),
         &scaffold,
@@ -9828,10 +9964,7 @@ fn verify_public_deployment_capture_scaffold(
         &package_dir.join("nebula-public-launch-readiness-report.json"),
         "public launch readiness report",
     )?;
-    let actual = read_json_file(
-        &PathBuf::from(path),
-        "public deployment capture scaffold",
-    )?;
+    let actual = read_json_file(&PathBuf::from(path), "public deployment capture scaffold")?;
     ensure(
         actual["kind"] == "nebula-public-deployment-capture-scaffold",
         "public deployment capture scaffold has the wrong kind",
@@ -9846,8 +9979,7 @@ fn verify_public_deployment_capture_scaffold(
         value_contains_placeholder(&actual),
         "public deployment capture scaffold must retain fill-in placeholders",
     )?;
-    let expected =
-        public_deployment_capture_scaffold(summary, &package_manifest, &launch_report)?;
+    let expected = public_deployment_capture_scaffold(summary, &package_manifest, &launch_report)?;
     ensure(
         actual == expected,
         "public deployment capture scaffold does not match this run and package",
@@ -9887,12 +10019,9 @@ fn public_deployment_capture_scaffold(
     scaffold["operator_notice"] = json!("Fill the remaining endpoint, TLS, probe, bootstrap, operator-registry, observer, preflight, runbook, freshness, and evidence-root placeholders, then run --audit-public-deployment-capture followed by --verify-public-deployment-capture before assembling public deployment evidence. This scaffold is package-bound but is not public deployment evidence.");
     scaffold["capture_plan_root"] = json!(capture_plan_root);
     scaffold["capture_contract_root"] = json!(capture_contract_root);
-    scaffold["deployment_preflight_checklist_root"] =
-        json!(deployment_preflight_checklist_root);
-    scaffold["public_launch_package_file_set_root"] =
-        json!(public_launch_package_file_set_root);
-    scaffold["public_launch_package_manifest_root"] =
-        json!(public_launch_package_manifest_root);
+    scaffold["deployment_preflight_checklist_root"] = json!(deployment_preflight_checklist_root);
+    scaffold["public_launch_package_file_set_root"] = json!(public_launch_package_file_set_root);
+    scaffold["public_launch_package_manifest_root"] = json!(public_launch_package_manifest_root);
     scaffold["public_launch_readiness_artifact_root"] =
         json!(public_launch_readiness_artifact_root);
     let deployment_preflight_checklist_root = scaffold["deployment_preflight_checklist_root"]
@@ -9909,13 +10038,12 @@ fn public_deployment_capture_scaffold(
         &public_launch_bundle_root,
         &public_status_manifest_root,
     );
-    scaffold["public_deployment_runbook_receipt"] =
-        public_deployment_runbook_receipt_template(
-            &deployment_runbook,
-            &capture_contract_root,
-            &public_launch_bundle_root,
-            &public_status_manifest_root,
-        );
+    scaffold["public_deployment_runbook_receipt"] = public_deployment_runbook_receipt_template(
+        &deployment_runbook,
+        &capture_contract_root,
+        &public_launch_bundle_root,
+        &public_status_manifest_root,
+    );
     Ok(scaffold)
 }
 
@@ -10091,433 +10219,434 @@ fn public_deployment_capture_audit(
         expected_public_launch_package_manifest_root,
         public_launch_readiness_artifact_root_matches,
         expected_public_launch_readiness_artifact_root,
-    ) =
-        match parse_result {
-            Ok(value) => {
-                let missing = REQUIRED_PUBLIC_DEPLOYMENT_CAPTURE_FIELDS
-                    .iter()
-                    .filter(|field| value.get(**field).is_none())
-                    .map(|field| (*field).to_string())
-                    .collect::<Vec<_>>();
-                let missing_endpoints = REQUIRED_PUBLIC_DEPLOYMENT_ENDPOINT_FIELDS
-                    .iter()
-                    .filter(|field| value.get(**field).and_then(Value::as_str).is_none())
-                    .map(|field| (*field).to_string())
-                    .collect::<Vec<_>>();
-                let invalid_endpoints = REQUIRED_PUBLIC_DEPLOYMENT_ENDPOINT_FIELDS
-                    .iter()
-                    .filter_map(|field| {
-                        let endpoint = value.get(*field).and_then(Value::as_str)?;
-                        let valid = if *field == "public_p2p_endpoint" {
-                            public_endpoint(endpoint)
-                        } else {
-                            public_https_endpoint(endpoint)
-                        };
-                        (!valid).then(|| (*field).to_string())
-                    })
-                    .collect::<Vec<_>>();
-                let invalid_time_fields = [
-                    "observed_at_unix_ms",
-                    "expires_at_unix_ms",
-                    "freshness_window_ms",
-                ]
+    ) = match parse_result {
+        Ok(value) => {
+            let missing = REQUIRED_PUBLIC_DEPLOYMENT_CAPTURE_FIELDS
                 .iter()
-                .filter(|field| value.get(**field).is_some_and(|field| !field.is_u64()))
+                .filter(|field| value.get(**field).is_none())
                 .map(|field| (*field).to_string())
                 .collect::<Vec<_>>();
-                let observed_at = value.get("observed_at_unix_ms").and_then(Value::as_u64);
-                let expires_at = value.get("expires_at_unix_ms").and_then(Value::as_u64);
-                let freshness_window = value.get("freshness_window_ms").and_then(Value::as_u64);
-                let freshness_valid = freshness_window
-                    .map(|window| window > 0 && window <= MAX_PUBLIC_DEPLOYMENT_FRESHNESS_MS)
-                    .unwrap_or(true);
-                let window_valid = match (observed_at, expires_at, freshness_window) {
-                    (Some(observed), Some(expires), Some(window)) => {
-                        expires > observed && expires.saturating_sub(observed) <= window
-                    }
-                    _ => true,
-                };
-                let now = unix_time_ms().min(u128::from(u64::MAX)) as u64;
-                let time_current = match (observed_at, expires_at, freshness_window) {
-                    (Some(observed), Some(expires), Some(window)) => {
-                        observed <= now.saturating_add(MAX_PUBLIC_DEPLOYMENT_CLOCK_SKEW_MS)
-                            && now <= expires
-                            && now.saturating_sub(observed) <= window
-                    }
-                    _ => true,
-                };
-                let run_id_valid = value
-                    .get("deployment_run_id")
-                    .and_then(Value::as_str)
-                    .map(|run_id| validate_public_deployment_run_id(run_id).is_ok())
-                    .unwrap_or(true);
-                let tls_pin_coverage = public_tls_endpoint_pin_coverage_audit(&value);
-                let tls_pin_fields = public_tls_endpoint_pin_field_audit(&value);
-                let surface_probe_coverage = public_surface_probe_coverage_audit(&value);
-                let surface_probe_fields = public_surface_probe_field_audit(&value);
-                let bootstrap_coverage =
-                    public_bootstrap_node_probe_coverage_audit(&value);
-                let bootstrap_probe_fields = public_bootstrap_node_probe_field_audit(&value);
-                let operator_registry_coverage =
-                    public_bootstrap_operator_registry_coverage_audit(&value);
-                let operator_registry_fields =
-                    public_bootstrap_operator_registry_field_audit(&value);
-                let preflight_receipt_fields = public_deployment_preflight_receipt_field_audit(&value);
-                let runbook_receipt_fields = public_deployment_runbook_receipt_field_audit(&value);
-                let observer_count = value
-                    .get("probe_observers")
-                    .and_then(Value::as_array)
-                    .map(|observers| observers.len() as u64)
-                    .unwrap_or_default();
-                let observer_region_count = value
-                    .get("probe_observers")
-                    .and_then(Value::as_array)
-                    .map(|observers| {
-                        observers
-                            .iter()
-                            .filter_map(|observer| observer.get("region").and_then(Value::as_str))
-                            .filter(|region| public_probe_observer_region_valid(region))
-                            .map(str::to_string)
-                            .collect::<BTreeSet<_>>()
-                            .len() as u64
-                    })
-                    .unwrap_or_default();
-                let invalid_observer_region_indexes =
-                    invalid_public_probe_observer_region_indexes(&value);
-                let duplicate_observer_ids =
-                    duplicate_public_probe_observer_field_values(&value, "observer_id");
-                let duplicate_observer_keys =
-                    duplicate_public_probe_observer_field_values(&value, "observer_key_root");
-                let (
-                    unsigned_observer_indexes,
-                    unverified_observer_indexes,
-                    invalid_signature_verification_indexes,
-                ) = public_probe_observer_signature_audit_indexes(&value);
-                let signatures_present = unsigned_observer_indexes.is_empty();
-                let signatures_verified = unverified_observer_indexes.is_empty();
-                let signature_verifications_valid = invalid_signature_verification_indexes.is_empty();
-                let observer_quorum_threshold =
-                    value.get("observer_quorum_threshold").and_then(Value::as_u64);
-                let quorum_threshold_valid = match value.get("observer_quorum_threshold") {
-                    Some(_) => observer_quorum_threshold
-                        .map(|threshold| threshold >= MIN_PUBLIC_DEPLOYMENT_OBSERVER_COUNT)
-                        .unwrap_or(false),
-                    None => true,
-                };
-                let quorum_reachable = match (value.get("probe_observers"), observer_quorum_threshold)
-                {
-                    (Some(Value::Array(_)), Some(threshold)) => {
-                        observer_count >= MIN_PUBLIC_DEPLOYMENT_OBSERVER_COUNT
-                            && observer_count >= threshold
-                            && threshold >= MIN_PUBLIC_DEPLOYMENT_OBSERVER_COUNT
-                    }
-                    (None, None) | (None, Some(_)) => true,
-                    _ => false,
-                };
-                let observer_regions_valid = invalid_observer_region_indexes.is_empty();
-                let observer_id_unique = duplicate_observer_ids.is_empty();
-                let observer_key_unique = duplicate_observer_keys.is_empty();
-                let region_coverage_valid = match value.get("probe_observers") {
-                    Some(Value::Array(_)) => {
-                        observer_region_count >= MIN_PUBLIC_DEPLOYMENT_REGION_COUNT
-                    }
-                    Some(_) => false,
-                    None => true,
-                };
-                let sensitive_markers = SENSITIVE_FIELD_MARKERS
-                    .iter()
-                    .filter(|marker| value_contains_key_marker(&value, marker))
-                    .map(|marker| (*marker).to_string())
-                    .collect::<Vec<_>>();
-                let forbidden_keys = PUBLIC_STATUS_FORBIDDEN_KEYS
-                    .iter()
-                    .filter(|key| value_contains_exact_key(&value, key))
-                    .map(|key| (*key).to_string())
-                    .collect::<Vec<_>>();
-                let capture_plan = public_deployment_capture_plan(summary);
-                let expected_capture_plan_root = capture_plan["capture_plan_root"]
-                    .as_str()
-                    .unwrap_or_default();
-                let expected_capture_contract_root = capture_plan["capture_contract_root"]
-                    .as_str()
-                    .unwrap_or_default();
-                let expected_preflight_checklist_root =
-                    capture_plan["deployment_preflight"]["checklist_root"]
-                        .as_str()
-                        .unwrap_or_default();
-                let expected_launch_bundle_root = capture_plan["public_launch_bundle_root"]
-                    .as_str()
-                    .unwrap_or_default();
-                let expected_status_manifest_root = capture_plan["public_status_manifest_root"]
-                    .as_str()
-                    .unwrap_or_default();
-                let expected_package_file_set_root =
-                    public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id);
-                let expected_package_manifest_root =
-                    public_launch_package_manifest_root_for_summary(summary);
-                let expected_readiness_artifact_root =
-                    public_launch_readiness_artifact_root_for_summary(summary);
-                let receipt_root_values_match = |field: &str, expected_root: &str| {
-                    ["deployment_preflight_receipt", "public_deployment_runbook_receipt"]
+            let missing_endpoints = REQUIRED_PUBLIC_DEPLOYMENT_ENDPOINT_FIELDS
+                .iter()
+                .filter(|field| value.get(**field).and_then(Value::as_str).is_none())
+                .map(|field| (*field).to_string())
+                .collect::<Vec<_>>();
+            let invalid_endpoints = REQUIRED_PUBLIC_DEPLOYMENT_ENDPOINT_FIELDS
+                .iter()
+                .filter_map(|field| {
+                    let endpoint = value.get(*field).and_then(Value::as_str)?;
+                    let valid = if *field == "public_p2p_endpoint" {
+                        public_endpoint(endpoint)
+                    } else {
+                        public_https_endpoint(endpoint)
+                    };
+                    (!valid).then(|| (*field).to_string())
+                })
+                .collect::<Vec<_>>();
+            let invalid_time_fields = [
+                "observed_at_unix_ms",
+                "expires_at_unix_ms",
+                "freshness_window_ms",
+            ]
+            .iter()
+            .filter(|field| value.get(**field).is_some_and(|field| !field.is_u64()))
+            .map(|field| (*field).to_string())
+            .collect::<Vec<_>>();
+            let observed_at = value.get("observed_at_unix_ms").and_then(Value::as_u64);
+            let expires_at = value.get("expires_at_unix_ms").and_then(Value::as_u64);
+            let freshness_window = value.get("freshness_window_ms").and_then(Value::as_u64);
+            let freshness_valid = freshness_window
+                .map(|window| window > 0 && window <= MAX_PUBLIC_DEPLOYMENT_FRESHNESS_MS)
+                .unwrap_or(true);
+            let window_valid = match (observed_at, expires_at, freshness_window) {
+                (Some(observed), Some(expires), Some(window)) => {
+                    expires > observed && expires.saturating_sub(observed) <= window
+                }
+                _ => true,
+            };
+            let now = unix_time_ms().min(u128::from(u64::MAX)) as u64;
+            let time_current = match (observed_at, expires_at, freshness_window) {
+                (Some(observed), Some(expires), Some(window)) => {
+                    observed <= now.saturating_add(MAX_PUBLIC_DEPLOYMENT_CLOCK_SKEW_MS)
+                        && now <= expires
+                        && now.saturating_sub(observed) <= window
+                }
+                _ => true,
+            };
+            let run_id_valid = value
+                .get("deployment_run_id")
+                .and_then(Value::as_str)
+                .map(|run_id| validate_public_deployment_run_id(run_id).is_ok())
+                .unwrap_or(true);
+            let tls_pin_coverage = public_tls_endpoint_pin_coverage_audit(&value);
+            let tls_pin_fields = public_tls_endpoint_pin_field_audit(&value);
+            let surface_probe_coverage = public_surface_probe_coverage_audit(&value);
+            let surface_probe_fields = public_surface_probe_field_audit(&value);
+            let bootstrap_coverage = public_bootstrap_node_probe_coverage_audit(&value);
+            let bootstrap_probe_fields = public_bootstrap_node_probe_field_audit(&value);
+            let operator_registry_coverage =
+                public_bootstrap_operator_registry_coverage_audit(&value);
+            let operator_registry_fields = public_bootstrap_operator_registry_field_audit(&value);
+            let preflight_receipt_fields = public_deployment_preflight_receipt_field_audit(&value);
+            let runbook_receipt_fields = public_deployment_runbook_receipt_field_audit(&value);
+            let observer_count = value
+                .get("probe_observers")
+                .and_then(Value::as_array)
+                .map(|observers| observers.len() as u64)
+                .unwrap_or_default();
+            let observer_region_count = value
+                .get("probe_observers")
+                .and_then(Value::as_array)
+                .map(|observers| {
+                    observers
                         .iter()
-                        .filter_map(|receipt_key| {
-                            value
-                                .get(*receipt_key)
-                                .and_then(|receipt| receipt.get(field))
-                                .and_then(Value::as_str)
-                        })
-                        .all(|root| root == expected_root)
-                };
-                (
-                    true,
-                    value.is_object(),
-                    missing,
-                    missing_endpoints,
-                    invalid_endpoints,
-                    invalid_time_fields,
-                    freshness_valid,
-                    window_valid,
-                    time_current,
-                    run_id_valid,
-                    tls_pin_coverage.tls_endpoint_pin_count,
-                    tls_pin_coverage.missing_pin_roles,
-                    tls_pin_coverage.extra_pin_roles,
-                    tls_pin_coverage.duplicate_pin_roles,
-                    tls_pin_coverage.pin_coverage_valid,
-                    tls_pin_fields.invalid_record_indexes,
-                    tls_pin_fields.invalid_binding_indexes,
-                    tls_pin_fields.invalid_endpoint_indexes,
-                    tls_pin_fields.duplicate_url_indexes,
-                    tls_pin_fields.invalid_assertion_indexes,
-                    tls_pin_fields.invalid_root_indexes,
-                    tls_pin_fields.invalid_observation_time_indexes,
-                    tls_pin_fields.fields_valid,
-                    surface_probe_coverage.public_surface_probe_count,
-                    surface_probe_coverage.missing_probe_roles,
-                    surface_probe_coverage.extra_probe_roles,
-                    surface_probe_coverage.duplicate_probe_roles,
-                    surface_probe_coverage.probe_coverage_valid,
-                    surface_probe_fields.invalid_record_indexes,
-                    surface_probe_fields.invalid_status_indexes,
-                    surface_probe_fields.invalid_binding_indexes,
-                    surface_probe_fields.invalid_endpoint_indexes,
-                    surface_probe_fields.invalid_transcript_indexes,
-                    surface_probe_fields.invalid_root_indexes,
-                    surface_probe_fields.invalid_observation_time_indexes,
-                    surface_probe_fields.fields_valid,
-                    bootstrap_coverage.bootstrap_node_count,
-                    bootstrap_coverage.bootstrap_node_probe_count,
-                    bootstrap_coverage.missing_probe_slots,
-                    bootstrap_coverage.extra_probe_slots,
-                    bootstrap_coverage.duplicate_probe_slots,
-                    bootstrap_coverage.node_count_valid,
-                    bootstrap_coverage.probe_coverage_valid,
-                    bootstrap_probe_fields.invalid_record_indexes,
-                    bootstrap_probe_fields.invalid_binding_indexes,
-                    bootstrap_probe_fields.invalid_slot_indexes,
-                    bootstrap_probe_fields.invalid_endpoint_indexes,
-                    bootstrap_probe_fields.invalid_handshake_indexes,
-                    bootstrap_probe_fields.invalid_status_page_indexes,
-                    bootstrap_probe_fields.invalid_root_indexes,
-                    bootstrap_probe_fields.invalid_observation_time_indexes,
-                    bootstrap_probe_fields.fields_valid,
-                    operator_registry_coverage.bootstrap_operator_count,
-                    operator_registry_coverage.bootstrap_operator_registry_count,
-                    operator_registry_coverage.missing_registry_commitments,
-                    operator_registry_coverage.extra_registry_commitments,
-                    operator_registry_coverage.duplicate_registry_commitments,
-                    operator_registry_coverage.operator_count_valid,
-                    operator_registry_coverage.registry_coverage_valid,
-                    operator_registry_fields.invalid_record_indexes,
-                    operator_registry_fields.invalid_binding_indexes,
-                    operator_registry_fields.invalid_commitment_indexes,
-                    operator_registry_fields.duplicate_identity_indexes,
-                    operator_registry_fields.invalid_signature_indexes,
-                    operator_registry_fields.invalid_root_indexes,
-                    operator_registry_fields.invalid_observation_time_indexes,
-                    operator_registry_fields.fields_valid,
-                    observer_count,
-                    observer_region_count,
-                    invalid_observer_region_indexes,
-                    duplicate_observer_ids,
-                    duplicate_observer_keys,
-                    unsigned_observer_indexes,
-                    unverified_observer_indexes,
-                    invalid_signature_verification_indexes,
-                    signatures_present,
-                    signatures_verified,
-                    signature_verifications_valid,
-                    quorum_threshold_valid,
-                    quorum_reachable,
-                    observer_regions_valid,
-                    observer_id_unique,
-                    observer_key_unique,
-                    region_coverage_valid,
-                    value_contains_placeholder(&value),
-                    sensitive_markers,
-                    forbidden_keys,
-                    value.get("capture_plan_root").and_then(Value::as_str)
-                        == Some(expected_capture_plan_root),
-                    expected_capture_plan_root.to_string(),
-                    value.get("capture_contract_root").and_then(Value::as_str)
-                        == Some(expected_capture_contract_root),
-                    expected_capture_contract_root.to_string(),
-                    value.get("deployment_preflight_checklist_root")
+                        .filter_map(|observer| observer.get("region").and_then(Value::as_str))
+                        .filter(|region| public_probe_observer_region_valid(region))
+                        .map(str::to_string)
+                        .collect::<BTreeSet<_>>()
+                        .len() as u64
+                })
+                .unwrap_or_default();
+            let invalid_observer_region_indexes =
+                invalid_public_probe_observer_region_indexes(&value);
+            let duplicate_observer_ids =
+                duplicate_public_probe_observer_field_values(&value, "observer_id");
+            let duplicate_observer_keys =
+                duplicate_public_probe_observer_field_values(&value, "observer_key_root");
+            let (
+                unsigned_observer_indexes,
+                unverified_observer_indexes,
+                invalid_signature_verification_indexes,
+            ) = public_probe_observer_signature_audit_indexes(&value);
+            let signatures_present = unsigned_observer_indexes.is_empty();
+            let signatures_verified = unverified_observer_indexes.is_empty();
+            let signature_verifications_valid = invalid_signature_verification_indexes.is_empty();
+            let observer_quorum_threshold = value
+                .get("observer_quorum_threshold")
+                .and_then(Value::as_u64);
+            let quorum_threshold_valid = match value.get("observer_quorum_threshold") {
+                Some(_) => observer_quorum_threshold
+                    .map(|threshold| threshold >= MIN_PUBLIC_DEPLOYMENT_OBSERVER_COUNT)
+                    .unwrap_or(false),
+                None => true,
+            };
+            let quorum_reachable = match (value.get("probe_observers"), observer_quorum_threshold) {
+                (Some(Value::Array(_)), Some(threshold)) => {
+                    observer_count >= MIN_PUBLIC_DEPLOYMENT_OBSERVER_COUNT
+                        && observer_count >= threshold
+                        && threshold >= MIN_PUBLIC_DEPLOYMENT_OBSERVER_COUNT
+                }
+                (None, None) | (None, Some(_)) => true,
+                _ => false,
+            };
+            let observer_regions_valid = invalid_observer_region_indexes.is_empty();
+            let observer_id_unique = duplicate_observer_ids.is_empty();
+            let observer_key_unique = duplicate_observer_keys.is_empty();
+            let region_coverage_valid = match value.get("probe_observers") {
+                Some(Value::Array(_)) => {
+                    observer_region_count >= MIN_PUBLIC_DEPLOYMENT_REGION_COUNT
+                }
+                Some(_) => false,
+                None => true,
+            };
+            let sensitive_markers = SENSITIVE_FIELD_MARKERS
+                .iter()
+                .filter(|marker| value_contains_key_marker(&value, marker))
+                .map(|marker| (*marker).to_string())
+                .collect::<Vec<_>>();
+            let forbidden_keys = PUBLIC_STATUS_FORBIDDEN_KEYS
+                .iter()
+                .filter(|key| value_contains_exact_key(&value, key))
+                .map(|key| (*key).to_string())
+                .collect::<Vec<_>>();
+            let capture_plan = public_deployment_capture_plan(summary);
+            let expected_capture_plan_root = capture_plan["capture_plan_root"]
+                .as_str()
+                .unwrap_or_default();
+            let expected_capture_contract_root = capture_plan["capture_contract_root"]
+                .as_str()
+                .unwrap_or_default();
+            let expected_preflight_checklist_root = capture_plan["deployment_preflight"]
+                ["checklist_root"]
+                .as_str()
+                .unwrap_or_default();
+            let expected_launch_bundle_root = capture_plan["public_launch_bundle_root"]
+                .as_str()
+                .unwrap_or_default();
+            let expected_status_manifest_root = capture_plan["public_status_manifest_root"]
+                .as_str()
+                .unwrap_or_default();
+            let expected_package_file_set_root =
+                public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id);
+            let expected_package_manifest_root =
+                public_launch_package_manifest_root_for_summary(summary);
+            let expected_readiness_artifact_root =
+                public_launch_readiness_artifact_root_for_summary(summary);
+            let receipt_root_values_match = |field: &str, expected_root: &str| {
+                [
+                    "deployment_preflight_receipt",
+                    "public_deployment_runbook_receipt",
+                ]
+                .iter()
+                .filter_map(|receipt_key| {
+                    value
+                        .get(*receipt_key)
+                        .and_then(|receipt| receipt.get(field))
                         .and_then(Value::as_str)
-                        == Some(expected_preflight_checklist_root),
-                    expected_preflight_checklist_root.to_string(),
-                    receipt_root_values_match(
-                        "public_launch_bundle_root",
-                        expected_launch_bundle_root,
-                    ),
-                    expected_launch_bundle_root.to_string(),
-                    receipt_root_values_match(
-                        "public_status_manifest_root",
-                        expected_status_manifest_root,
-                    ),
-                    expected_status_manifest_root.to_string(),
-                    preflight_receipt_fields.invalid_binding_fields,
-                    preflight_receipt_fields.invalid_phase_indexes,
-                    preflight_receipt_fields.roots_valid,
-                    preflight_receipt_fields.fields_valid,
-                    runbook_receipt_fields.invalid_binding_fields,
-                    runbook_receipt_fields.invalid_step_indexes,
-                    runbook_receipt_fields.roots_valid,
-                    runbook_receipt_fields.fields_valid,
-                    value.get("public_launch_package_file_set_root")
-                        .and_then(Value::as_str)
-                        == Some(expected_package_file_set_root.as_str()),
-                    expected_package_file_set_root,
-                    value.get("public_launch_package_manifest_root")
-                        .and_then(Value::as_str)
-                        == Some(expected_package_manifest_root.as_str()),
-                    expected_package_manifest_root,
-                    value.get("public_launch_readiness_artifact_root")
-                        .and_then(Value::as_str)
-                        == Some(expected_readiness_artifact_root.as_str()),
-                    expected_readiness_artifact_root,
-                )
-            }
-            Err(_) => (
-                false,
-                false,
-                REQUIRED_PUBLIC_DEPLOYMENT_CAPTURE_FIELDS
-                    .iter()
-                    .map(|field| (*field).to_string())
-                    .collect(),
-                REQUIRED_PUBLIC_DEPLOYMENT_ENDPOINT_FIELDS
-                    .iter()
-                    .map(|field| (*field).to_string())
-                    .collect(),
-                Vec::new(),
-                Vec::new(),
+                })
+                .all(|root| root == expected_root)
+            };
+            (
                 true,
-                true,
-                true,
-                true,
-                0,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                true,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                true,
-                0,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                true,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                true,
-                0,
-                0,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                true,
-                true,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                true,
-                0,
-                0,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                true,
-                true,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                true,
-                0,
-                0,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                true,
-                true,
-                true,
-                true,
-                true,
-                true,
-                true,
-                true,
-                true,
-                false,
-                Vec::new(),
-                Vec::new(),
-                false,
-                String::new(),
-                false,
-                String::new(),
-                false,
-                String::new(),
-                false,
-                String::new(),
-                false,
-                String::new(),
-                Vec::new(),
-                Vec::new(),
-                true,
-                true,
-                Vec::new(),
-                Vec::new(),
-                true,
-                true,
-                false,
-                public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id),
-                false,
-                public_launch_package_manifest_root_for_summary(summary),
-                false,
-                public_launch_readiness_artifact_root_for_summary(summary),
-            ),
-        };
+                value.is_object(),
+                missing,
+                missing_endpoints,
+                invalid_endpoints,
+                invalid_time_fields,
+                freshness_valid,
+                window_valid,
+                time_current,
+                run_id_valid,
+                tls_pin_coverage.tls_endpoint_pin_count,
+                tls_pin_coverage.missing_pin_roles,
+                tls_pin_coverage.extra_pin_roles,
+                tls_pin_coverage.duplicate_pin_roles,
+                tls_pin_coverage.pin_coverage_valid,
+                tls_pin_fields.invalid_record_indexes,
+                tls_pin_fields.invalid_binding_indexes,
+                tls_pin_fields.invalid_endpoint_indexes,
+                tls_pin_fields.duplicate_url_indexes,
+                tls_pin_fields.invalid_assertion_indexes,
+                tls_pin_fields.invalid_root_indexes,
+                tls_pin_fields.invalid_observation_time_indexes,
+                tls_pin_fields.fields_valid,
+                surface_probe_coverage.public_surface_probe_count,
+                surface_probe_coverage.missing_probe_roles,
+                surface_probe_coverage.extra_probe_roles,
+                surface_probe_coverage.duplicate_probe_roles,
+                surface_probe_coverage.probe_coverage_valid,
+                surface_probe_fields.invalid_record_indexes,
+                surface_probe_fields.invalid_status_indexes,
+                surface_probe_fields.invalid_binding_indexes,
+                surface_probe_fields.invalid_endpoint_indexes,
+                surface_probe_fields.invalid_transcript_indexes,
+                surface_probe_fields.invalid_root_indexes,
+                surface_probe_fields.invalid_observation_time_indexes,
+                surface_probe_fields.fields_valid,
+                bootstrap_coverage.bootstrap_node_count,
+                bootstrap_coverage.bootstrap_node_probe_count,
+                bootstrap_coverage.missing_probe_slots,
+                bootstrap_coverage.extra_probe_slots,
+                bootstrap_coverage.duplicate_probe_slots,
+                bootstrap_coverage.node_count_valid,
+                bootstrap_coverage.probe_coverage_valid,
+                bootstrap_probe_fields.invalid_record_indexes,
+                bootstrap_probe_fields.invalid_binding_indexes,
+                bootstrap_probe_fields.invalid_slot_indexes,
+                bootstrap_probe_fields.invalid_endpoint_indexes,
+                bootstrap_probe_fields.invalid_handshake_indexes,
+                bootstrap_probe_fields.invalid_status_page_indexes,
+                bootstrap_probe_fields.invalid_root_indexes,
+                bootstrap_probe_fields.invalid_observation_time_indexes,
+                bootstrap_probe_fields.fields_valid,
+                operator_registry_coverage.bootstrap_operator_count,
+                operator_registry_coverage.bootstrap_operator_registry_count,
+                operator_registry_coverage.missing_registry_commitments,
+                operator_registry_coverage.extra_registry_commitments,
+                operator_registry_coverage.duplicate_registry_commitments,
+                operator_registry_coverage.operator_count_valid,
+                operator_registry_coverage.registry_coverage_valid,
+                operator_registry_fields.invalid_record_indexes,
+                operator_registry_fields.invalid_binding_indexes,
+                operator_registry_fields.invalid_commitment_indexes,
+                operator_registry_fields.duplicate_identity_indexes,
+                operator_registry_fields.invalid_signature_indexes,
+                operator_registry_fields.invalid_root_indexes,
+                operator_registry_fields.invalid_observation_time_indexes,
+                operator_registry_fields.fields_valid,
+                observer_count,
+                observer_region_count,
+                invalid_observer_region_indexes,
+                duplicate_observer_ids,
+                duplicate_observer_keys,
+                unsigned_observer_indexes,
+                unverified_observer_indexes,
+                invalid_signature_verification_indexes,
+                signatures_present,
+                signatures_verified,
+                signature_verifications_valid,
+                quorum_threshold_valid,
+                quorum_reachable,
+                observer_regions_valid,
+                observer_id_unique,
+                observer_key_unique,
+                region_coverage_valid,
+                value_contains_placeholder(&value),
+                sensitive_markers,
+                forbidden_keys,
+                value.get("capture_plan_root").and_then(Value::as_str)
+                    == Some(expected_capture_plan_root),
+                expected_capture_plan_root.to_string(),
+                value.get("capture_contract_root").and_then(Value::as_str)
+                    == Some(expected_capture_contract_root),
+                expected_capture_contract_root.to_string(),
+                value
+                    .get("deployment_preflight_checklist_root")
+                    .and_then(Value::as_str)
+                    == Some(expected_preflight_checklist_root),
+                expected_preflight_checklist_root.to_string(),
+                receipt_root_values_match("public_launch_bundle_root", expected_launch_bundle_root),
+                expected_launch_bundle_root.to_string(),
+                receipt_root_values_match(
+                    "public_status_manifest_root",
+                    expected_status_manifest_root,
+                ),
+                expected_status_manifest_root.to_string(),
+                preflight_receipt_fields.invalid_binding_fields,
+                preflight_receipt_fields.invalid_phase_indexes,
+                preflight_receipt_fields.roots_valid,
+                preflight_receipt_fields.fields_valid,
+                runbook_receipt_fields.invalid_binding_fields,
+                runbook_receipt_fields.invalid_step_indexes,
+                runbook_receipt_fields.roots_valid,
+                runbook_receipt_fields.fields_valid,
+                value
+                    .get("public_launch_package_file_set_root")
+                    .and_then(Value::as_str)
+                    == Some(expected_package_file_set_root.as_str()),
+                expected_package_file_set_root,
+                value
+                    .get("public_launch_package_manifest_root")
+                    .and_then(Value::as_str)
+                    == Some(expected_package_manifest_root.as_str()),
+                expected_package_manifest_root,
+                value
+                    .get("public_launch_readiness_artifact_root")
+                    .and_then(Value::as_str)
+                    == Some(expected_readiness_artifact_root.as_str()),
+                expected_readiness_artifact_root,
+            )
+        }
+        Err(_) => (
+            false,
+            false,
+            REQUIRED_PUBLIC_DEPLOYMENT_CAPTURE_FIELDS
+                .iter()
+                .map(|field| (*field).to_string())
+                .collect(),
+            REQUIRED_PUBLIC_DEPLOYMENT_ENDPOINT_FIELDS
+                .iter()
+                .map(|field| (*field).to_string())
+                .collect(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            true,
+            true,
+            true,
+            0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            0,
+            0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            true,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            0,
+            0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            true,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            0,
+            0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+            String::new(),
+            false,
+            String::new(),
+            false,
+            String::new(),
+            false,
+            String::new(),
+            false,
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            true,
+            Vec::new(),
+            Vec::new(),
+            true,
+            true,
+            false,
+            public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id),
+            false,
+            public_launch_package_manifest_root_for_summary(summary),
+            false,
+            public_launch_readiness_artifact_root_for_summary(summary),
+        ),
+    };
     missing_required_fields.sort();
     missing_endpoint_fields.sort();
     invalid_endpoint_fields.sort();
@@ -10695,7 +10824,8 @@ fn public_deployment_capture_audit(
     if !public_launch_readiness_artifact_root_matches {
         structural_failed_checks.push("public_launch_readiness_artifact_root_matches".to_string());
     }
-    let (strict_verifier_passed, strict_verifier_error, strict_evidence_root) = if structural_ready {
+    let (strict_verifier_passed, strict_verifier_error, strict_evidence_root) = if structural_ready
+    {
         match verify_public_deployment_capture(capture_path, summary) {
             Ok(evidence) => (true, Value::Null, json!(evidence.evidence_root)),
             Err(error) => (false, json!(error), Value::Null),
@@ -10789,8 +10919,7 @@ fn public_deployment_capture_audit(
         json!(invalid_preflight_receipt_phase_indexes);
     audit["preflight_receipt_roots_valid"] = json!(preflight_receipt_roots_valid);
     audit["preflight_receipt_fields_valid"] = json!(preflight_receipt_fields_valid);
-    audit["invalid_runbook_receipt_binding_fields"] =
-        json!(invalid_runbook_receipt_binding_fields);
+    audit["invalid_runbook_receipt_binding_fields"] = json!(invalid_runbook_receipt_binding_fields);
     audit["invalid_runbook_receipt_step_indexes"] = json!(invalid_runbook_receipt_step_indexes);
     audit["runbook_receipt_roots_valid"] = json!(runbook_receipt_roots_valid);
     audit["runbook_receipt_fields_valid"] = json!(runbook_receipt_fields_valid);
@@ -10806,8 +10935,7 @@ fn public_deployment_capture_audit(
         json!(invalid_tls_endpoint_pin_binding_indexes);
     audit["invalid_tls_endpoint_pin_endpoint_indexes"] =
         json!(invalid_tls_endpoint_pin_endpoint_indexes);
-    audit["duplicate_tls_endpoint_pin_url_indexes"] =
-        json!(duplicate_tls_endpoint_pin_url_indexes);
+    audit["duplicate_tls_endpoint_pin_url_indexes"] = json!(duplicate_tls_endpoint_pin_url_indexes);
     audit["invalid_tls_endpoint_pin_assertion_indexes"] =
         json!(invalid_tls_endpoint_pin_assertion_indexes);
     audit["invalid_tls_endpoint_pin_root_indexes"] = json!(invalid_tls_endpoint_pin_root_indexes);
@@ -10915,7 +11043,10 @@ fn public_deployment_capture_audit(
 }
 
 fn public_probe_observer_region_valid(region: &str) -> bool {
-    !region.trim().is_empty() && region.len() <= 64 && !region.contains('<') && !region.contains('>')
+    !region.trim().is_empty()
+        && region.len() <= 64
+        && !region.contains('<')
+        && !region.contains('>')
 }
 
 #[derive(Clone, Debug)]
@@ -11044,11 +11175,11 @@ fn public_tls_endpoint_pin_field_audit(value: &Value) -> PublicTlsPinFieldAudit 
             let expected_url = endpoint_role
                 .and_then(|role| expected_endpoints.get(role))
                 .map(String::as_str);
-            if endpoint_role
-                .map(|role| PUBLIC_TLS_ENDPOINT_PIN_ROLES.contains(&role))
-                != Some(true)
+            if endpoint_role.map(|role| PUBLIC_TLS_ENDPOINT_PIN_ROLES.contains(&role)) != Some(true)
                 || url.map(public_https_endpoint) != Some(true)
-                || expected_url.zip(url).is_some_and(|(expected, observed)| expected != observed)
+                || expected_url
+                    .zip(url)
+                    .is_some_and(|(expected, observed)| expected != observed)
             {
                 invalid_endpoint_indexes.push(index);
             }
@@ -11060,16 +11191,14 @@ fn public_tls_endpoint_pin_field_audit(value: &Value) -> PublicTlsPinFieldAudit 
                 invalid_assertion_indexes.push(index);
             }
             let observed_at = pin.get("observed_at_unix_ms").and_then(Value::as_u64);
-            if observed_at
-                .map(|observed_at| {
-                    observed_at_unix_ms
-                        .zip(expires_at_unix_ms)
-                        .map(|(window_start, window_end)| {
-                            observed_at >= window_start && observed_at <= window_end
-                        })
-                        .unwrap_or(true)
-                })
-                != Some(true)
+            if observed_at.map(|observed_at| {
+                observed_at_unix_ms
+                    .zip(expires_at_unix_ms)
+                    .map(|(window_start, window_end)| {
+                        observed_at >= window_start && observed_at <= window_end
+                    })
+                    .unwrap_or(true)
+            }) != Some(true)
             {
                 invalid_observation_time_indexes.push(index);
             }
@@ -11086,8 +11215,7 @@ fn public_tls_endpoint_pin_field_audit(value: &Value) -> PublicTlsPinFieldAudit 
                     .is_some_and(is_hex_root)
                 && public_tls_endpoint_pin_record_root(pin)
                     .map(|root| {
-                        pin.get("pin_record_root").and_then(Value::as_str)
-                            == Some(root.as_str())
+                        pin.get("pin_record_root").and_then(Value::as_str) == Some(root.as_str())
                     })
                     .unwrap_or(false);
             if !roots_valid {
@@ -11285,7 +11413,10 @@ fn public_surface_probe_field_audit(value: &Value) -> PublicSurfaceProbeFieldAud
             {
                 invalid_binding_indexes.push(index);
             }
-            if probe.get("endpoint_publicly_routable").and_then(Value::as_bool) != Some(true)
+            if probe
+                .get("endpoint_publicly_routable")
+                .and_then(Value::as_bool)
+                != Some(true)
                 || probe
                     .get("endpoint")
                     .and_then(Value::as_str)
@@ -11315,16 +11446,14 @@ fn public_surface_probe_field_audit(value: &Value) -> PublicSurfaceProbeFieldAud
                 invalid_transcript_indexes.push(index);
             }
             let observed_at = probe.get("observed_at_unix_ms").and_then(Value::as_u64);
-            if observed_at
-                .map(|observed_at| {
-                    observed_at_unix_ms
-                        .zip(expires_at_unix_ms)
-                        .map(|(window_start, window_end)| {
-                            observed_at >= window_start && observed_at <= window_end
-                        })
-                        .unwrap_or(true)
-                })
-                != Some(true)
+            if observed_at.map(|observed_at| {
+                observed_at_unix_ms
+                    .zip(expires_at_unix_ms)
+                    .map(|(window_start, window_end)| {
+                        observed_at >= window_start && observed_at <= window_end
+                    })
+                    .unwrap_or(true)
+            }) != Some(true)
             {
                 invalid_observation_time_indexes.push(index);
             }
@@ -11334,7 +11463,8 @@ fn public_surface_probe_field_audit(value: &Value) -> PublicSurfaceProbeFieldAud
                 .is_some_and(is_hex_root)
                 && public_surface_probe_root(probe)
                     .map(|root| {
-                        probe.get("surface_probe_root").and_then(Value::as_str) == Some(root.as_str())
+                        probe.get("surface_probe_root").and_then(Value::as_str)
+                            == Some(root.as_str())
                     })
                     .unwrap_or(false);
             if !surface_probe_root_valid {
@@ -11369,15 +11499,8 @@ fn public_surface_probe_field_audit(value: &Value) -> PublicSurfaceProbeFieldAud
 
 fn expected_public_surface_probe_status(probe_role: &str) -> Option<&'static str> {
     match probe_role {
-        "status_manifest"
-        | "p2p_handshake"
-        | "health"
-        | "status_page"
-        | "metrics"
-        | "deployed_finality"
-        | "incident_contact"
-        | "faucet"
-        | "reset_runbook" => Some("ok"),
+        "status_manifest" | "p2p_handshake" | "health" | "status_page" | "metrics"
+        | "deployed_finality" | "incident_contact" | "faucet" | "reset_runbook" => Some("ok"),
         "private_summary_denial" => Some("blocked"),
         _ => None,
     }
@@ -11488,9 +11611,7 @@ fn public_bootstrap_node_probe_field_audit(value: &Value) -> PublicBootstrapProb
     let public_status_manifest_root = value
         .get("public_status_manifest_root")
         .and_then(Value::as_str);
-    let bootstrap_node_set_root = value
-        .get("bootstrap_node_set_root")
-        .and_then(Value::as_str);
+    let bootstrap_node_set_root = value.get("bootstrap_node_set_root").and_then(Value::as_str);
     let mut invalid_record_indexes = Vec::new();
     let mut invalid_binding_indexes = Vec::new();
     let mut invalid_slot_indexes = Vec::new();
@@ -11586,7 +11707,8 @@ fn public_bootstrap_node_probe_field_audit(value: &Value) -> PublicBootstrapProb
             }
             let endpoints_valid = expected_node
                 .map(|node| {
-                    let public_p2p_endpoint = probe.get("public_p2p_endpoint").and_then(Value::as_str);
+                    let public_p2p_endpoint =
+                        probe.get("public_p2p_endpoint").and_then(Value::as_str);
                     let status_page_url = probe.get("status_page_url").and_then(Value::as_str);
                     public_p2p_endpoint == node.get("public_p2p_endpoint").and_then(Value::as_str)
                         && status_page_url == node.get("status_page_url").and_then(Value::as_str)
@@ -11622,36 +11744,34 @@ fn public_bootstrap_node_probe_field_audit(value: &Value) -> PublicBootstrapProb
             if !handshake_valid {
                 invalid_handshake_indexes.push(index);
             }
-            let status_page_valid =
-                probe.get("status_page_http_status").and_then(Value::as_u64) == Some(200)
-                    && probe
-                        .get("status_page_body_root")
-                        .and_then(Value::as_str)
-                        .is_some_and(is_hex_root)
-                    && probe
-                        .get("status_page_probe_root")
-                        .and_then(Value::as_str)
-                        .is_some_and(is_hex_root)
-                    && public_bootstrap_node_status_page_probe_root(probe)
-                        .map(|root| {
-                            probe.get("status_page_probe_root").and_then(Value::as_str)
-                                == Some(root.as_str())
-                        })
-                        .unwrap_or(false);
+            let status_page_valid = probe.get("status_page_http_status").and_then(Value::as_u64)
+                == Some(200)
+                && probe
+                    .get("status_page_body_root")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_hex_root)
+                && probe
+                    .get("status_page_probe_root")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_hex_root)
+                && public_bootstrap_node_status_page_probe_root(probe)
+                    .map(|root| {
+                        probe.get("status_page_probe_root").and_then(Value::as_str)
+                            == Some(root.as_str())
+                    })
+                    .unwrap_or(false);
             if !status_page_valid {
                 invalid_status_page_indexes.push(index);
             }
             let observed_at = probe.get("observed_at_unix_ms").and_then(Value::as_u64);
-            if observed_at
-                .map(|observed_at| {
-                    observed_at_unix_ms
-                        .zip(expires_at_unix_ms)
-                        .map(|(window_start, window_end)| {
-                            observed_at >= window_start && observed_at <= window_end
-                        })
-                        .unwrap_or(true)
-                })
-                != Some(true)
+            if observed_at.map(|observed_at| {
+                observed_at_unix_ms
+                    .zip(expires_at_unix_ms)
+                    .map(|(window_start, window_end)| {
+                        observed_at >= window_start && observed_at <= window_end
+                    })
+                    .unwrap_or(true)
+            }) != Some(true)
             {
                 invalid_observation_time_indexes.push(index);
             }
@@ -11890,22 +12010,23 @@ fn public_bootstrap_operator_registry_field_audit(
                 invalid_commitment_indexes.push(index);
             }
             let observed_at = record.get("observed_at_unix_ms").and_then(Value::as_u64);
-            if observed_at
-                .map(|observed_at| {
-                    observed_at_unix_ms
-                        .zip(expires_at_unix_ms)
-                        .map(|(window_start, window_end)| {
-                            observed_at >= window_start && observed_at <= window_end
-                        })
-                        .unwrap_or(true)
-                })
-                != Some(true)
+            if observed_at.map(|observed_at| {
+                observed_at_unix_ms
+                    .zip(expires_at_unix_ms)
+                    .map(|(window_start, window_end)| {
+                        observed_at >= window_start && observed_at <= window_end
+                    })
+                    .unwrap_or(true)
+            }) != Some(true)
             {
                 invalid_observation_time_indexes.push(index);
             }
             let signature_valid = record.get("signature_scheme").and_then(Value::as_str)
                 == Some("ML-DSA-65")
-                && record.get("pq_signature_root").and_then(Value::as_str).is_some_and(is_hex_root)
+                && record
+                    .get("pq_signature_root")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_hex_root)
                 && record.get("signature_verified").and_then(Value::as_bool) == Some(true)
                 && public_bootstrap_operator_signature_verification_field_valid(
                     record,
@@ -11933,9 +12054,7 @@ fn public_bootstrap_operator_registry_field_audit(
                     .is_some_and(is_hex_root)
                 && public_bootstrap_operator_signature_payload_root(record)
                     .map(|root| {
-                        record
-                            .get("signature_payload_root")
-                            .and_then(Value::as_str)
+                        record.get("signature_payload_root").and_then(Value::as_str)
                             == Some(root.as_str())
                     })
                     .unwrap_or(false)
@@ -11991,11 +12110,16 @@ fn public_bootstrap_operator_signature_verification_field_valid(
     };
     if !verification.is_object()
         || verification.get("status").and_then(Value::as_str) != Some("valid")
-        || verification.get("verification_scope").and_then(Value::as_str)
+        || verification
+            .get("verification_scope")
+            .and_then(Value::as_str)
             != Some("public-bootstrap-operator-registry-attestation")
         || verification.get("chain_id").and_then(Value::as_str) != Some(CHAIN_ID)
         || verification.get("signature_scheme").and_then(Value::as_str) != Some("ML-DSA-65")
-        || verification.get("signature_verified").and_then(Value::as_bool) != Some(true)
+        || verification
+            .get("signature_verified")
+            .and_then(Value::as_bool)
+            != Some(true)
     {
         return false;
     }
@@ -12012,8 +12136,7 @@ fn public_bootstrap_operator_signature_verification_field_valid(
         "signature_payload_root",
         "pq_signature_root",
     ] {
-        if verification.get(key).and_then(Value::as_str)
-            != record.get(key).and_then(Value::as_str)
+        if verification.get(key).and_then(Value::as_str) != record.get(key).and_then(Value::as_str)
             || !verification
                 .get(key)
                 .and_then(Value::as_str)
@@ -12022,9 +12145,13 @@ fn public_bootstrap_operator_signature_verification_field_valid(
             return false;
         }
     }
-    if verification.get("deployment_run_id").and_then(Value::as_str)
+    if verification
+        .get("deployment_run_id")
+        .and_then(Value::as_str)
         != record.get("deployment_run_id").and_then(Value::as_str)
-        || verification.get("independence_verified").and_then(Value::as_bool)
+        || verification
+            .get("independence_verified")
+            .and_then(Value::as_bool)
             != record.get("independence_verified").and_then(Value::as_bool)
         || !verification
             .get("verifier_id_root")
@@ -12037,17 +12164,17 @@ fn public_bootstrap_operator_signature_verification_field_valid(
     {
         return false;
     }
-    let verified_at = verification.get("verified_at_unix_ms").and_then(Value::as_u64);
-    if verified_at
-        .map(|verified_at| {
-            record_observed_at
-                .zip(expires_at_unix_ms)
-                .map(|(window_start, window_end)| {
-                    verified_at >= window_start && verified_at <= window_end
-                })
-                .unwrap_or(true)
-        })
-        != Some(true)
+    let verified_at = verification
+        .get("verified_at_unix_ms")
+        .and_then(Value::as_u64);
+    if verified_at.map(|verified_at| {
+        record_observed_at
+            .zip(expires_at_unix_ms)
+            .map(|(window_start, window_end)| {
+                verified_at >= window_start && verified_at <= window_end
+            })
+            .unwrap_or(true)
+    }) != Some(true)
     {
         return false;
     }
@@ -12069,7 +12196,9 @@ struct PublicPreflightReceiptFieldAudit {
     fields_valid: bool,
 }
 
-fn public_deployment_preflight_receipt_field_audit(value: &Value) -> PublicPreflightReceiptFieldAudit {
+fn public_deployment_preflight_receipt_field_audit(
+    value: &Value,
+) -> PublicPreflightReceiptFieldAudit {
     let receipt = value.get("deployment_preflight_receipt");
     let mut invalid_binding_fields = Vec::new();
     let mut invalid_phase_indexes = Vec::new();
@@ -12104,11 +12233,19 @@ fn public_deployment_preflight_receipt_field_audit(value: &Value) -> PublicPrefl
         let public_launch_bundle_root = value
             .get("public_launch_bundle_root")
             .and_then(Value::as_str)
-            .or_else(|| receipt.get("public_launch_bundle_root").and_then(Value::as_str));
+            .or_else(|| {
+                receipt
+                    .get("public_launch_bundle_root")
+                    .and_then(Value::as_str)
+            });
         let public_status_manifest_root = value
             .get("public_status_manifest_root")
             .and_then(Value::as_str)
-            .or_else(|| receipt.get("public_status_manifest_root").and_then(Value::as_str));
+            .or_else(|| {
+                receipt
+                    .get("public_status_manifest_root")
+                    .and_then(Value::as_str)
+            });
         if receipt.get("schema_version").and_then(Value::as_u64) != Some(1) {
             invalid_binding_fields.push("schema_version".to_string());
         }
@@ -12135,7 +12272,10 @@ fn public_deployment_preflight_receipt_field_audit(value: &Value) -> PublicPrefl
         ] {
             let actual = receipt.get(field).and_then(Value::as_str);
             if actual.is_none()
-                || expected.map(|expected| actual == Some(expected)).unwrap_or(true) == false
+                || expected
+                    .map(|expected| actual == Some(expected))
+                    .unwrap_or(true)
+                    == false
             {
                 invalid_binding_fields.push(field.to_string());
             }
@@ -12158,45 +12298,56 @@ fn public_deployment_preflight_receipt_field_audit(value: &Value) -> PublicPrefl
         }
         let mut phase_roots = Vec::new();
         let phases = receipt.get("phases").and_then(Value::as_array);
-        if phases.map(|phases| phases.len()) != Some(REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len()) {
+        if phases.map(|phases| phases.len())
+            != Some(REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len())
+        {
             invalid_binding_fields.push("phases".to_string());
         }
         if let Some(phases) = phases {
             for (index, phase) in phases.iter().enumerate() {
-                let expected_id = REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.get(index).copied();
+                let expected_id = REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES
+                    .get(index)
+                    .copied();
                 let order = phase.get("order").and_then(Value::as_u64);
                 let id = phase.get("id").and_then(Value::as_str);
                 let completed_at = phase.get("completed_at_unix_ms").and_then(Value::as_u64);
                 let phase_evidence_root = phase.get("phase_evidence_root").and_then(Value::as_str);
-                let phase_time_valid = completed_at
-                    .map(|completed_at| {
-                        observed_at_unix_ms
-                            .zip(expires_at_unix_ms)
-                            .map(|(observed_at, expires_at)| {
-                                completed_at <= observed_at
-                                    && completed_at <= expires_at
-                                    && observed_at.saturating_sub(completed_at)
-                                        <= MAX_PUBLIC_DEPLOYMENT_FRESHNESS_MS
-                            })
-                            .unwrap_or(true)
-                    })
-                    == Some(true);
+                let phase_time_valid = completed_at.map(|completed_at| {
+                    observed_at_unix_ms
+                        .zip(expires_at_unix_ms)
+                        .map(|(observed_at, expires_at)| {
+                            completed_at <= observed_at
+                                && completed_at <= expires_at
+                                && observed_at.saturating_sub(completed_at)
+                                    <= MAX_PUBLIC_DEPLOYMENT_FRESHNESS_MS
+                        })
+                        .unwrap_or(true)
+                }) == Some(true);
                 let expected_phase_root = deployment_run_id
                     .zip(deployment_preflight_checklist_root)
-                    .zip(expected_id.zip(order).zip(phase_evidence_root.zip(completed_at)))
-                    .map(|((run_id, checklist_root), ((expected_id, order), (evidence_root, completed_at)))| {
-                        root(&[
-                            "public-deployment-preflight-phase-receipt",
-                            CHAIN_ID,
-                            run_id,
-                            checklist_root,
-                            expected_id,
-                            &order.to_string(),
-                            evidence_root,
-                            &completed_at.to_string(),
-                            bool_str(true),
-                        ])
-                    });
+                    .zip(
+                        expected_id
+                            .zip(order)
+                            .zip(phase_evidence_root.zip(completed_at)),
+                    )
+                    .map(
+                        |(
+                            (run_id, checklist_root),
+                            ((expected_id, order), (evidence_root, completed_at)),
+                        )| {
+                            root(&[
+                                "public-deployment-preflight-phase-receipt",
+                                CHAIN_ID,
+                                run_id,
+                                checklist_root,
+                                expected_id,
+                                &order.to_string(),
+                                evidence_root,
+                                &completed_at.to_string(),
+                                bool_str(true),
+                            ])
+                        },
+                    );
                 if let Some(root) = expected_phase_root.clone() {
                     phase_roots.push(root);
                 }
@@ -12208,9 +12359,15 @@ fn public_deployment_preflight_receipt_field_audit(value: &Value) -> PublicPrefl
                     && phase.get("completed").and_then(Value::as_bool) == Some(true)
                     && phase_time_valid
                     && phase_evidence_root.is_some_and(is_hex_root)
-                    && phase.get("phase_root").and_then(Value::as_str).is_some_and(is_hex_root)
+                    && phase
+                        .get("phase_root")
+                        .and_then(Value::as_str)
+                        .is_some_and(is_hex_root)
                     && expected_phase_root
-                        .map(|expected| phase.get("phase_root").and_then(Value::as_str) == Some(expected.as_str()))
+                        .map(|expected| {
+                            phase.get("phase_root").and_then(Value::as_str)
+                                == Some(expected.as_str())
+                        })
                         .unwrap_or(false);
                 if !phase_valid {
                     invalid_phase_indexes.push(index);
@@ -12231,20 +12388,22 @@ fn public_deployment_preflight_receipt_field_audit(value: &Value) -> PublicPrefl
                 .zip(capture_contract_root)
                 .zip(public_launch_bundle_root)
                 .zip(public_status_manifest_root)
-                .map(|((((run_id, checklist_root), contract_root), launch_root), status_root)| {
-                    root(&[
-                        "public-deployment-preflight-receipt",
-                        CHAIN_ID,
-                        run_id,
-                        checklist_root,
-                        contract_root,
-                        launch_root,
-                        status_root,
-                        &phase_set_root,
-                        &(REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len() as u64).to_string(),
-                        bool_str(true),
-                    ])
-                });
+                .map(
+                    |((((run_id, checklist_root), contract_root), launch_root), status_root)| {
+                        root(&[
+                            "public-deployment-preflight-receipt",
+                            CHAIN_ID,
+                            run_id,
+                            checklist_root,
+                            contract_root,
+                            launch_root,
+                            status_root,
+                            &phase_set_root,
+                            &(REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len() as u64).to_string(),
+                            bool_str(true),
+                        ])
+                    },
+                );
             roots_valid = receipt.get("phase_set_root").and_then(Value::as_str)
                 == Some(phase_set_root.as_str())
                 && receipt
@@ -12252,7 +12411,9 @@ fn public_deployment_preflight_receipt_field_audit(value: &Value) -> PublicPrefl
                     .and_then(Value::as_str)
                     .is_some_and(is_hex_root)
                 && receipt_root
-                    .map(|root| receipt.get("receipt_root").and_then(Value::as_str) == Some(root.as_str()))
+                    .map(|root| {
+                        receipt.get("receipt_root").and_then(Value::as_str) == Some(root.as_str())
+                    })
                     .unwrap_or(false);
         }
         if receipt_map.is_empty() {
@@ -12305,7 +12466,11 @@ fn public_deployment_runbook_receipt_field_audit(value: &Value) -> PublicRunbook
         let public_deployment_runbook_root = value
             .get("public_deployment_runbook_root")
             .and_then(Value::as_str)
-            .or_else(|| receipt.get("public_deployment_runbook_root").and_then(Value::as_str));
+            .or_else(|| {
+                receipt
+                    .get("public_deployment_runbook_root")
+                    .and_then(Value::as_str)
+            });
         let public_deployment_runbook_step_set_root = value
             .get("public_deployment_runbook_step_set_root")
             .and_then(Value::as_str)
@@ -12321,11 +12486,19 @@ fn public_deployment_runbook_receipt_field_audit(value: &Value) -> PublicRunbook
         let public_launch_bundle_root = value
             .get("public_launch_bundle_root")
             .and_then(Value::as_str)
-            .or_else(|| receipt.get("public_launch_bundle_root").and_then(Value::as_str));
+            .or_else(|| {
+                receipt
+                    .get("public_launch_bundle_root")
+                    .and_then(Value::as_str)
+            });
         let public_status_manifest_root = value
             .get("public_status_manifest_root")
             .and_then(Value::as_str)
-            .or_else(|| receipt.get("public_status_manifest_root").and_then(Value::as_str));
+            .or_else(|| {
+                receipt
+                    .get("public_status_manifest_root")
+                    .and_then(Value::as_str)
+            });
         if receipt.get("schema_version").and_then(Value::as_u64) != Some(1) {
             invalid_binding_fields.push("schema_version".to_string());
         }
@@ -12342,7 +12515,10 @@ fn public_deployment_runbook_receipt_field_audit(value: &Value) -> PublicRunbook
         }
         for (field, expected) in [
             ("deployment_run_id", deployment_run_id),
-            ("public_deployment_runbook_root", public_deployment_runbook_root),
+            (
+                "public_deployment_runbook_root",
+                public_deployment_runbook_root,
+            ),
             (
                 "public_deployment_runbook_step_set_root",
                 public_deployment_runbook_step_set_root,
@@ -12353,7 +12529,10 @@ fn public_deployment_runbook_receipt_field_audit(value: &Value) -> PublicRunbook
         ] {
             let actual = receipt.get(field).and_then(Value::as_str);
             if actual.is_none()
-                || expected.map(|expected| actual == Some(expected)).unwrap_or(true) == false
+                || expected
+                    .map(|expected| actual == Some(expected))
+                    .unwrap_or(true)
+                    == false
             {
                 invalid_binding_fields.push(field.to_string());
             }
@@ -12363,12 +12542,11 @@ fn public_deployment_runbook_receipt_field_audit(value: &Value) -> PublicRunbook
             .and_then(Value::as_array)
             .map(|step_ids| {
                 step_ids.len() == PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len()
-                    && PUBLIC_DEPLOYMENT_RUNBOOK_STEPS
-                        .iter()
-                        .enumerate()
-                        .all(|(index, expected)| {
+                    && PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.iter().enumerate().all(
+                        |(index, expected)| {
                             step_ids.get(index).and_then(Value::as_str) == Some(*expected)
-                        })
+                        },
+                    )
             })
             == Some(true);
         if !required_step_ids_valid {
@@ -12389,19 +12567,17 @@ fn public_deployment_runbook_receipt_field_audit(value: &Value) -> PublicRunbook
                 let step_root = step.get("step_root").and_then(Value::as_str);
                 let source_root = step.get("source_root").and_then(Value::as_str);
                 let step_evidence_root = step.get("step_evidence_root").and_then(Value::as_str);
-                let step_time_valid = completed_at
-                    .map(|completed_at| {
-                        observed_at_unix_ms
-                            .zip(expires_at_unix_ms)
-                            .map(|(observed_at, expires_at)| {
-                                completed_at <= observed_at
-                                    && completed_at <= expires_at
-                                    && observed_at.saturating_sub(completed_at)
-                                        <= MAX_PUBLIC_DEPLOYMENT_FRESHNESS_MS
-                            })
-                            .unwrap_or(true)
-                    })
-                    == Some(true);
+                let step_time_valid = completed_at.map(|completed_at| {
+                    observed_at_unix_ms
+                        .zip(expires_at_unix_ms)
+                        .map(|(observed_at, expires_at)| {
+                            completed_at <= observed_at
+                                && completed_at <= expires_at
+                                && observed_at.saturating_sub(completed_at)
+                                    <= MAX_PUBLIC_DEPLOYMENT_FRESHNESS_MS
+                        })
+                        .unwrap_or(true)
+                }) == Some(true);
                 if let Some(root) = step_root {
                     runbook_step_roots.push(root.to_string());
                 }
@@ -12409,23 +12585,32 @@ fn public_deployment_runbook_receipt_field_audit(value: &Value) -> PublicRunbook
                     .zip(public_deployment_runbook_root)
                     .zip(public_deployment_runbook_step_set_root)
                     .zip(expected_id.zip(order))
-                    .zip(step_root.zip(source_root).zip(step_evidence_root.zip(completed_at)))
-                    .map(|((((run_id, runbook_root), step_set_root), (expected_id, order)), ((step_root, source_root), (evidence_root, completed_at)))| {
-                        root(&[
-                            "public-deployment-runbook-step-receipt",
-                            CHAIN_ID,
-                            run_id,
-                            runbook_root,
-                            step_set_root,
-                            expected_id,
-                            &order.to_string(),
-                            step_root,
-                            source_root,
-                            evidence_root,
-                            &completed_at.to_string(),
-                            bool_str(true),
-                        ])
-                    });
+                    .zip(
+                        step_root
+                            .zip(source_root)
+                            .zip(step_evidence_root.zip(completed_at)),
+                    )
+                    .map(
+                        |(
+                            (((run_id, runbook_root), step_set_root), (expected_id, order)),
+                            ((step_root, source_root), (evidence_root, completed_at)),
+                        )| {
+                            root(&[
+                                "public-deployment-runbook-step-receipt",
+                                CHAIN_ID,
+                                run_id,
+                                runbook_root,
+                                step_set_root,
+                                expected_id,
+                                &order.to_string(),
+                                step_root,
+                                source_root,
+                                evidence_root,
+                                &completed_at.to_string(),
+                                bool_str(true),
+                            ])
+                        },
+                    );
                 if let Some(root) = expected_step_receipt_root.clone() {
                     step_receipt_roots.push(root);
                 }
@@ -12465,29 +12650,36 @@ fn public_deployment_runbook_receipt_field_audit(value: &Value) -> PublicRunbook
         {
             let computed_step_set_root =
                 collection_root("public-deployment-runbook-step-set", runbook_step_roots);
-            let step_receipt_set_root =
-                collection_root("public-deployment-runbook-step-receipt-set", step_receipt_roots);
+            let step_receipt_set_root = collection_root(
+                "public-deployment-runbook-step-receipt-set",
+                step_receipt_roots,
+            );
             let receipt_root = deployment_run_id
                 .zip(public_deployment_runbook_root)
                 .zip(public_deployment_runbook_step_set_root)
                 .zip(capture_contract_root)
                 .zip(public_launch_bundle_root)
                 .zip(public_status_manifest_root)
-                .map(|(((((run_id, runbook_root), step_set_root), contract_root), launch_root), status_root)| {
-                    root(&[
-                        "public-deployment-runbook-receipt",
-                        CHAIN_ID,
-                        run_id,
-                        runbook_root,
-                        step_set_root,
-                        contract_root,
-                        launch_root,
+                .map(
+                    |(
+                        ((((run_id, runbook_root), step_set_root), contract_root), launch_root),
                         status_root,
-                        &step_receipt_set_root,
-                        &(PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64).to_string(),
-                        bool_str(true),
-                    ])
-                });
+                    )| {
+                        root(&[
+                            "public-deployment-runbook-receipt",
+                            CHAIN_ID,
+                            run_id,
+                            runbook_root,
+                            step_set_root,
+                            contract_root,
+                            launch_root,
+                            status_root,
+                            &step_receipt_set_root,
+                            &(PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64).to_string(),
+                            bool_str(true),
+                        ])
+                    },
+                );
             roots_valid = public_deployment_runbook_step_set_root
                 .map(|expected| computed_step_set_root == expected)
                 .unwrap_or(true)
@@ -12564,7 +12756,9 @@ fn public_probe_observer_signature_audit_indexes(value: &Value) -> (Vec<u64>, Ve
             .and_then(Value::as_object)
             .is_some_and(|verification| {
                 verification.get("status").and_then(Value::as_str) == Some("valid")
-                    && verification.get("signature_verified").and_then(Value::as_bool)
+                    && verification
+                        .get("signature_verified")
+                        .and_then(Value::as_bool)
                         == Some(true)
             });
         if !verification_valid {
@@ -12755,8 +12949,12 @@ fn write_public_deployment_evidence_from_capture(
         .get("bootstrap_nodes")
         .ok_or_else(|| "public deployment capture missing bootstrap_nodes".to_string())?
         .clone();
-    let bootstrap_node_validation =
-        validate_public_bootstrap_nodes(&bootstrap_nodes, &summary.testnet_id, &summary.manifest_id, true)?;
+    let bootstrap_node_validation = validate_public_bootstrap_nodes(
+        &bootstrap_nodes,
+        &summary.testnet_id,
+        &summary.manifest_id,
+        true,
+    )?;
     ensure(
         bootstrap_node_validation.bootstrap_node_set_root
             == summary.public_bootstrap_profile.bootstrap_node_set_root
@@ -12770,15 +12968,14 @@ fn write_public_deployment_evidence_from_capture(
                 == summary.public_bootstrap_profile.bootstrap_node_count,
         "public deployment capture bootstrap_nodes do not match the public bootstrap profile",
     )?;
-    let bootstrap_operator_registry_validation =
-        derive_public_bootstrap_operator_registry_fields(
-            &mut value,
-            &bootstrap_node_validation.bootstrap_operator_commitments,
-            &public_launch_bundle_root,
-            &deployment_run_id,
-            observed_at_unix_ms,
-            expires_at_unix_ms,
-        )?;
+    let bootstrap_operator_registry_validation = derive_public_bootstrap_operator_registry_fields(
+        &mut value,
+        &bootstrap_node_validation.bootstrap_operator_commitments,
+        &public_launch_bundle_root,
+        &deployment_run_id,
+        observed_at_unix_ms,
+        expires_at_unix_ms,
+    )?;
 
     {
         let map = value
@@ -13004,7 +13201,11 @@ fn write_public_deployment_evidence_from_capture(
             "public_p2p_endpoint",
             &public_p2p_endpoint,
         ),
-        ("firewall_policy_claims", "status_page_url", &status_page_url),
+        (
+            "firewall_policy_claims",
+            "status_page_url",
+            &status_page_url,
+        ),
         (
             "firewall_policy_claims",
             "health_check_url",
@@ -13317,8 +13518,7 @@ fn write_public_deployment_evidence_from_capture(
     let no_private_summary_exposed =
         required_bool(&private_summary_probe, "no_private_summary_exposed")?;
     let tls_required = required_bool(&proxy_policy_claims, "tls_required")?;
-    let rate_limits_enforced =
-        required_bool(&rate_limit_policy_claims, "rate_limits_enforced")?;
+    let rate_limits_enforced = required_bool(&rate_limit_policy_claims, "rate_limits_enforced")?;
     let firewall_allows_public_only =
         required_bool(&firewall_policy_claims, "firewall_allows_public_only")?;
     value["no_private_summary_exposed"] = json!(no_private_summary_exposed);
@@ -13334,8 +13534,9 @@ fn write_public_deployment_evidence_from_capture(
     let encoded = serde_json::to_string_pretty(&value).map_err(|error| {
         format!("failed to encode assembled public deployment evidence json: {error}")
     })?;
-    fs::write(output_path, format!("{encoded}\n"))
-        .map_err(|error| format!("failed to write assembled public deployment evidence: {error}"))?;
+    fs::write(output_path, format!("{encoded}\n")).map_err(|error| {
+        format!("failed to write assembled public deployment evidence: {error}")
+    })?;
     load_public_deployment_evidence(output_path)
 }
 
@@ -13551,10 +13752,7 @@ fn public_deployment_runbook(summary: &TestnetSummary) -> Value {
         "mainnet_custody_enablement_allowed": false,
         "source_roots": source_roots,
     });
-    let root_contract_root = value_root(
-        "public-deployment-runbook-contract",
-        &root_contract,
-    );
+    let root_contract_root = value_root("public-deployment-runbook-contract", &root_contract);
     root_contract["runbook_contract_root"] = json!(root_contract_root);
     let steps = PUBLIC_DEPLOYMENT_RUNBOOK_STEPS
         .iter()
@@ -13817,7 +14015,9 @@ fn derive_public_deployment_preflight_receipt_fields(
 ) -> Result<PublicDeploymentPreflightReceiptValidation, String> {
     let receipt = value
         .get_mut("deployment_preflight_receipt")
-        .ok_or_else(|| "public deployment capture missing deployment_preflight_receipt".to_string())?;
+        .ok_or_else(|| {
+            "public deployment capture missing deployment_preflight_receipt".to_string()
+        })?;
     let validation = derive_public_deployment_preflight_receipt(
         receipt,
         deployment_preflight_checklist_root,
@@ -13931,7 +14131,10 @@ fn derive_public_deployment_preflight_receipt(
         required_phase_ids.len() == REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len(),
         "public deployment preflight receipt required_phase_ids length mismatch",
     )?;
-    for (index, expected_id) in REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.iter().enumerate() {
+    for (index, expected_id) in REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES
+        .iter()
+        .enumerate()
+    {
         ensure(
             required_phase_ids[index].as_str() == Some(*expected_id),
             "public deployment preflight receipt required_phase_ids mismatch",
@@ -13978,9 +14181,9 @@ fn derive_public_deployment_preflight_receipt(
             &completed_at_unix_ms.to_string(),
             bool_str(true),
         ]);
-        let phase_map = phase
-            .as_object_mut()
-            .ok_or_else(|| "public deployment preflight receipt phase must be an object".to_string())?;
+        let phase_map = phase.as_object_mut().ok_or_else(|| {
+            "public deployment preflight receipt phase must be an object".to_string()
+        })?;
         phase_map.insert("phase_root".to_string(), json!(&phase_root));
         phase_roots.push(phase_root);
     }
@@ -14262,9 +14465,9 @@ fn derive_public_deployment_runbook_receipt(
             &completed_at_unix_ms.to_string(),
             bool_str(true),
         ]);
-        let step_map = step
-            .as_object_mut()
-            .ok_or_else(|| "public deployment runbook receipt step must be an object".to_string())?;
+        let step_map = step.as_object_mut().ok_or_else(|| {
+            "public deployment runbook receipt step must be an object".to_string()
+        })?;
         step_map.insert("step_receipt_root".to_string(), json!(&step_receipt_root));
         step_receipt_roots.push(step_receipt_root);
     }
@@ -14279,8 +14482,10 @@ fn derive_public_deployment_runbook_receipt(
         required_u64(receipt, "step_count")? == public_deployment_runbook_step_receipt_count,
         "public deployment runbook receipt step_count mismatch",
     )?;
-    let public_deployment_runbook_step_receipt_set_root =
-        collection_root("public-deployment-runbook-step-receipt-set", step_receipt_roots);
+    let public_deployment_runbook_step_receipt_set_root = collection_root(
+        "public-deployment-runbook-step-receipt-set",
+        step_receipt_roots,
+    );
     let public_deployment_runbook_receipt_root = root(&[
         "public-deployment-runbook-receipt",
         CHAIN_ID,
@@ -14328,7 +14533,9 @@ fn public_deployment_runbook_receipt_matches_runbook(
     if receipt
         .get("public_deployment_runbook_step_set_root")
         .and_then(Value::as_str)
-        != deployment_runbook.get("step_set_root").and_then(Value::as_str)
+        != deployment_runbook
+            .get("step_set_root")
+            .and_then(Value::as_str)
     {
         return false;
     }
@@ -15577,7 +15784,10 @@ fn public_deployment_evidence_template(summary: &TestnetSummary) -> Value {
         "probe_observer_set_root".to_string(),
         json!(ROOT_PLACEHOLDER),
     );
-    template.insert("attestor_registry_root".to_string(), json!(ROOT_PLACEHOLDER));
+    template.insert(
+        "attestor_registry_root".to_string(),
+        json!(ROOT_PLACEHOLDER),
+    );
     template.insert("pq_signature_root".to_string(), json!(ROOT_PLACEHOLDER));
     template.insert(
         "observer_quorum_threshold".to_string(),
@@ -17325,7 +17535,10 @@ fn ensure_readiness_template_safe(value: &Value) -> Result<(), String> {
         .and_then(Value::as_array)
         .map(Vec::len)
         .ok_or_else(|| "readiness template missing checklist".to_string())?;
-    ensure(checklist_len > 0, "readiness template checklist must not be empty")?;
+    ensure(
+        checklist_len > 0,
+        "readiness template checklist must not be empty",
+    )?;
     let mut rootless = value.clone();
     let Some(map) = rootless.as_object_mut() else {
         return Err("readiness template must be an object".to_string());
@@ -17336,6 +17549,175 @@ fn ensure_readiness_template_safe(value: &Value) -> Result<(), String> {
         value.get("template_root").and_then(Value::as_str) == Some(expected_root.as_str()),
         "readiness template root mismatch",
     )
+}
+
+fn ensure_release_approval_template_safe(value: &Value) -> Result<(), String> {
+    ensure(
+        required_str(value, "chain_id")? == CHAIN_ID,
+        "release approval template chain_id mismatch",
+    )?;
+    ensure(
+        required_str(value, "approval_kind")? == "nebula-mainnet-release-approval",
+        "release approval template kind mismatch",
+    )?;
+    ensure(
+        required_str(value, "target_network")? == "mainnet",
+        "release approval template target network mismatch",
+    )?;
+    ensure(
+        required_str(value, "custody_mode")? == "external-mainnet-process-required",
+        "release approval template custody mode mismatch",
+    )?;
+    ensure(
+        !required_bool(value, "approved")?,
+        "release approval template must not approve release",
+    )?;
+    ensure(
+        required_bool(value, "template_fill_required")?,
+        "release approval template must require fill-in",
+    )?;
+    ensure(
+        is_hex_root(required_str(value, "testnet_manifest_id")?),
+        "release approval template testnet_manifest_id must be rooted",
+    )?;
+    ensure(
+        is_hex_root(required_str(value, "testnet_run_checkpoint_root")?),
+        "release approval template testnet_run_checkpoint_root must be rooted",
+    )?;
+    ensure(
+        required_str(value, "readiness_evidence_bundle_root")? == ROOT_PLACEHOLDER,
+        "release approval template readiness evidence root must remain a placeholder",
+    )?;
+    ensure(
+        required_str(value, "release_authority_registry_root")? == ROOT_PLACEHOLDER,
+        "release approval template release authority registry root must remain a placeholder",
+    )?;
+    ensure_release_signoff_template_set(required_section(value, "signoff_quorum")?)?;
+    ensure(
+        required_str(value, "approval_root")? == ROOT_PLACEHOLDER,
+        "release approval template approval_root must remain a placeholder",
+    )?;
+    for marker in SENSITIVE_FIELD_MARKERS {
+        ensure(
+            !value_contains_key_marker(value, marker),
+            &format!("release approval template contains sensitive marker '{marker}'"),
+        )?;
+    }
+    Ok(())
+}
+
+fn ensure_release_authority_registry_template_safe(value: &Value) -> Result<(), String> {
+    ensure(
+        required_str(value, "chain_id")? == CHAIN_ID,
+        "release authority registry template chain_id mismatch",
+    )?;
+    ensure(
+        required_str(value, "registry_kind")? == "nebula-release-authority-registry",
+        "release authority registry template kind mismatch",
+    )?;
+    ensure(
+        required_str(value, "custody_mode")? == "external-mainnet-process-required",
+        "release authority registry template custody mode mismatch",
+    )?;
+    ensure(
+        required_u64(value, "threshold")? == REQUIRED_RELEASE_SIGNOFF_ROLES.len() as u64,
+        "release authority registry template threshold mismatch",
+    )?;
+    ensure(
+        required_str(value, "registry_root")? == ROOT_PLACEHOLDER,
+        "release authority registry template root must remain a placeholder",
+    )?;
+    let authorities = value
+        .get("authorities")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "release authority registry template missing authorities".to_string())?;
+    ensure(
+        authorities.len() == REQUIRED_RELEASE_SIGNOFF_ROLES.len(),
+        "release authority registry template must contain every required role",
+    )?;
+    let mut seen_roles = BTreeSet::new();
+    for authority in authorities {
+        let role = required_str(authority, "role")?;
+        ensure(
+            REQUIRED_RELEASE_SIGNOFF_ROLES.contains(&role),
+            &format!("release authority registry template role '{role}' is not required"),
+        )?;
+        ensure(
+            seen_roles.insert(role.to_string()),
+            &format!("release authority registry template duplicate role '{role}'"),
+        )?;
+        ensure(
+            required_bool(authority, "active")?,
+            &format!("release authority registry template role '{role}' must be active"),
+        )?;
+        for field in ["signer_commitment", "pq_public_key_root", "authority_id"] {
+            ensure(
+                required_str(authority, field)? == ROOT_PLACEHOLDER,
+                &format!(
+                    "release authority registry template role '{role}' field '{field}' must remain a placeholder"
+                ),
+            )?;
+        }
+    }
+    for role in REQUIRED_RELEASE_SIGNOFF_ROLES {
+        ensure(
+            seen_roles.contains(role),
+            &format!("release authority registry template missing role '{role}'"),
+        )?;
+    }
+    for marker in SENSITIVE_FIELD_MARKERS {
+        ensure(
+            !value_contains_key_marker(value, marker),
+            &format!("release authority registry template contains sensitive marker '{marker}'"),
+        )?;
+    }
+    Ok(())
+}
+
+fn ensure_release_signoff_template_set(section: &Value) -> Result<(), String> {
+    ensure(
+        required_u64(section, "threshold")? == REQUIRED_RELEASE_SIGNOFF_ROLES.len() as u64,
+        "release approval template signoff threshold mismatch",
+    )?;
+    let signoffs = section
+        .get("signoffs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "release approval template missing signoffs".to_string())?;
+    ensure(
+        signoffs.len() == REQUIRED_RELEASE_SIGNOFF_ROLES.len(),
+        "release approval template must contain every required signoff role",
+    )?;
+    let mut seen_roles = BTreeSet::new();
+    for signoff in signoffs {
+        let role = required_str(signoff, "role")?;
+        ensure(
+            REQUIRED_RELEASE_SIGNOFF_ROLES.contains(&role),
+            &format!("release approval template signoff role '{role}' is not required"),
+        )?;
+        ensure(
+            seen_roles.insert(role.to_string()),
+            &format!("release approval template duplicate signoff role '{role}'"),
+        )?;
+        ensure(
+            !required_bool(signoff, "accepted")?,
+            &format!("release approval template signoff role '{role}' must not be accepted"),
+        )?;
+        for field in ["signer_commitment", "pq_signature_root", "signoff_id"] {
+            ensure(
+                required_str(signoff, field)? == ROOT_PLACEHOLDER,
+                &format!(
+                    "release approval template signoff role '{role}' field '{field}' must remain a placeholder"
+                ),
+            )?;
+        }
+    }
+    for role in REQUIRED_RELEASE_SIGNOFF_ROLES {
+        ensure(
+            seen_roles.contains(role),
+            &format!("release approval template missing signoff role '{role}'"),
+        )?;
+    }
+    Ok(())
 }
 
 fn ensure_public_status_manifest_redacted(value: &Value) -> Result<(), String> {
@@ -17378,10 +17760,7 @@ fn ensure_public_bootstrap_profile_template_redacted(value: &Value) -> Result<()
         "public bootstrap profile must be a template",
     )?;
     ensure(
-        value
-            .get("operator_fill_required")
-            .and_then(Value::as_bool)
-            == Some(true),
+        value.get("operator_fill_required").and_then(Value::as_bool) == Some(true),
         "public bootstrap profile must require operator fill-in",
     )?;
     ensure(
@@ -17460,10 +17839,7 @@ fn ensure_public_launch_bundle_redacted(value: &Value) -> Result<(), String> {
         "public launch bundle must be a template",
     )?;
     ensure(
-        value
-            .get("operator_fill_required")
-            .and_then(Value::as_bool)
-            == Some(true),
+        value.get("operator_fill_required").and_then(Value::as_bool) == Some(true),
         "public launch bundle must require operator fill-in",
     )?;
     ensure(
@@ -17545,7 +17921,9 @@ fn ensure_public_launch_bundle_redacted(value: &Value) -> Result<(), String> {
     }
     let expected_bundle_root = value_root("public-launch-bundle", &rootless_bundle);
     ensure(
-        value.get("public_launch_bundle_root").and_then(Value::as_str)
+        value
+            .get("public_launch_bundle_root")
+            .and_then(Value::as_str)
             == Some(expected_bundle_root.as_str()),
         "public launch bundle root mismatch",
     )
@@ -17553,8 +17931,7 @@ fn ensure_public_launch_bundle_redacted(value: &Value) -> Result<(), String> {
 
 fn ensure_public_launch_readiness_report_artifact_safe(value: &Value) -> Result<(), String> {
     ensure(
-        value.get("kind").and_then(Value::as_str)
-            == Some("nebula-public-launch-readiness-report"),
+        value.get("kind").and_then(Value::as_str) == Some("nebula-public-launch-readiness-report"),
         "public launch readiness report kind mismatch",
     )?;
     ensure(
@@ -17648,11 +18025,14 @@ fn ensure_public_launch_readiness_report_artifact_safe(value: &Value) -> Result<
     )?;
     ensure(
         value.get("public_launch_ready").and_then(Value::as_bool)
-            == readiness.get("public_launch_ready").and_then(Value::as_bool),
+            == readiness
+                .get("public_launch_ready")
+                .and_then(Value::as_bool),
         "public launch readiness ready flag mismatch",
     )?;
     ensure(
-        value.get("level").and_then(Value::as_str) == readiness.get("level").and_then(Value::as_str),
+        value.get("level").and_then(Value::as_str)
+            == readiness.get("level").and_then(Value::as_str),
         "public launch readiness level mismatch",
     )?;
     let mut rootless = value.clone();
@@ -17672,8 +18052,7 @@ fn ensure_public_launch_readiness_report_artifact_safe(value: &Value) -> Result<
 
 fn ensure_public_deployment_evidence_template_safe(value: &Value) -> Result<(), String> {
     ensure(
-        value.get("kind").and_then(Value::as_str)
-            == Some("nebula-public-deployment-attestation"),
+        value.get("kind").and_then(Value::as_str) == Some("nebula-public-deployment-attestation"),
         "public deployment evidence template kind mismatch",
     )?;
     ensure(
@@ -17686,10 +18065,7 @@ fn ensure_public_deployment_evidence_template_safe(value: &Value) -> Result<(), 
         "public deployment evidence template must remain template_only",
     )?;
     ensure(
-        value
-            .get("operator_fill_required")
-            .and_then(Value::as_bool)
-            == Some(true),
+        value.get("operator_fill_required").and_then(Value::as_bool) == Some(true),
         "public deployment evidence template must require operator fill-in",
     )?;
     ensure(
@@ -17708,7 +18084,10 @@ fn ensure_public_deployment_evidence_template_safe(value: &Value) -> Result<(), 
         "public deployment evidence template must retain placeholder marker",
     )?;
     ensure(
-        value.get("mainnet_custody_disabled").and_then(Value::as_bool) == Some(true),
+        value
+            .get("mainnet_custody_disabled")
+            .and_then(Value::as_bool)
+            == Some(true),
         "public deployment evidence template must keep mainnet custody disabled",
     )?;
     ensure(
@@ -17763,13 +18142,9 @@ fn ensure_public_deployment_evidence_template_safe(value: &Value) -> Result<(), 
             &format!("public deployment evidence template contains sensitive marker '{marker}'"),
         )?;
     }
-    ensure_public_status_manifest_redacted(
-        value
-            .get("public_status_manifest")
-            .ok_or_else(|| {
-                "public deployment evidence template missing public status manifest".to_string()
-            })?,
-    )?;
+    ensure_public_status_manifest_redacted(value.get("public_status_manifest").ok_or_else(
+        || "public deployment evidence template missing public status manifest".to_string(),
+    )?)?;
     ensure(
         value
             .get("public_status_manifest_root")
@@ -17847,15 +18222,11 @@ fn ensure_public_deployment_evidence_template_safe(value: &Value) -> Result<(), 
 
 fn ensure_public_deployment_capture_plan_redacted(value: &Value) -> Result<(), String> {
     ensure(
-        value.get("kind").and_then(Value::as_str)
-            == Some("nebula-public-deployment-capture-plan"),
+        value.get("kind").and_then(Value::as_str) == Some("nebula-public-deployment-capture-plan"),
         "public deployment capture plan kind mismatch",
     )?;
     ensure(
-        value
-            .get("operator_fill_required")
-            .and_then(Value::as_bool)
-            == Some(true),
+        value.get("operator_fill_required").and_then(Value::as_bool) == Some(true),
         "public deployment capture plan must require operator fill-in",
     )?;
     ensure(
@@ -17897,7 +18268,9 @@ fn ensure_public_deployment_capture_plan_redacted(value: &Value) -> Result<(), S
         "public deployment capture plan preflight checklist kind mismatch",
     )?;
     ensure(
-        deployment_preflight.get("phase_count").and_then(Value::as_u64)
+        deployment_preflight
+            .get("phase_count")
+            .and_then(Value::as_u64)
             == Some(REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len() as u64),
         "public deployment capture plan preflight phase_count mismatch",
     )?;
@@ -18059,9 +18432,9 @@ fn ensure_public_deployment_capture_plan_redacted(value: &Value) -> Result<(), S
             == Some(REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.to_vec()),
         "public deployment capture contract required_preflight_phase_ids mismatch",
     )?;
-    let package_handoff = value
-        .get("package_handoff_capture")
-        .ok_or_else(|| "public deployment capture plan missing package_handoff_capture".to_string())?;
+    let package_handoff = value.get("package_handoff_capture").ok_or_else(|| {
+        "public deployment capture plan missing package_handoff_capture".to_string()
+    })?;
     ensure(
         package_handoff.get("kind").and_then(Value::as_str)
             == Some("nebula-public-launch-package-handoff-capture"),
@@ -18143,8 +18516,7 @@ fn ensure_public_deployment_capture_plan_redacted(value: &Value) -> Result<(), S
                 == Some("public_launch_readiness_artifact_root"),
         "public deployment package handoff readiness source mismatch",
     )?;
-    let expected_contract_root =
-        value_root("public-deployment-capture-contract", capture_contract);
+    let expected_contract_root = value_root("public-deployment-capture-contract", capture_contract);
     ensure(
         value.get("capture_contract_root").and_then(Value::as_str)
             == Some(expected_contract_root.as_str()),
@@ -18156,8 +18528,7 @@ fn ensure_public_deployment_capture_plan_redacted(value: &Value) -> Result<(), S
     }
     let expected_plan_root = value_root("public-deployment-capture-plan", &rootless_plan);
     ensure(
-        value.get("capture_plan_root").and_then(Value::as_str)
-            == Some(expected_plan_root.as_str()),
+        value.get("capture_plan_root").and_then(Value::as_str) == Some(expected_plan_root.as_str()),
         "public deployment capture plan root mismatch",
     )
 }
@@ -18172,10 +18543,7 @@ fn ensure_public_deployment_runbook_redacted(value: &Value) -> Result<(), String
         "public deployment runbook must be a template",
     )?;
     ensure(
-        value
-            .get("operator_fill_required")
-            .and_then(Value::as_bool)
-            == Some(true),
+        value.get("operator_fill_required").and_then(Value::as_bool) == Some(true),
         "public deployment runbook must require operator fill-in",
     )?;
     ensure(
@@ -18229,8 +18597,7 @@ fn ensure_public_deployment_runbook_redacted(value: &Value) -> Result<(), String
 
 fn ensure_public_launch_artifact_manifest_redacted(value: &Value) -> Result<(), String> {
     ensure(
-        value.get("kind").and_then(Value::as_str)
-            == Some("nebula-public-launch-artifact-manifest"),
+        value.get("kind").and_then(Value::as_str) == Some("nebula-public-launch-artifact-manifest"),
         "public launch artifact manifest kind mismatch",
     )?;
     ensure(
@@ -18241,10 +18608,7 @@ fn ensure_public_launch_artifact_manifest_redacted(value: &Value) -> Result<(), 
         "public launch artifact manifest must be a pre-capture handoff manifest",
     )?;
     ensure(
-        value
-            .get("operator_fill_required")
-            .and_then(Value::as_bool)
-            == Some(false),
+        value.get("operator_fill_required").and_then(Value::as_bool) == Some(false),
         "public launch artifact manifest must not require operator fill-in",
     )?;
     ensure(
@@ -18345,16 +18709,22 @@ fn ensure_public_launch_artifact_manifest_redacted(value: &Value) -> Result<(), 
         let export_flag = artifact
             .get("export_flag")
             .and_then(Value::as_str)
-            .ok_or_else(|| "public launch artifact manifest artifact missing export flag".to_string())?;
+            .ok_or_else(|| {
+                "public launch artifact manifest artifact missing export flag".to_string()
+            })?;
         let root_field = artifact
             .get("root_field")
             .and_then(Value::as_str)
-            .ok_or_else(|| "public launch artifact manifest artifact missing root field".to_string())?;
+            .ok_or_else(|| {
+                "public launch artifact manifest artifact missing root field".to_string()
+            })?;
         let artifact_root = artifact
             .get("root")
             .and_then(Value::as_str)
             .filter(|candidate| is_hex_root(candidate))
-            .ok_or_else(|| "public launch artifact manifest artifact root is not a root".to_string())?;
+            .ok_or_else(|| {
+                "public launch artifact manifest artifact root is not a root".to_string()
+            })?;
         let operator_private = artifact
             .get("operator_private")
             .and_then(Value::as_bool)
@@ -18364,7 +18734,9 @@ fn ensure_public_launch_artifact_manifest_redacted(value: &Value) -> Result<(), 
         let publishable = artifact
             .get("publishable")
             .and_then(Value::as_bool)
-            .ok_or_else(|| "public launch artifact manifest artifact missing publishable".to_string())?;
+            .ok_or_else(|| {
+                "public launch artifact manifest artifact missing publishable".to_string()
+            })?;
         let expected_record_root = public_launch_artifact_record_root(
             manifest_id,
             artifact_id,
@@ -19007,10 +19379,45 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
                 cli.readiness_template_verify_path =
                     Some(parse_string(&args, index, "--verify-readiness-template")?);
             }
+            "--write-release-approval-template" => {
+                index += 1;
+                cli.release_approval_template_path = Some(parse_string(
+                    &args,
+                    index,
+                    "--write-release-approval-template",
+                )?);
+            }
+            "--verify-release-approval-template" => {
+                index += 1;
+                cli.release_approval_template_verify_path = Some(parse_string(
+                    &args,
+                    index,
+                    "--verify-release-approval-template",
+                )?);
+            }
+            "--write-release-authority-registry-template" => {
+                index += 1;
+                cli.release_authority_registry_template_path = Some(parse_string(
+                    &args,
+                    index,
+                    "--write-release-authority-registry-template",
+                )?);
+            }
+            "--verify-release-authority-registry-template" => {
+                index += 1;
+                cli.release_authority_registry_template_verify_path = Some(parse_string(
+                    &args,
+                    index,
+                    "--verify-release-authority-registry-template",
+                )?);
+            }
             "--write-public-bootstrap-profile" => {
                 index += 1;
-                cli.public_bootstrap_profile_path =
-                    Some(parse_string(&args, index, "--write-public-bootstrap-profile")?);
+                cli.public_bootstrap_profile_path = Some(parse_string(
+                    &args,
+                    index,
+                    "--write-public-bootstrap-profile",
+                )?);
             }
             "--verify-public-bootstrap-profile" => {
                 index += 1;
@@ -19022,13 +19429,19 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             }
             "--write-public-status-manifest" => {
                 index += 1;
-                cli.public_status_manifest_path =
-                    Some(parse_string(&args, index, "--write-public-status-manifest")?);
+                cli.public_status_manifest_path = Some(parse_string(
+                    &args,
+                    index,
+                    "--write-public-status-manifest",
+                )?);
             }
             "--verify-public-status-manifest" => {
                 index += 1;
-                cli.public_status_manifest_verify_path =
-                    Some(parse_string(&args, index, "--verify-public-status-manifest")?);
+                cli.public_status_manifest_verify_path = Some(parse_string(
+                    &args,
+                    index,
+                    "--verify-public-status-manifest",
+                )?);
             }
             "--write-public-deployment-runbook" => {
                 index += 1;
@@ -19105,8 +19518,11 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             }
             "--verify-public-launch-package" => {
                 index += 1;
-                cli.public_launch_package_verify_dir =
-                    Some(parse_string(&args, index, "--verify-public-launch-package")?);
+                cli.public_launch_package_verify_dir = Some(parse_string(
+                    &args,
+                    index,
+                    "--verify-public-launch-package",
+                )?);
             }
             "--write-public-testnet-certification" => {
                 index += 1;
@@ -19330,6 +19746,37 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
         )?;
         ensure_local_json_path(path, "--verify-readiness-template")?;
     }
+    if let Some(path) = cli.release_approval_template_path.as_deref() {
+        ensure(
+            cli.mainnet_readiness,
+            "--write-release-approval-template requires --mainnet-readiness",
+        )?;
+        ensure_local_json_path(path, "--write-release-approval-template")?;
+    }
+    if let Some(path) = cli.release_approval_template_verify_path.as_deref() {
+        ensure(
+            cli.mainnet_readiness,
+            "--verify-release-approval-template requires --mainnet-readiness",
+        )?;
+        ensure_local_json_path(path, "--verify-release-approval-template")?;
+    }
+    if let Some(path) = cli.release_authority_registry_template_path.as_deref() {
+        ensure(
+            cli.mainnet_readiness,
+            "--write-release-authority-registry-template requires --mainnet-readiness",
+        )?;
+        ensure_local_json_path(path, "--write-release-authority-registry-template")?;
+    }
+    if let Some(path) = cli
+        .release_authority_registry_template_verify_path
+        .as_deref()
+    {
+        ensure(
+            cli.mainnet_readiness,
+            "--verify-release-authority-registry-template requires --mainnet-readiness",
+        )?;
+        ensure_local_json_path(path, "--verify-release-authority-registry-template")?;
+    }
     if let Some(path) = cli.public_bootstrap_profile_path.as_deref() {
         ensure(
             cli.mainnet_readiness,
@@ -19379,10 +19826,7 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
         )?;
         ensure_local_json_path(path, "--write-public-launch-artifact-manifest")?;
     }
-    if let Some(path) = cli
-        .public_launch_artifact_manifest_verify_path
-        .as_deref()
-    {
+    if let Some(path) = cli.public_launch_artifact_manifest_verify_path.as_deref() {
         ensure(
             cli.mainnet_readiness,
             "--verify-public-launch-artifact-manifest requires --mainnet-readiness",
@@ -19491,12 +19935,8 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
         ensure_local_json_path(path, "--verify-public-deployment-capture-plan")?;
     }
     if cli.public_deployment_capture_scaffold_path.is_some()
-        || cli
-            .public_deployment_capture_scaffold_verify_path
-            .is_some()
-        || cli
-            .public_deployment_capture_scaffold_package_dir
-            .is_some()
+        || cli.public_deployment_capture_scaffold_verify_path.is_some()
+        || cli.public_deployment_capture_scaffold_package_dir.is_some()
     {
         ensure(
             cli.mainnet_readiness,
@@ -19518,7 +19958,10 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
                 "--write-public-deployment-capture-scaffold or --verify-public-deployment-capture-scaffold requires --public-deployment-capture-scaffold-package".to_string()
             })?;
         ensure_local_json_path(scaffold_path, "--write-public-deployment-capture-scaffold")?;
-        if let Some(path) = cli.public_deployment_capture_scaffold_verify_path.as_deref() {
+        if let Some(path) = cli
+            .public_deployment_capture_scaffold_verify_path
+            .as_deref()
+        {
             ensure_local_json_path(path, "--verify-public-deployment-capture-scaffold")?;
         }
         ensure_local_output_dir_path(package_dir, "--public-deployment-capture-scaffold-package")?;
@@ -19542,10 +19985,7 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             "--audit-public-deployment-capture requires --write-public-deployment-capture-audit or --verify-public-deployment-capture-audit",
         )?;
     }
-    if let Some(path) = cli
-        .public_deployment_capture_audit_output_path
-        .as_deref()
-    {
+    if let Some(path) = cli.public_deployment_capture_audit_output_path.as_deref() {
         ensure(
             cli.mainnet_readiness,
             "--write-public-deployment-capture-audit requires --mainnet-readiness",
@@ -19556,10 +19996,7 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
         )?;
         ensure_local_json_path(path, "--write-public-deployment-capture-audit")?;
     }
-    if let Some(path) = cli
-        .public_deployment_capture_audit_verify_path
-        .as_deref()
-    {
+    if let Some(path) = cli.public_deployment_capture_audit_verify_path.as_deref() {
         ensure(
             cli.mainnet_readiness,
             "--verify-public-deployment-capture-audit requires --mainnet-readiness",
@@ -19786,11 +20223,8 @@ fn validate_evidence_provenance_section(
         attestations.len() as u64 >= threshold,
         "evidence_provenance attestation count is below threshold",
     )?;
-    let registry_root = evidence_producer_registry_root(
-        threshold,
-        parsed.len() as u64,
-        producer_roots,
-    );
+    let registry_root =
+        evidence_producer_registry_root(threshold, parsed.len() as u64, producer_roots);
     let declared_registry_root = required_root(section, "producer_registry_root")?;
     ensure(
         declared_registry_root == registry_root,
@@ -19833,8 +20267,10 @@ fn validate_evidence_provenance_section(
         )?;
         attestation_roots.push(attestation.attestation_root.clone());
     }
-    let attestation_root =
-        collection_root("readiness-evidence-provenance-attestations", attestation_roots);
+    let attestation_root = collection_root(
+        "readiness-evidence-provenance-attestations",
+        attestation_roots,
+    );
     let evidence_root = required_root(section, "evidence_root")?;
     let computed_evidence_root = root(&[
         "readiness-evidence-provenance",
@@ -19920,7 +20356,10 @@ fn load_readiness_evidence_bundle(path: &str) -> Result<ReadinessEvidence, Strin
         ("fee_efficiency", fee_efficiency.evidence_root.clone()),
         ("crypto_policy", crypto_policy.evidence_root.clone()),
         ("external_review", external_review.evidence_root.clone()),
-        ("proof_system_audit", proof_system_audit.evidence_root.clone()),
+        (
+            "proof_system_audit",
+            proof_system_audit.evidence_root.clone(),
+        ),
     ];
     let evidence_provenance = validate_evidence_provenance_section(
         required_section(&value, "evidence_provenance")?,
@@ -20114,8 +20553,7 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
         required_root(&value, "deployment_preflight_phase_set_root")?;
     let deployment_preflight_phase_count =
         required_u64(&value, "deployment_preflight_phase_count")?;
-    let public_deployment_runbook_root =
-        required_root(&value, "public_deployment_runbook_root")?;
+    let public_deployment_runbook_root = required_root(&value, "public_deployment_runbook_root")?;
     let public_deployment_runbook_step_set_root =
         required_root(&value, "public_deployment_runbook_step_set_root")?;
     let public_deployment_runbook_receipt = value
@@ -20168,8 +20606,7 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
         required_root(&value, "public_launch_readiness_artifact_root")?;
     let testnet_manifest_id = required_root(&value, "testnet_manifest_id")?;
     let public_status_manifest_root = required_root(&value, "public_status_manifest_root")?;
-    let public_status_manifest =
-        required_section(&value, "public_status_manifest")?.clone();
+    let public_status_manifest = required_section(&value, "public_status_manifest")?.clone();
     let computed_status_manifest_root =
         validate_public_status_manifest_payload(&public_status_manifest)?;
     ensure(
@@ -20208,18 +20645,14 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
     let bootstrap_operator_signature_root =
         required_root(&value, "bootstrap_operator_signature_root")?;
     let bootstrap_region_set_root = required_root(&value, "bootstrap_region_set_root")?;
-    let bootstrap_p2p_endpoint_set_root =
-        required_root(&value, "bootstrap_p2p_endpoint_set_root")?;
-    let bootstrap_status_page_set_root =
-        required_root(&value, "bootstrap_status_page_set_root")?;
-    let bootstrap_public_endpoint_count =
-        required_u64(&value, "bootstrap_public_endpoint_count")?;
+    let bootstrap_p2p_endpoint_set_root = required_root(&value, "bootstrap_p2p_endpoint_set_root")?;
+    let bootstrap_status_page_set_root = required_root(&value, "bootstrap_status_page_set_root")?;
+    let bootstrap_public_endpoint_count = required_u64(&value, "bootstrap_public_endpoint_count")?;
     let bootstrap_node_probes = value
         .get("bootstrap_node_probes")
         .ok_or_else(|| "public deployment evidence missing bootstrap_node_probes".to_string())?
         .clone();
-    let bootstrap_node_probe_set_root =
-        required_root(&value, "bootstrap_node_probe_set_root")?;
+    let bootstrap_node_probe_set_root = required_root(&value, "bootstrap_node_probe_set_root")?;
     let bootstrap_node_probe_count = required_u64(&value, "bootstrap_node_probe_count")?;
     let bootstrap_node_validation = validate_public_bootstrap_nodes(
         &bootstrap_nodes,
@@ -20286,8 +20719,7 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
         &faucet_url,
         &reset_runbook_url,
     )?;
-    let firewall_policy_claims_root =
-        required_root(&value, "firewall_policy_claims_root")?;
+    let firewall_policy_claims_root = required_root(&value, "firewall_policy_claims_root")?;
     ensure(
         firewall_policy_claims_root
             == value_root(
@@ -20296,8 +20728,7 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
             ),
         "public deployment firewall_policy_claims_root mismatch",
     )?;
-    let rate_limit_policy_claims =
-        required_section(&value, "rate_limit_policy_claims")?.clone();
+    let rate_limit_policy_claims = required_section(&value, "rate_limit_policy_claims")?.clone();
     validate_public_rate_limit_policy_claims(
         &rate_limit_policy_claims,
         &public_status_manifest,
@@ -20305,8 +20736,7 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
         &public_status_manifest_root,
         &rate_limit_policy_root,
     )?;
-    let rate_limit_policy_claims_root =
-        required_root(&value, "rate_limit_policy_claims_root")?;
+    let rate_limit_policy_claims_root = required_root(&value, "rate_limit_policy_claims_root")?;
     ensure(
         rate_limit_policy_claims_root
             == value_root(
@@ -20457,7 +20887,11 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
     )?;
     let faucet_probe_http_status = required_u64(&value, "faucet_probe_http_status")?;
     let faucet_probe = required_section(&value, "faucet_probe")?.clone();
-    validate_public_faucet_probe(&faucet_probe, &public_status_manifest, &public_launch_bundle_root)?;
+    validate_public_faucet_probe(
+        &faucet_probe,
+        &public_status_manifest,
+        &public_launch_bundle_root,
+    )?;
     let faucet_probe_root = required_root(&value, "faucet_probe_root")?;
     let faucet_probe_body_root = value_root("public-deployment-faucet-body", &faucet_probe);
     let expected_faucet_probe_root = root(&[
@@ -20470,8 +20904,7 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
         faucet_probe_http_status == 200 && faucet_probe_root == expected_faucet_probe_root,
         "public deployment faucet probe root mismatch",
     )?;
-    let reset_runbook_probe_http_status =
-        required_u64(&value, "reset_runbook_probe_http_status")?;
+    let reset_runbook_probe_http_status = required_u64(&value, "reset_runbook_probe_http_status")?;
     let reset_runbook_probe = required_section(&value, "reset_runbook_probe")?.clone();
     validate_public_reset_runbook_probe(
         &reset_runbook_probe,
@@ -20496,8 +20929,7 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
         .get("public_surface_probes")
         .ok_or_else(|| "public deployment evidence missing public_surface_probes".to_string())?
         .clone();
-    let public_surface_probe_set_root =
-        required_root(&value, "public_surface_probe_set_root")?;
+    let public_surface_probe_set_root = required_root(&value, "public_surface_probe_set_root")?;
     let public_surface_probe_count = required_u64(&value, "public_surface_probe_count")?;
     let deployment_run_id = required_str(&value, "deployment_run_id")?.to_string();
     validate_public_deployment_run_id(&deployment_run_id)?;
@@ -20574,7 +21006,8 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
         expires_at_unix_ms,
     )?;
     ensure(
-        bootstrap_node_probe_set_root == bootstrap_node_probe_validation.bootstrap_node_probe_set_root
+        bootstrap_node_probe_set_root
+            == bootstrap_node_probe_validation.bootstrap_node_probe_set_root
             && bootstrap_node_probe_count
                 == bootstrap_node_probe_validation.bootstrap_node_probe_count
             && bootstrap_node_probe_count == bootstrap_node_count,
@@ -20655,8 +21088,10 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
             ),
         "public deployment private_summary_probe_root mismatch",
     )?;
-    let private_summary_probe_body_root =
-        value_root("public-deployment-private-summary-body", &private_summary_probe);
+    let private_summary_probe_body_root = value_root(
+        "public-deployment-private-summary-body",
+        &private_summary_probe,
+    );
     let public_surface_specs = public_surface_probe_specs(
         &public_rpc_url,
         &public_p2p_endpoint,
@@ -20706,8 +21141,7 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
     )?;
     ensure(
         public_surface_probe_set_root == public_surface_validation.public_surface_probe_set_root
-            && public_surface_probe_count
-                == public_surface_validation.public_surface_probe_count,
+            && public_surface_probe_count == public_surface_validation.public_surface_probe_count,
         "public deployment surface probe roots mismatch",
     )?;
     let expected_probe_roots = [
@@ -20914,10 +21348,7 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
     Ok(evidence)
 }
 
-fn verify_public_deployment_evidence(
-    path: &str,
-    summary: &TestnetSummary,
-) -> Result<(), String> {
+fn verify_public_deployment_evidence(path: &str, summary: &TestnetSummary) -> Result<(), String> {
     ensure_local_json_path(path, "--verify-public-deployment-evidence")?;
     let evidence = load_public_deployment_evidence(path)?;
     ensure(
@@ -23603,8 +24034,7 @@ fn validate_public_metrics_probe(
         "public deployment metrics probe target finality mismatch",
     )?;
     ensure(
-        required_u64(value, "p95_local_quorum_certificate_latency_micros")?
-            == p95_finality_micros,
+        required_u64(value, "p95_local_quorum_certificate_latency_micros")? == p95_finality_micros,
         "public deployment metrics probe p95 finality mismatch",
     )?;
     ensure(
@@ -23640,8 +24070,10 @@ fn validate_public_deployed_finality_probe(
         required_u64(finality, "loopback_distributed_finality_sample_count")?;
     let required_validator_count =
         required_u64(finality, "loopback_distributed_finality_validator_count")?;
-    let required_validator_threshold =
-        required_u64(finality, "loopback_distributed_finality_validator_threshold")?;
+    let required_validator_threshold = required_u64(
+        finality,
+        "loopback_distributed_finality_validator_threshold",
+    )?;
     let required_region_count =
         required_u64(finality, "loopback_distributed_finality_region_count")?;
     ensure(
@@ -23693,10 +24125,8 @@ fn validate_public_deployed_finality_probe(
             && target_finality_micros <= 200_000,
         "public deployment deployed finality probe target finality mismatch",
     )?;
-    let p95_quorum_certificate_micros =
-        required_u64(value, "p95_quorum_certificate_micros")?;
-    let max_quorum_certificate_micros =
-        required_u64(value, "max_quorum_certificate_micros")?;
+    let p95_quorum_certificate_micros = required_u64(value, "p95_quorum_certificate_micros")?;
+    let max_quorum_certificate_micros = required_u64(value, "max_quorum_certificate_micros")?;
     ensure(
         p95_quorum_certificate_micros <= max_quorum_certificate_micros
             && p95_quorum_certificate_micros <= target_finality_micros
@@ -23774,7 +24204,8 @@ fn validate_public_reset_runbook_probe(
         "public deployment reset runbook probe launch bundle root mismatch",
     )?;
     ensure(
-        required_root(value, "reset_policy_root")? == required_root(bootstrap, "reset_policy_root")?,
+        required_root(value, "reset_policy_root")?
+            == required_root(bootstrap, "reset_policy_root")?,
         "public deployment reset runbook probe policy root mismatch",
     )?;
     ensure(
@@ -24410,9 +24841,7 @@ fn derive_public_surface_probe_fields(
         let surface_probe_root = public_surface_probe_root(probe)?;
         probe
             .as_object_mut()
-            .ok_or_else(|| {
-                "public deployment surface probe record must be an object".to_string()
-            })?
+            .ok_or_else(|| "public deployment surface probe record must be an object".to_string())?
             .insert("surface_probe_root".to_string(), json!(surface_probe_root));
     }
     validate_public_surface_probes(
@@ -24553,7 +24982,10 @@ fn public_deployment_probe_root_pairs_from_value(
     value: &Value,
 ) -> Result<Vec<(&'static str, String)>, String> {
     Ok(vec![
-        ("status_probe_root", required_root(value, "status_probe_root")?),
+        (
+            "status_probe_root",
+            required_root(value, "status_probe_root")?,
+        ),
         (
             "p2p_handshake_root",
             required_root(value, "p2p_handshake_root")?,
@@ -24566,12 +24998,18 @@ fn public_deployment_probe_root_pairs_from_value(
             "bootstrap_node_probe_set_root",
             required_root(value, "bootstrap_node_probe_set_root")?,
         ),
-        ("health_probe_root", required_root(value, "health_probe_root")?),
+        (
+            "health_probe_root",
+            required_root(value, "health_probe_root")?,
+        ),
         (
             "status_page_probe_root",
             required_root(value, "status_page_probe_root")?,
         ),
-        ("metrics_probe_root", required_root(value, "metrics_probe_root")?),
+        (
+            "metrics_probe_root",
+            required_root(value, "metrics_probe_root")?,
+        ),
         (
             "deployed_finality_probe_root",
             required_root(value, "deployed_finality_probe_root")?,
@@ -24580,7 +25018,10 @@ fn public_deployment_probe_root_pairs_from_value(
             "incident_contact_probe_root",
             required_root(value, "incident_contact_probe_root")?,
         ),
-        ("faucet_probe_root", required_root(value, "faucet_probe_root")?),
+        (
+            "faucet_probe_root",
+            required_root(value, "faucet_probe_root")?,
+        ),
         (
             "reset_runbook_probe_root",
             required_root(value, "reset_runbook_probe_root")?,
@@ -24614,8 +25055,10 @@ fn expected_public_surface_probe_set_root_for_evidence(
 ) -> Result<String, String> {
     let health_probe_body_root =
         value_root("public-deployment-health-body", &evidence.health_probe);
-    let status_page_probe_body_root =
-        value_root("public-deployment-status-page-body", &evidence.status_page_probe);
+    let status_page_probe_body_root = value_root(
+        "public-deployment-status-page-body",
+        &evidence.status_page_probe,
+    );
     let metrics_probe_body_root =
         value_root("public-deployment-metrics-body", &evidence.metrics_probe);
     let deployed_finality_probe_body_root = value_root(
@@ -24696,7 +25139,10 @@ fn expected_public_probe_set_root_for_evidence(
     let probe_roots = [
         ("status_probe_root", evidence.status_probe_root.clone()),
         ("p2p_handshake_root", evidence.p2p_handshake_root.clone()),
-        ("public_surface_probe_set_root", public_surface_probe_set_root),
+        (
+            "public_surface_probe_set_root",
+            public_surface_probe_set_root,
+        ),
         (
             "bootstrap_node_probe_set_root",
             evidence.bootstrap_node_probe_set_root.clone(),
@@ -24903,7 +25349,10 @@ fn public_bootstrap_node_probe_template(commitments: &Value) -> Value {
                 json!("<fill-in-deployment-tooling-observed-http-status-200>"),
             );
             map.insert("status_page_body_root".to_string(), json!(ROOT_PLACEHOLDER));
-            map.insert("status_page_probe_root".to_string(), json!(ROOT_PLACEHOLDER));
+            map.insert(
+                "status_page_probe_root".to_string(),
+                json!(ROOT_PLACEHOLDER),
+            );
             map.insert(
                 "observed_at_unix_ms".to_string(),
                 json!("<fill-in-deployment-tooling-observed-at-ms>"),
@@ -25173,8 +25622,7 @@ fn derive_public_bootstrap_node_probe_fields(
                 "region_commitment".to_string(),
                 json!(required_root(expected_node, "region_commitment")?),
             );
-            if let Some(existing_endpoint) =
-                map.get("public_p2p_endpoint").and_then(Value::as_str)
+            if let Some(existing_endpoint) = map.get("public_p2p_endpoint").and_then(Value::as_str)
             {
                 ensure(
                     existing_endpoint == public_p2p_endpoint,
@@ -25187,7 +25635,10 @@ fn derive_public_bootstrap_node_probe_fields(
                     "public deployment bootstrap node probe status page url mismatch",
                 )?;
             }
-            map.insert("public_p2p_endpoint".to_string(), json!(&public_p2p_endpoint));
+            map.insert(
+                "public_p2p_endpoint".to_string(),
+                json!(&public_p2p_endpoint),
+            );
             map.insert("status_page_url".to_string(), json!(&status_page_url));
             map.entry("observed_at_unix_ms".to_string())
                 .or_insert_with(|| json!(observed_at_unix_ms));
@@ -25295,11 +25746,7 @@ fn validate_public_bootstrap_node_probes(
             "public deployment bootstrap node probes must cover unique node slots",
         )?;
         let expected_node = find_public_bootstrap_node_by_slot(bootstrap_nodes, &node_slot_root)?;
-        for key in [
-            "node_id_root",
-            "operator_commitment",
-            "region_commitment",
-        ] {
+        for key in ["node_id_root", "operator_commitment", "region_commitment"] {
             ensure(
                 required_root(probe, key)? == required_root(expected_node, key)?,
                 &format!("public deployment bootstrap node probe {key} mismatch"),
@@ -25468,8 +25915,7 @@ fn derive_public_bootstrap_operator_registry_fields(
         )?;
         {
             let map = record.as_object_mut().ok_or_else(|| {
-                "public deployment bootstrap operator registry record must be an object"
-                    .to_string()
+                "public deployment bootstrap operator registry record must be an object".to_string()
             })?;
             map.insert("status".to_string(), json!("ok"));
             map.insert("chain_id".to_string(), json!(CHAIN_ID));
@@ -25491,8 +25937,7 @@ fn derive_public_bootstrap_operator_registry_fields(
         record
             .as_object_mut()
             .ok_or_else(|| {
-                "public deployment bootstrap operator registry record must be an object"
-                    .to_string()
+                "public deployment bootstrap operator registry record must be an object".to_string()
             })?
             .insert(
                 "operator_attestation_root".to_string(),
@@ -25502,8 +25947,7 @@ fn derive_public_bootstrap_operator_registry_fields(
         record
             .as_object_mut()
             .ok_or_else(|| {
-                "public deployment bootstrap operator registry record must be an object"
-                    .to_string()
+                "public deployment bootstrap operator registry record must be an object".to_string()
             })?
             .insert(
                 "signature_payload_root".to_string(),
@@ -25514,8 +25958,7 @@ fn derive_public_bootstrap_operator_registry_fields(
         record
             .as_object_mut()
             .ok_or_else(|| {
-                "public deployment bootstrap operator registry record must be an object"
-                    .to_string()
+                "public deployment bootstrap operator registry record must be an object".to_string()
             })?
             .insert(
                 "operator_registry_record_root".to_string(),
@@ -25597,10 +26040,8 @@ fn validate_public_bootstrap_operator_registry(
             "public deployment bootstrap operator control-plane commitments must be unique",
         )?;
         ensure(
-            infrastructure_accounts.insert(required_root(
-                record,
-                "infrastructure_account_commitment",
-            )?),
+            infrastructure_accounts
+                .insert(required_root(record, "infrastructure_account_commitment")?),
             "public deployment bootstrap operator infrastructure commitments must be unique",
         )?;
         ensure(
@@ -25743,7 +26184,10 @@ fn bind_public_bootstrap_operator_signature_verification(record: &mut Value) -> 
             json!(&public_launch_bundle_root),
         );
         verification.insert("deployment_run_id".to_string(), json!(&deployment_run_id));
-        verification.insert("operator_commitment".to_string(), json!(&operator_commitment));
+        verification.insert(
+            "operator_commitment".to_string(),
+            json!(&operator_commitment),
+        );
         verification.insert(
             "operator_entity_commitment".to_string(),
             json!(&operator_entity_commitment),
@@ -25757,8 +26201,14 @@ fn bind_public_bootstrap_operator_signature_verification(record: &mut Value) -> 
             json!(&infrastructure_account_commitment),
         );
         verification.insert("contact_commitment".to_string(), json!(&contact_commitment));
-        verification.insert("independence_proof_root".to_string(), json!(&independence_proof_root));
-        verification.insert("independence_verified".to_string(), json!(independence_verified));
+        verification.insert(
+            "independence_proof_root".to_string(),
+            json!(&independence_proof_root),
+        );
+        verification.insert(
+            "independence_verified".to_string(),
+            json!(independence_verified),
+        );
         verification.insert("operator_key_root".to_string(), json!(&operator_key_root));
         verification.insert(
             "operator_attestation_root".to_string(),
@@ -25812,7 +26262,8 @@ fn validate_public_bootstrap_operator_signature_verification(
         "public deployment bootstrap operator signature verification chain_id mismatch",
     )?;
     ensure(
-        required_str(verification, "signature_scheme")? == required_str(record, "signature_scheme")?
+        required_str(verification, "signature_scheme")?
+            == required_str(record, "signature_scheme")?
             && required_str(verification, "signature_scheme")? == "ML-DSA-65",
         "public deployment bootstrap operator signature verification scheme mismatch",
     )?;
@@ -25835,7 +26286,8 @@ fn validate_public_bootstrap_operator_signature_verification(
         )?;
     }
     ensure(
-        required_str(verification, "deployment_run_id")? == required_str(record, "deployment_run_id")?,
+        required_str(verification, "deployment_run_id")?
+            == required_str(record, "deployment_run_id")?,
         "public deployment bootstrap operator signature verification deployment_run_id mismatch",
     )?;
     ensure(
@@ -26112,7 +26564,8 @@ fn validate_public_probe_observers(
         regions.insert(region.to_string());
         let observer_observed_at = required_u64(observer, "observed_at_unix_ms")?;
         ensure(
-            observer_observed_at >= observed_at_unix_ms && observer_observed_at <= expires_at_unix_ms,
+            observer_observed_at >= observed_at_unix_ms
+                && observer_observed_at <= expires_at_unix_ms,
             "public deployment probe observer observation time is outside freshness window",
         )?;
         for (key, expected_root) in expected_probe_roots {
@@ -26276,9 +26729,9 @@ fn bind_public_probe_observer_signature_verification(
             json!("public-deployment-probe-observer-attestation"),
         );
     }
-    let verification = observer
-        .get("signature_verification")
-        .ok_or_else(|| "public deployment probe observer missing signature_verification".to_string())?;
+    let verification = observer.get("signature_verification").ok_or_else(|| {
+        "public deployment probe observer missing signature_verification".to_string()
+    })?;
     let signature_verification_root =
         public_probe_observer_signature_verification_root(verification)?;
     observer
@@ -26313,7 +26766,8 @@ fn validate_public_probe_observer_signature_verification(
         "public deployment probe observer signature verification chain_id mismatch",
     )?;
     ensure(
-        required_str(verification, "signature_scheme")? == required_str(observer, "signature_scheme")?
+        required_str(verification, "signature_scheme")?
+            == required_str(observer, "signature_scheme")?
             && required_str(verification, "signature_scheme")? == "ML-DSA-65",
         "public deployment probe observer signature verification scheme mismatch",
     )?;
@@ -26326,9 +26780,7 @@ fn validate_public_probe_observer_signature_verification(
     ] {
         ensure(
             required_root(verification, key)? == required_root(observer, key)?,
-            &format!(
-                "public deployment probe observer signature verification {key} mismatch"
-            ),
+            &format!("public deployment probe observer signature verification {key} mismatch"),
         )?;
     }
     ensure(
@@ -26364,7 +26816,9 @@ fn validate_public_probe_observer_signature_verification(
     Ok(signature_verification_root)
 }
 
-fn public_probe_observer_signature_verification_root(verification: &Value) -> Result<String, String> {
+fn public_probe_observer_signature_verification_root(
+    verification: &Value,
+) -> Result<String, String> {
     Ok(root(&[
         "public-deployment-probe-observer-signature-verification",
         CHAIN_ID,
@@ -26449,11 +26903,9 @@ fn public_deployment_attestation_root_from_value(value: &Value) -> Result<String
         required_root(value, "deployment_preflight_checklist_root")?.as_str(),
         value_root(
             "public-deployment-preflight-receipt",
-            value
-                .get("deployment_preflight_receipt")
-                .ok_or_else(|| {
-                    "public deployment evidence missing deployment_preflight_receipt".to_string()
-                })?,
+            value.get("deployment_preflight_receipt").ok_or_else(|| {
+                "public deployment evidence missing deployment_preflight_receipt".to_string()
+            })?,
         )
         .as_str(),
         required_root(value, "deployment_preflight_receipt_root")?.as_str(),
@@ -26493,9 +26945,9 @@ fn public_deployment_attestation_root_from_value(value: &Value) -> Result<String
         required_root(value, "tls_spki_pin_root")?.as_str(),
         value_root(
             "public-deployment-tls-endpoint-pins",
-            value
-                .get("tls_endpoint_pins")
-                .ok_or_else(|| "public deployment evidence missing tls_endpoint_pins".to_string())?,
+            value.get("tls_endpoint_pins").ok_or_else(|| {
+                "public deployment evidence missing tls_endpoint_pins".to_string()
+            })?,
         )
         .as_str(),
         required_root(value, "tls_endpoint_pin_set_root")?.as_str(),
@@ -26513,11 +26965,9 @@ fn public_deployment_attestation_root_from_value(value: &Value) -> Result<String
         &required_u64(value, "bootstrap_operator_count")?.to_string(),
         value_root(
             "public-deployment-bootstrap-operator-registry",
-            value
-                .get("bootstrap_operator_registry")
-                .ok_or_else(|| {
-                    "public deployment evidence missing bootstrap_operator_registry".to_string()
-                })?,
+            value.get("bootstrap_operator_registry").ok_or_else(|| {
+                "public deployment evidence missing bootstrap_operator_registry".to_string()
+            })?,
         )
         .as_str(),
         required_root(value, "bootstrap_operator_registry_root")?.as_str(),
@@ -26529,11 +26979,9 @@ fn public_deployment_attestation_root_from_value(value: &Value) -> Result<String
         &required_u64(value, "bootstrap_public_endpoint_count")?.to_string(),
         value_root(
             "public-deployment-bootstrap-node-probes",
-            value
-                .get("bootstrap_node_probes")
-                .ok_or_else(|| {
-                    "public deployment evidence missing bootstrap_node_probes".to_string()
-                })?,
+            value.get("bootstrap_node_probes").ok_or_else(|| {
+                "public deployment evidence missing bootstrap_node_probes".to_string()
+            })?,
         )
         .as_str(),
         required_root(value, "bootstrap_node_probe_set_root")?.as_str(),
@@ -26566,11 +27014,9 @@ fn public_deployment_attestation_root_from_value(value: &Value) -> Result<String
         required_root(value, "reset_runbook_probe_root")?.as_str(),
         value_root(
             "public-deployment-surface-probes",
-            value
-                .get("public_surface_probes")
-                .ok_or_else(|| {
-                    "public deployment evidence missing public_surface_probes".to_string()
-                })?,
+            value.get("public_surface_probes").ok_or_else(|| {
+                "public deployment evidence missing public_surface_probes".to_string()
+            })?,
         )
         .as_str(),
         required_root(value, "public_surface_probe_set_root")?.as_str(),
@@ -26703,7 +27149,10 @@ fn public_deployment_attestation_root(evidence: &PublicDeploymentEvidence) -> St
         ),
         &evidence.tls_endpoint_pin_set_root,
         &evidence.tls_endpoint_pin_count.to_string(),
-        &value_root("public-deployment-bootstrap-nodes", &evidence.bootstrap_nodes),
+        &value_root(
+            "public-deployment-bootstrap-nodes",
+            &evidence.bootstrap_nodes,
+        ),
         &evidence.bootstrap_node_set_root,
         &evidence.bootstrap_node_count.to_string(),
         &evidence.bootstrap_operator_set_root,
@@ -26925,6 +27374,14 @@ OPTIONS:
                               Write a redacted operator template/checklist for external evidence collection
         --verify-readiness-template PATH
                               Verify a redacted operator template/checklist against this run
+        --write-release-approval-template PATH
+                              Write a redacted release approval signoff template for external authorities
+        --verify-release-approval-template PATH
+                              Verify a release approval signoff template against this run
+        --write-release-authority-registry-template PATH
+                              Write a redacted release authority registry template for required signoff roles
+        --verify-release-authority-registry-template PATH
+                              Verify a release authority registry template against the required role set
         --write-public-bootstrap-profile PATH
                               Write a redacted public-testnet bootstrap/deployment profile
         --verify-public-bootstrap-profile PATH
@@ -28673,9 +29130,13 @@ mod tests {
         assert!(public_endpoint("node-a.public.nebula.example:58481"));
         assert!(public_endpoint("/dns4/p2p.public.nebula.example/tcp/58481"));
         assert!(public_endpoint("/ip4/8.8.8.8/tcp/58481"));
-        assert!(public_https_endpoint("https://rpc.public.nebula.example/status"));
+        assert!(public_https_endpoint(
+            "https://rpc.public.nebula.example/status"
+        ));
         assert!(public_endpoint("8.8.8.8:58481"));
-        assert!(public_https_endpoint("https://[2606:4700:4700::1111]/status"));
+        assert!(public_https_endpoint(
+            "https://[2606:4700:4700::1111]/status"
+        ));
     }
 
     #[test]
@@ -28712,7 +29173,9 @@ mod tests {
             ..Cli::default()
         };
         let mut testnet = Testnet::new(cli);
-        testnet.run().expect("testnet run still produces local blocks");
+        testnet
+            .run()
+            .expect("testnet run still produces local blocks");
         let summary = testnet.summary(Vec::new());
         let profile = &summary.public_bootstrap_profile;
         assert!(!profile.passed);
@@ -29181,8 +29644,10 @@ mod tests {
 
         let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read template"))
             .expect("readiness template json");
-        stale["testnet_run_checkpoint_root"] =
-            json!(root(&["tampered-readiness-template-checkpoint", &summary.manifest_id]));
+        stale["testnet_run_checkpoint_root"] = json!(root(&[
+            "tampered-readiness-template-checkpoint",
+            &summary.manifest_id
+        ]));
         let mut rootless = stale.clone();
         if let Some(map) = rootless.as_object_mut() {
             map.remove("template_root");
@@ -29218,6 +29683,170 @@ mod tests {
         let path = temp_json_path("nebula-testnet-readiness-template-verify-rejected");
         let error = parse_cli(vec!["--verify-readiness-template".to_string(), path])
             .expect_err("template verification should require mainnet-readiness mode");
+        assert!(error.contains("requires --mainnet-readiness"));
+    }
+
+    #[test]
+    fn release_approval_template_exports_unapproved_signoff_packet() {
+        let path = temp_json_path("nebula-testnet-release-approval-template");
+        let cli = parse_cli(vec![
+            "--mainnet-readiness".to_string(),
+            "--adversarial-self-test".to_string(),
+            "--write-release-approval-template".to_string(),
+            path.clone(),
+        ])
+        .expect("release approval template flag should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_release_approval_template(&path, &summary).expect("write release approval template");
+        verify_release_approval_template(&path, &summary)
+            .expect("verify release approval template");
+        let value: Value =
+            serde_json::from_slice(&fs::read(&path).expect("read approval template"))
+                .expect("release approval template json");
+
+        assert_eq!(value["approval_kind"], "nebula-mainnet-release-approval");
+        assert_eq!(value["target_network"], "mainnet");
+        assert_eq!(value["custody_mode"], "external-mainnet-process-required");
+        assert_eq!(value["approved"], false);
+        assert_eq!(value["template_fill_required"], true);
+        assert_eq!(value["readiness_evidence_bundle_root"], ROOT_PLACEHOLDER);
+        assert_eq!(value["release_authority_registry_root"], ROOT_PLACEHOLDER);
+        assert_eq!(
+            value["local_adversarial_self_test_root"],
+            summary
+                .fault_injection
+                .as_ref()
+                .expect("fault injection report")
+                .report_root
+        );
+        assert_eq!(
+            value["signoff_quorum"]["signoffs"]
+                .as_array()
+                .expect("signoffs")
+                .len(),
+            REQUIRED_RELEASE_SIGNOFF_ROLES.len()
+        );
+        ensure_release_approval_template_safe(&value).expect("safe approval template");
+        let error =
+            load_release_approval_bundle(&path).expect_err("template is not a real approval");
+        assert!(error.contains("approved must be true"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn release_approval_template_verifier_rejects_stale_checkpoint() {
+        let path = temp_json_path("nebula-testnet-release-approval-template-stale");
+        let cli = parse_cli(vec![
+            "--mainnet-readiness".to_string(),
+            "--adversarial-self-test".to_string(),
+        ])
+        .expect("mainnet readiness should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_release_approval_template(&path, &summary).expect("write release approval template");
+        verify_release_approval_template(&path, &summary)
+            .expect("fresh release approval template should verify");
+
+        let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read template"))
+            .expect("release approval template json");
+        stale["testnet_run_checkpoint_root"] = json!(root(&[
+            "tampered-release-approval-checkpoint",
+            &summary.manifest_id
+        ]));
+        ensure_release_approval_template_safe(&stale)
+            .expect("stale approval template should remain structurally safe");
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&stale).expect("encode stale approval template")
+            ),
+        )
+        .expect("write stale approval template");
+
+        let error = verify_release_approval_template(&path, &summary)
+            .expect_err("stale release approval template should fail exact verification");
+        assert!(error.contains("does not match this run"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn release_authority_registry_template_exports_required_roles_only() {
+        let path = temp_json_path("nebula-testnet-release-authority-registry-template");
+        let cli = parse_cli(vec![
+            "--mainnet-readiness".to_string(),
+            "--write-release-authority-registry-template".to_string(),
+            path.clone(),
+        ])
+        .expect("release authority registry template flag should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        assert!(
+            !summary
+                .mainnet_readiness
+                .release_authority_registry_verified
+        );
+        write_release_authority_registry_template(&path)
+            .expect("write release authority registry template");
+        verify_release_authority_registry_template(&path)
+            .expect("verify release authority registry template");
+        let value: Value =
+            serde_json::from_slice(&fs::read(&path).expect("read registry template"))
+                .expect("release authority registry template json");
+
+        assert_eq!(value["registry_kind"], "nebula-release-authority-registry");
+        assert_eq!(value["custody_mode"], "external-mainnet-process-required");
+        assert_eq!(
+            value["threshold"],
+            REQUIRED_RELEASE_SIGNOFF_ROLES.len() as u64
+        );
+        assert_eq!(value["registry_root"], ROOT_PLACEHOLDER);
+        assert_eq!(
+            value["authorities"].as_array().expect("authorities").len(),
+            REQUIRED_RELEASE_SIGNOFF_ROLES.len()
+        );
+        ensure_release_authority_registry_template_safe(&value).expect("safe registry template");
+        let error =
+            load_release_authority_registry(&path).expect_err("template is not a filled registry");
+        assert!(!error.is_empty());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn release_authority_registry_template_rejects_missing_role() {
+        let mut value = release_authority_registry_template();
+        value["authorities"] = json!(value["authorities"]
+            .as_array()
+            .expect("authorities")
+            .iter()
+            .take(REQUIRED_RELEASE_SIGNOFF_ROLES.len() - 1)
+            .cloned()
+            .collect::<Vec<_>>());
+        let error = ensure_release_authority_registry_template_safe(&value)
+            .expect_err("registry template should require every release role");
+        assert!(error.contains("every required role"));
+    }
+
+    #[test]
+    fn release_template_exports_require_mainnet_readiness_mode() {
+        let approval_path = temp_json_path("nebula-testnet-release-approval-template-rejected");
+        let error = parse_cli(vec![
+            "--write-release-approval-template".to_string(),
+            approval_path,
+        ])
+        .expect_err("release approval template should require mainnet-readiness mode");
+        assert!(error.contains("requires --mainnet-readiness"));
+
+        let registry_path = temp_json_path("nebula-testnet-release-registry-template-rejected");
+        let error = parse_cli(vec![
+            "--verify-release-authority-registry-template".to_string(),
+            registry_path,
+        ])
+        .expect_err("release registry template verification should require mainnet-readiness mode");
         assert!(error.contains("requires --mainnet-readiness"));
     }
 
@@ -29265,7 +29894,9 @@ mod tests {
     fn public_deployment_runbook_verify_requires_mainnet_readiness_mode() {
         let path = temp_json_path("nebula-public-deployment-runbook-verify-rejected");
         let error = parse_cli(vec!["--verify-public-deployment-runbook".to_string(), path])
-            .expect_err("public deployment runbook verification should require mainnet-readiness mode");
+            .expect_err(
+                "public deployment runbook verification should require mainnet-readiness mode",
+            );
         assert!(error.contains("requires --mainnet-readiness"));
     }
 
@@ -29383,7 +30014,9 @@ mod tests {
             "--verify-public-testnet-certification".to_string(),
             path,
         ])
-        .expect_err("public testnet certification verification should require mainnet-readiness mode");
+        .expect_err(
+            "public testnet certification verification should require mainnet-readiness mode",
+        );
         assert!(error.contains("requires --mainnet-readiness"));
     }
 
@@ -29429,7 +30062,9 @@ mod tests {
             "--verify-public-deployment-capture-plan".to_string(),
             path,
         ])
-        .expect_err("public deployment capture plan verification should require mainnet-readiness mode");
+        .expect_err(
+            "public deployment capture plan verification should require mainnet-readiness mode",
+        );
         assert!(error.contains("requires --mainnet-readiness"));
     }
 
@@ -29452,7 +30087,9 @@ mod tests {
             "--public-deployment-capture-scaffold-package".to_string(),
             temp_json_path("nebula-public-launch-package-scaffold-verify-rejected"),
         ])
-        .expect_err("public deployment capture scaffold verify should require mainnet-readiness mode");
+        .expect_err(
+            "public deployment capture scaffold verify should require mainnet-readiness mode",
+        );
         assert!(error.contains("requires --mainnet-readiness"));
 
         let error = parse_cli(vec![
@@ -29475,11 +30112,10 @@ mod tests {
     #[test]
     fn public_deployment_capture_verify_requires_mainnet_readiness_mode() {
         let path = temp_json_path("nebula-public-deployment-capture-verify-rejected");
-        let error = parse_cli(vec![
-            "--verify-public-deployment-capture".to_string(),
-            path,
-        ])
-        .expect_err("public deployment capture verification should require mainnet-readiness mode");
+        let error = parse_cli(vec!["--verify-public-deployment-capture".to_string(), path])
+            .expect_err(
+                "public deployment capture verification should require mainnet-readiness mode",
+            );
         assert!(error.contains("requires --mainnet-readiness"));
     }
 
@@ -29514,7 +30150,9 @@ mod tests {
             "--audit-public-deployment-capture".to_string(),
             capture.clone(),
         ])
-        .expect_err("public deployment capture audit verification should require mainnet-readiness mode");
+        .expect_err(
+            "public deployment capture audit verification should require mainnet-readiness mode",
+        );
         assert!(error.contains("requires --mainnet-readiness"));
         let error = parse_cli(vec![
             "--mainnet-readiness".to_string(),
@@ -29544,10 +30182,13 @@ mod tests {
     #[test]
     fn public_deployment_evidence_verify_requires_mainnet_readiness_mode() {
         let path = temp_json_path("nebula-public-deployment-verify-rejected");
-        let error = parse_cli(vec!["--verify-public-deployment-evidence".to_string(), path])
-            .expect_err(
-                "public deployment evidence verification should require mainnet-readiness mode",
-            );
+        let error = parse_cli(vec![
+            "--verify-public-deployment-evidence".to_string(),
+            path,
+        ])
+        .expect_err(
+            "public deployment evidence verification should require mainnet-readiness mode",
+        );
         assert!(error.contains("requires --mainnet-readiness"));
     }
 
@@ -29704,8 +30345,10 @@ mod tests {
 
         let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read profile"))
             .expect("public bootstrap profile json");
-        stale["testnet_run_checkpoint_root"] =
-            json!(root(&["tampered-public-bootstrap-profile", &summary.manifest_id]));
+        stale["testnet_run_checkpoint_root"] = json!(root(&[
+            "tampered-public-bootstrap-profile",
+            &summary.manifest_id
+        ]));
         let mut rootless = stale.clone();
         if let Some(map) = rootless.as_object_mut() {
             map.remove("template_root");
@@ -29830,8 +30473,7 @@ mod tests {
         let mut testnet = Testnet::new(cli);
         testnet.run().expect("testnet run");
         let summary = testnet.summary(Vec::new());
-        write_public_deployment_runbook(&path, &summary)
-            .expect("write public deployment runbook");
+        write_public_deployment_runbook(&path, &summary).expect("write public deployment runbook");
         let value: Value = serde_json::from_slice(&fs::read(&path).expect("read runbook"))
             .expect("public deployment runbook json");
         let expected_status = public_status_manifest(&summary);
@@ -29879,10 +30521,7 @@ mod tests {
             value["runbook_contract"]["mainnet_custody_enablement_allowed"],
             false
         );
-        assert_eq!(
-            value["mainnet_boundary"]["mainnet_value_ready"],
-            false
-        );
+        assert_eq!(value["mainnet_boundary"]["mainnet_value_ready"], false);
         assert_eq!(
             value["mainnet_boundary"]["mainnet_custody_enablement_allowed"],
             false
@@ -29918,9 +30557,7 @@ mod tests {
             assert!(is_hex_root(
                 step["source_root"].as_str().expect("step source root")
             ));
-            assert!(is_hex_root(
-                step["step_root"].as_str().expect("step root")
-            ));
+            assert!(is_hex_root(step["step_root"].as_str().expect("step root")));
         }
         assert!(is_hex_root(
             value["runbook_contract"]["runbook_contract_root"]
@@ -29955,8 +30592,7 @@ mod tests {
         let mut testnet = Testnet::new(cli);
         testnet.run().expect("testnet run");
         let summary = testnet.summary(Vec::new());
-        write_public_deployment_runbook(&path, &summary)
-            .expect("write public deployment runbook");
+        write_public_deployment_runbook(&path, &summary).expect("write public deployment runbook");
         verify_public_deployment_runbook(&path, &summary)
             .expect("current-run public deployment runbook should verify");
         let _ = fs::remove_file(path);
@@ -29970,15 +30606,16 @@ mod tests {
         let mut testnet = Testnet::new(cli);
         testnet.run().expect("testnet run");
         let summary = testnet.summary(Vec::new());
-        write_public_deployment_runbook(&path, &summary)
-            .expect("write public deployment runbook");
+        write_public_deployment_runbook(&path, &summary).expect("write public deployment runbook");
         verify_public_deployment_runbook(&path, &summary)
             .expect("fresh public deployment runbook should verify");
 
         let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read runbook"))
             .expect("public deployment runbook json");
-        stale["source_roots"]["run_checkpoint_root"] =
-            json!(root(&["tampered-public-deployment-runbook", &summary.manifest_id]));
+        stale["source_roots"]["run_checkpoint_root"] = json!(root(&[
+            "tampered-public-deployment-runbook",
+            &summary.manifest_id
+        ]));
         let mut rootless = stale.clone();
         if let Some(map) = rootless.as_object_mut() {
             map.remove("public_deployment_runbook_root");
@@ -30205,8 +30842,10 @@ mod tests {
 
         let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read manifest"))
             .expect("manifest json");
-        stale["source_roots"]["run_checkpoint_root"] =
-            json!(root(&["tampered-public-launch-artifact-manifest", &summary.manifest_id]));
+        stale["source_roots"]["run_checkpoint_root"] = json!(root(&[
+            "tampered-public-launch-artifact-manifest",
+            &summary.manifest_id
+        ]));
         let mut rootless = stale.clone();
         if let Some(map) = rootless.as_object_mut() {
             map.remove("public_launch_artifact_manifest_root");
@@ -30352,10 +30991,7 @@ mod tests {
             value["preflight_gates"]["public_deployment_runbook_bound"],
             true
         );
-        assert_eq!(
-            value["mainnet_boundary"]["mainnet_value_ready"],
-            false
-        );
+        assert_eq!(value["mainnet_boundary"]["mainnet_value_ready"], false);
         assert!(is_hex_root(
             value["public_launch_bundle_root"]
                 .as_str()
@@ -30367,7 +31003,8 @@ mod tests {
         let error = ensure_public_launch_bundle_redacted(&tampered)
             .expect_err("tampered launch bundle should fail redaction/root guard");
         assert!(
-            error.contains("operator fill-in") || error.contains("public launch bundle root mismatch")
+            error.contains("operator fill-in")
+                || error.contains("public launch bundle root mismatch")
         );
         let mut root_tampered = value.clone();
         root_tampered["public_launch_bundle_root"] =
@@ -30412,8 +31049,10 @@ mod tests {
 
         let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read bundle"))
             .expect("launch bundle json");
-        stale["source_roots"]["run_checkpoint_root"] =
-            json!(root(&["tampered-public-launch-bundle", &summary.manifest_id]));
+        stale["source_roots"]["run_checkpoint_root"] = json!(root(&[
+            "tampered-public-launch-bundle",
+            &summary.manifest_id
+        ]));
         let mut rootless = stale.clone();
         if let Some(map) = rootless.as_object_mut() {
             map.remove("public_launch_bundle_root");
@@ -30461,7 +31100,10 @@ mod tests {
             value["public_launch_bundle_root"],
             public_bundle["public_launch_bundle_root"]
         );
-        assert_eq!(value["capture_plan_root"], capture_plan["capture_plan_root"]);
+        assert_eq!(
+            value["capture_plan_root"],
+            capture_plan["capture_plan_root"]
+        );
         assert_eq!(
             value["public_launch_package_file_set_root"],
             public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id)
@@ -30497,9 +31139,8 @@ mod tests {
         let mut testnet = Testnet::new(cli);
         testnet.run().expect("testnet run");
         let base_summary = testnet.summary(Vec::new());
-        let evidence_path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let evidence_path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let evidence =
             load_public_deployment_evidence(&evidence_path).expect("public deployment evidence");
         testnet.cli.public_deployment_evidence = Some(evidence.clone());
@@ -30509,7 +31150,10 @@ mod tests {
         assert_eq!(value["public_launch_ready"], true);
         assert_eq!(value["blocking_gap_count"], 0);
         assert_eq!(value["remediation_count"], 0);
-        assert_eq!(value["public_deployment_evidence_root"], evidence.evidence_root);
+        assert_eq!(
+            value["public_deployment_evidence_root"],
+            evidence.evidence_root
+        );
         assert_eq!(
             value["public_launch_package_file_set_root"],
             public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id)
@@ -30567,14 +31211,18 @@ mod tests {
 
         let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read report"))
             .expect("public launch readiness report json");
-        stale["public_launch_package_file_set_root"] =
-            json!(root(&["tampered-public-launch-package-file-set", &summary.manifest_id]));
+        stale["public_launch_package_file_set_root"] = json!(root(&[
+            "tampered-public-launch-package-file-set",
+            &summary.manifest_id
+        ]));
         let mut rootless = stale.clone();
         if let Some(map) = rootless.as_object_mut() {
             map.remove("public_launch_readiness_artifact_root");
         }
-        stale["public_launch_readiness_artifact_root"] =
-            json!(value_root("public-launch-readiness-report-artifact", &rootless));
+        stale["public_launch_readiness_artifact_root"] = json!(value_root(
+            "public-launch-readiness-report-artifact",
+            &rootless
+        ));
         ensure_public_launch_readiness_report_artifact_safe(&stale)
             .expect("re-rooted report should remain structurally safe");
         fs::write(
@@ -30614,7 +31262,10 @@ mod tests {
         assert_eq!(value["external_capture_required"], true);
         assert_eq!(value["usable_as_public_deployment_evidence"], false);
         assert_eq!(value["usable_as_mainnet_custody_approval"], false);
-        assert_eq!(value["capture_plan_root"], capture_plan["capture_plan_root"]);
+        assert_eq!(
+            value["capture_plan_root"],
+            capture_plan["capture_plan_root"]
+        );
         assert_eq!(
             value["capture_contract_root"],
             capture_plan["capture_contract_root"]
@@ -30711,8 +31362,7 @@ mod tests {
         let error = verify_public_capture_todo(&path_string, &summary)
             .expect_err("tampered capture todo should fail");
         assert!(
-            error.contains("required_endpoint_fields")
-                || error.contains("does not match this run")
+            error.contains("required_endpoint_fields") || error.contains("does not match this run")
         );
 
         write_public_capture_todo(&path_string, &summary).expect("rewrite public capture todo");
@@ -30822,9 +31472,7 @@ mod tests {
             assert_eq!(record["artifact_id"], *artifact_id);
             assert_eq!(record["file_name"], *file_name);
             assert!(package_dir.join(file_name).exists());
-            assert!(is_hex_root(
-                record["root"].as_str().expect("artifact root")
-            ));
+            assert!(is_hex_root(record["root"].as_str().expect("artifact root")));
             assert!(is_hex_root(
                 record["artifact_record_root"]
                     .as_str()
@@ -30889,10 +31537,7 @@ mod tests {
             &fs::read(package_dir.join("nebula-public-status.json")).expect("read status"),
         )
         .expect("status json");
-        assert_eq!(
-            artifacts[0]["root"],
-            status["public_status_manifest_root"]
-        );
+        assert_eq!(artifacts[0]["root"], status["public_status_manifest_root"]);
         let capture_plan: Value = serde_json::from_slice(
             &fs::read(package_dir.join("nebula-public-deployment-capture-plan.json"))
                 .expect("read capture plan"),
@@ -30904,13 +31549,19 @@ mod tests {
                 .expect("read capture todo"),
         )
         .expect("capture todo json");
-        assert_eq!(artifacts[8]["root"], capture_todo["public_capture_todo_root"]);
+        assert_eq!(
+            artifacts[8]["root"],
+            capture_todo["public_capture_todo_root"]
+        );
         assert_eq!(capture_todo["kind"], "nebula-public-capture-todo");
         assert_eq!(capture_todo["operator_fill_required"], true);
         assert_eq!(capture_todo["external_capture_required"], true);
         assert_eq!(capture_todo["usable_as_public_deployment_evidence"], false);
         assert_eq!(capture_todo["usable_as_mainnet_custody_approval"], false);
-        assert_eq!(capture_todo["capture_plan_root"], capture_plan["capture_plan_root"]);
+        assert_eq!(
+            capture_todo["capture_plan_root"],
+            capture_plan["capture_plan_root"]
+        );
         assert_eq!(
             capture_todo["deployment_preflight_checklist_root"],
             capture_plan["deployment_preflight"]["checklist_root"]
@@ -31027,14 +31678,8 @@ mod tests {
                 .as_str()
                 .expect("certification root")
         ));
-        assert_eq!(
-            certification["usable_as_public_deployment_evidence"],
-            false
-        );
-        assert_eq!(
-            certification["usable_as_mainnet_custody_approval"],
-            false
-        );
+        assert_eq!(certification["usable_as_public_deployment_evidence"], false);
+        assert_eq!(certification["usable_as_mainnet_custody_approval"], false);
         assert!(cert_dir
             .join("nebula-public-launch-readiness-report.json")
             .exists());
@@ -31170,9 +31815,10 @@ mod tests {
         write_public_launch_package(&package_dir_string, &summary)
             .expect("write public launch package");
 
-        let mut status: Value =
-            serde_json::from_slice(&fs::read(package_dir.join("nebula-public-status.json")).unwrap())
-                .expect("status json");
+        let mut status: Value = serde_json::from_slice(
+            &fs::read(package_dir.join("nebula-public-status.json")).unwrap(),
+        )
+        .expect("status json");
         status["latest_block_height"] = json!(summary.latest_block_height + 1);
         fs::write(
             package_dir.join("nebula-public-status.json"),
@@ -31446,7 +32092,9 @@ mod tests {
         );
         assert_eq!(
             value["incident_contact_probe"]["incident_response_contact_root"],
-            summary.public_bootstrap_profile.incident_response_contact_root
+            summary
+                .public_bootstrap_profile
+                .incident_response_contact_root
         );
         assert_eq!(
             value["incident_contact_probe"]["incident_handoff_available"],
@@ -31475,10 +32123,7 @@ mod tests {
                 .len(),
             7
         );
-        assert_eq!(
-            value["tls_endpoint_pins"][0]["tls_version"],
-            "TLS1.3"
-        );
+        assert_eq!(value["tls_endpoint_pins"][0]["tls_version"], "TLS1.3");
         assert_eq!(
             value["bootstrap_nodes"]
                 .as_array()
@@ -31544,13 +32189,16 @@ mod tests {
 
         let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read template"))
             .expect("public deployment evidence template json");
-        stale["public_launch_package_file_set_root"] =
-            json!(root(&["tampered-public-deployment-template-package", &summary.manifest_id]));
+        stale["public_launch_package_file_set_root"] = json!(root(&[
+            "tampered-public-deployment-template-package",
+            &summary.manifest_id
+        ]));
         let mut rootless = stale.clone();
         if let Some(map) = rootless.as_object_mut() {
             map.remove("template_root");
         }
-        stale["template_root"] = json!(value_root("public-deployment-evidence-template", &rootless));
+        stale["template_root"] =
+            json!(value_root("public-deployment-evidence-template", &rootless));
         ensure_public_deployment_evidence_template_safe(&stale)
             .expect("re-rooted template should remain structurally safe");
         fs::write(
@@ -31619,7 +32267,10 @@ mod tests {
             value["public_launch_artifact_manifest_root"],
             expected_artifact_manifest_root
         );
-        assert_eq!(value["public_launch_artifact_set_root"], expected_artifact_set_root);
+        assert_eq!(
+            value["public_launch_artifact_set_root"],
+            expected_artifact_set_root
+        );
         assert_eq!(
             value["public_launch_package_file_set_root"],
             expected_package_file_set_root
@@ -31726,8 +32377,7 @@ mod tests {
             value["public_launch_bundle_root"]
         );
         assert_eq!(
-            value["deployment_preflight"]["source_roots"]
-                ["public_launch_artifact_manifest_root"],
+            value["deployment_preflight"]["source_roots"]["public_launch_artifact_manifest_root"],
             expected_artifact_manifest_root
         );
         assert_eq!(
@@ -31746,8 +32396,14 @@ mod tests {
             value["package_handoff_capture"]["kind"],
             "nebula-public-launch-package-handoff-capture"
         );
-        assert_eq!(value["package_handoff_capture"]["operator_fill_required"], true);
-        assert_eq!(value["package_handoff_capture"]["actual_roots_embedded"], false);
+        assert_eq!(
+            value["package_handoff_capture"]["operator_fill_required"],
+            true
+        );
+        assert_eq!(
+            value["package_handoff_capture"]["actual_roots_embedded"],
+            false
+        );
         assert_eq!(
             value["package_handoff_capture"]["avoid_circular_manifest_root"],
             true
@@ -31973,9 +32629,8 @@ mod tests {
         verify_public_deployment_capture_plan(&path, &summary)
             .expect("verify public deployment capture plan");
 
-        let mut plan: Value =
-            serde_json::from_slice(&fs::read(&path).expect("read capture plan"))
-                .expect("capture plan json");
+        let mut plan: Value = serde_json::from_slice(&fs::read(&path).expect("read capture plan"))
+            .expect("capture plan json");
         plan["capture_contract"]["freshness_window_ms"] =
             json!(MAX_PUBLIC_DEPLOYMENT_FRESHNESS_MS + 1);
         fs::write(
@@ -31989,9 +32644,8 @@ mod tests {
 
         write_public_deployment_capture_plan(&path, &summary)
             .expect("rewrite public deployment capture plan");
-        let mut plan: Value =
-            serde_json::from_slice(&fs::read(&path).expect("read capture plan"))
-                .expect("capture plan json");
+        let mut plan: Value = serde_json::from_slice(&fs::read(&path).expect("read capture plan"))
+            .expect("capture plan json");
         plan["public_launch_bundle_root"] = json!(root(&["stale-launch-bundle-root"]));
         if let Some(object) = plan.as_object_mut() {
             object.remove("capture_plan_root");
@@ -32035,18 +32689,10 @@ mod tests {
         let summary = testnet.summary(Vec::new());
         write_public_launch_package(&package_dir_string, &summary)
             .expect("write public launch package");
-        write_public_deployment_capture_scaffold(
-            &scaffold_path,
-            &package_dir_string,
-            &summary,
-        )
-        .expect("write public deployment capture scaffold");
-        verify_public_deployment_capture_scaffold(
-            &scaffold_path,
-            &package_dir_string,
-            &summary,
-        )
-        .expect("verify public deployment capture scaffold");
+        write_public_deployment_capture_scaffold(&scaffold_path, &package_dir_string, &summary)
+            .expect("write public deployment capture scaffold");
+        verify_public_deployment_capture_scaffold(&scaffold_path, &package_dir_string, &summary)
+            .expect("verify public deployment capture scaffold");
 
         let scaffold: Value =
             serde_json::from_slice(&fs::read(&scaffold_path).expect("read scaffold"))
@@ -32107,8 +32753,8 @@ mod tests {
             scaffold["capture_contract_root"]
         );
 
-        let audit = public_deployment_capture_audit(&scaffold_path, &summary)
-            .expect("audit scaffold");
+        let audit =
+            public_deployment_capture_audit(&scaffold_path, &summary).expect("audit scaffold");
         assert_eq!(audit["missing_required_fields"], json!([]));
         assert_eq!(audit["capture_plan_root_matches"], true);
         assert_eq!(audit["capture_contract_root_matches"], true);
@@ -32145,18 +32791,10 @@ mod tests {
         let summary = testnet.summary(Vec::new());
         write_public_launch_package(&package_dir_string, &summary)
             .expect("write public launch package");
-        write_public_deployment_capture_scaffold(
-            &scaffold_path,
-            &package_dir_string,
-            &summary,
-        )
-        .expect("write public deployment capture scaffold");
-        verify_public_deployment_capture_scaffold(
-            &scaffold_path,
-            &package_dir_string,
-            &summary,
-        )
-        .expect("verify public deployment capture scaffold");
+        write_public_deployment_capture_scaffold(&scaffold_path, &package_dir_string, &summary)
+            .expect("write public deployment capture scaffold");
+        verify_public_deployment_capture_scaffold(&scaffold_path, &package_dir_string, &summary)
+            .expect("verify public deployment capture scaffold");
 
         let mut scaffold: Value =
             serde_json::from_slice(&fs::read(&scaffold_path).expect("read scaffold"))
@@ -32176,16 +32814,13 @@ mod tests {
         .expect_err("tampered scaffold should fail verification");
         assert!(error.contains("does not match this run and package"));
 
-        write_public_deployment_capture_scaffold(
-            &scaffold_path,
-            &package_dir_string,
-            &summary,
-        )
-        .expect("rewrite public deployment capture scaffold");
+        write_public_deployment_capture_scaffold(&scaffold_path, &package_dir_string, &summary)
+            .expect("rewrite public deployment capture scaffold");
         let package_manifest_path = package_dir.join("nebula-public-launch-package.json");
-        let mut package_manifest: Value =
-            serde_json::from_slice(&fs::read(&package_manifest_path).expect("read package manifest"))
-                .expect("package manifest json");
+        let mut package_manifest: Value = serde_json::from_slice(
+            &fs::read(&package_manifest_path).expect("read package manifest"),
+        )
+        .expect("package manifest json");
         package_manifest["package_file_set_root"] =
             json!(root(&["tampered-public-launch-package-file-set-root"]));
         fs::write(
@@ -32225,12 +32860,8 @@ mod tests {
         let summary = testnet.summary(Vec::new());
         write_public_launch_package(&package_dir_string, &summary)
             .expect("write public launch package");
-        write_public_deployment_capture_scaffold(
-            &scaffold_path,
-            &package_dir_string,
-            &summary,
-        )
-        .expect("write public deployment capture scaffold");
+        write_public_deployment_capture_scaffold(&scaffold_path, &package_dir_string, &summary)
+            .expect("write public deployment capture scaffold");
         write_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
             .expect("write public deployment capture audit");
         verify_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
@@ -32281,9 +32912,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let evidence_path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let evidence_path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let evidence =
             load_public_deployment_evidence(&evidence_path).expect("public deployment evidence");
         base_testnet.cli.public_deployment_evidence = Some(evidence);
@@ -32304,24 +32934,32 @@ mod tests {
         assert!(summary.public_deployment.capture_plan_bound);
         assert!(summary.public_deployment.capture_plan_root_bound);
         assert!(summary.public_deployment.capture_contract_root_bound);
-        assert!(summary
-            .public_deployment
-            .deployment_preflight_checklist_root_bound);
+        assert!(
+            summary
+                .public_deployment
+                .deployment_preflight_checklist_root_bound
+        );
         assert!(summary.public_deployment.matches_current_manifest);
         assert!(summary.public_deployment.public_launch_bundle_root_bound);
         assert!(summary.public_deployment.bootstrap_profile_bound);
-        assert!(summary
-            .public_deployment
-            .public_bootstrap_profile_root_bound);
-        assert!(summary
-            .public_deployment
-            .public_bootstrap_profile_report_root_bound);
+        assert!(
+            summary
+                .public_deployment
+                .public_bootstrap_profile_root_bound
+        );
+        assert!(
+            summary
+                .public_deployment
+                .public_bootstrap_profile_report_root_bound
+        );
         assert!(summary.public_deployment.rate_limit_policy_root_bound);
         assert!(summary.public_deployment.status_manifest_root_bound);
         assert!(summary.public_deployment.public_status_manifest_root_bound);
-        assert!(summary
-            .public_deployment
-            .public_status_manifest_payload_bound);
+        assert!(
+            summary
+                .public_deployment
+                .public_status_manifest_payload_bound
+        );
         assert!(summary.public_deployment.endpoint_set_public);
         assert!(summary.public_deployment.public_rpc_url_public);
         assert!(summary.public_deployment.public_p2p_endpoint_public);
@@ -32348,9 +32986,7 @@ mod tests {
         assert!(summary.public_deployment.tls_pins_bound);
         assert!(summary.public_deployment.tls_spki_pin_root_bound);
         assert!(summary.public_deployment.tls_endpoint_pin_set_root_bound);
-        assert!(summary
-            .public_deployment
-            .tls_endpoint_pin_count_sufficient);
+        assert!(summary.public_deployment.tls_endpoint_pin_count_sufficient);
         assert!(summary.public_deployment.tls_required);
         assert!(is_hex_root(
             summary
@@ -32373,12 +33009,12 @@ mod tests {
         assert!(summary.public_deployment.public_status_manifest_redacted);
         assert!(summary.public_deployment.no_private_summary_exposed);
         assert!(summary.public_deployment.proxy_policy_claims_root_bound);
-        assert!(summary
-            .public_deployment
-            .firewall_policy_claims_root_bound);
-        assert!(summary
-            .public_deployment
-            .rate_limit_policy_claims_root_bound);
+        assert!(summary.public_deployment.firewall_policy_claims_root_bound);
+        assert!(
+            summary
+                .public_deployment
+                .rate_limit_policy_claims_root_bound
+        );
         assert!(summary.public_deployment.private_summary_probe_root_bound);
         assert!(is_hex_root(
             summary
@@ -32411,33 +33047,45 @@ mod tests {
         assert!(summary.public_deployment.bootstrap_nodes_bound);
         assert!(summary.public_deployment.bootstrap_node_set_root_bound);
         assert!(summary.public_deployment.bootstrap_node_count_sufficient);
-        assert!(summary
-            .public_deployment
-            .bootstrap_operator_set_root_bound);
+        assert!(summary.public_deployment.bootstrap_operator_set_root_bound);
         assert!(summary.public_deployment.bootstrap_operator_count_bound);
-        assert!(summary
-            .public_deployment
-            .bootstrap_operator_registry_count_bound);
-        assert!(summary
-            .public_deployment
-            .bootstrap_operator_registry_root_bound);
-        assert!(summary
-            .public_deployment
-            .bootstrap_operator_signature_root_bound);
+        assert!(
+            summary
+                .public_deployment
+                .bootstrap_operator_registry_count_bound
+        );
+        assert!(
+            summary
+                .public_deployment
+                .bootstrap_operator_registry_root_bound
+        );
+        assert!(
+            summary
+                .public_deployment
+                .bootstrap_operator_signature_root_bound
+        );
         assert!(summary.public_deployment.bootstrap_region_set_root_bound);
-        assert!(summary
-            .public_deployment
-            .bootstrap_public_endpoint_count_bound);
+        assert!(
+            summary
+                .public_deployment
+                .bootstrap_public_endpoint_count_bound
+        );
         assert!(summary.public_deployment.bootstrap_node_probe_count_bound);
-        assert!(summary
-            .public_deployment
-            .bootstrap_node_probe_set_root_bound);
-        assert!(summary
-            .public_deployment
-            .bootstrap_p2p_endpoint_set_root_bound);
-        assert!(summary
-            .public_deployment
-            .bootstrap_status_page_set_root_bound);
+        assert!(
+            summary
+                .public_deployment
+                .bootstrap_node_probe_set_root_bound
+        );
+        assert!(
+            summary
+                .public_deployment
+                .bootstrap_p2p_endpoint_set_root_bound
+        );
+        assert!(
+            summary
+                .public_deployment
+                .bootstrap_status_page_set_root_bound
+        );
         assert_eq!(
             summary
                 .public_deployment
@@ -32506,20 +33154,20 @@ mod tests {
         assert!(summary.public_deployment.health_probe_root_bound);
         assert!(summary.public_deployment.status_page_probe_root_bound);
         assert!(summary.public_deployment.metrics_probe_root_bound);
-        assert!(summary
-            .public_deployment
-            .deployed_finality_probe_root_bound);
-        assert!(summary
-            .public_deployment
-            .incident_contact_probe_root_bound);
+        assert!(summary.public_deployment.deployed_finality_probe_root_bound);
+        assert!(summary.public_deployment.incident_contact_probe_root_bound);
         assert!(summary.public_deployment.faucet_probe_root_bound);
         assert!(summary.public_deployment.reset_runbook_probe_root_bound);
-        assert!(summary
-            .public_deployment
-            .live_private_summary_probe_root_bound);
-        assert!(summary
-            .public_deployment
-            .public_surface_probe_set_root_bound);
+        assert!(
+            summary
+                .public_deployment
+                .live_private_summary_probe_root_bound
+        );
+        assert!(
+            summary
+                .public_deployment
+                .public_surface_probe_set_root_bound
+        );
         assert!(summary.public_deployment.public_surface_probe_count_bound);
         assert!(summary.public_deployment.public_probe_set_root_bound);
         assert!(summary.public_deployment.public_probe_count_bound);
@@ -32560,12 +33208,16 @@ mod tests {
         );
         assert!(summary.public_deployment.preflight_receipt_bound);
         assert!(summary.public_deployment.preflight_receipt_root_bound);
-        assert!(summary
-            .public_deployment
-            .deployment_preflight_phase_set_root_bound);
-        assert!(summary
-            .public_deployment
-            .deployment_preflight_phase_count_bound);
+        assert!(
+            summary
+                .public_deployment
+                .deployment_preflight_phase_set_root_bound
+        );
+        assert!(
+            summary
+                .public_deployment
+                .deployment_preflight_phase_count_bound
+        );
         assert_eq!(
             summary
                 .public_deployment
@@ -32593,15 +33245,21 @@ mod tests {
             Some(REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len() as u64)
         );
         assert!(summary.public_deployment.runbook_receipt_bound);
-        assert!(summary
-            .public_deployment
-            .public_deployment_runbook_receipt_root_bound);
-        assert!(summary
-            .public_deployment
-            .public_deployment_runbook_step_receipt_set_root_bound);
-        assert!(summary
-            .public_deployment
-            .public_deployment_runbook_step_receipt_count_bound);
+        assert!(
+            summary
+                .public_deployment
+                .public_deployment_runbook_receipt_root_bound
+        );
+        assert!(
+            summary
+                .public_deployment
+                .public_deployment_runbook_step_receipt_set_root_bound
+        );
+        assert!(
+            summary
+                .public_deployment
+                .public_deployment_runbook_step_receipt_count_bound
+        );
         assert_eq!(
             summary
                 .public_deployment
@@ -32628,12 +33286,16 @@ mod tests {
                 .expected_public_deployment_runbook_step_receipt_count,
             Some(PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64)
         );
-        assert!(summary
-            .public_deployment
-            .public_deployment_runbook_root_bound);
-        assert!(summary
-            .public_deployment
-            .public_deployment_runbook_step_set_root_bound);
+        assert!(
+            summary
+                .public_deployment
+                .public_deployment_runbook_root_bound
+        );
+        assert!(
+            summary
+                .public_deployment
+                .public_deployment_runbook_step_set_root_bound
+        );
         let expected_runbook = public_deployment_runbook(&summary);
         assert_eq!(
             summary
@@ -32771,9 +33433,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let evidence_path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let evidence_path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let stale_evidence =
             load_public_deployment_evidence(&evidence_path).expect("public deployment evidence");
 
@@ -32800,9 +33461,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         evidence.public_bootstrap_profile_root =
@@ -32815,12 +33475,16 @@ mod tests {
         let summary = base_testnet.summary(Vec::new());
         assert!(!summary.public_deployment.passed);
         assert!(!summary.public_deployment.bootstrap_profile_bound);
-        assert!(!summary
-            .public_deployment
-            .public_bootstrap_profile_root_bound);
-        assert!(!summary
-            .public_deployment
-            .public_bootstrap_profile_report_root_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .public_bootstrap_profile_root_bound
+        );
+        assert!(
+            !summary
+                .public_deployment
+                .public_bootstrap_profile_report_root_bound
+        );
         assert!(!summary.public_deployment.rate_limit_policy_root_bound);
         assert!(is_hex_root(
             summary
@@ -32871,9 +33535,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let capture_path = write_public_deployment_evidence(&valid_public_deployment_capture(
-            &base_summary,
-        ));
+        let capture_path =
+            write_public_deployment_evidence(&valid_public_deployment_capture(&base_summary));
         let output_path = temp_json_path("nebula-public-deployment-assembled");
         let evidence = write_public_deployment_evidence_from_capture(
             &capture_path,
@@ -32894,7 +33557,9 @@ mod tests {
         assert!(is_hex_root(&evidence.bootstrap_status_page_set_root));
         assert!(is_hex_root(&evidence.deployment_preflight_receipt_root));
         assert!(is_hex_root(&evidence.deployment_preflight_phase_set_root));
-        assert!(is_hex_root(&evidence.public_deployment_runbook_receipt_root));
+        assert!(is_hex_root(
+            &evidence.public_deployment_runbook_receipt_root
+        ));
         assert!(is_hex_root(
             &evidence.public_deployment_runbook_step_receipt_set_root
         ));
@@ -32910,8 +33575,9 @@ mod tests {
             evidence.bootstrap_public_endpoint_count,
             evidence.bootstrap_node_count
         );
-        let assembled: Value = serde_json::from_slice(&fs::read(&output_path).expect("read output"))
-            .expect("assembled json");
+        let assembled: Value =
+            serde_json::from_slice(&fs::read(&output_path).expect("read output"))
+                .expect("assembled json");
         assert_eq!(
             assembled["schema_version"],
             PUBLIC_DEPLOYMENT_EVIDENCE_SCHEMA_VERSION
@@ -32965,9 +33631,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let capture_path = write_public_deployment_evidence(&valid_public_deployment_capture(
-            &base_summary,
-        ));
+        let capture_path =
+            write_public_deployment_evidence(&valid_public_deployment_capture(&base_summary));
         let evidence = verify_public_deployment_capture(&capture_path, &base_summary)
             .expect("verify deployment capture");
         assert!(is_hex_root(&evidence.evidence_root));
@@ -33010,7 +33675,10 @@ mod tests {
         let missing = audit["missing_required_fields"]
             .as_array()
             .expect("missing fields");
-        assert_eq!(missing.len(), REQUIRED_PUBLIC_DEPLOYMENT_CAPTURE_FIELDS.len());
+        assert_eq!(
+            missing.len(),
+            REQUIRED_PUBLIC_DEPLOYMENT_CAPTURE_FIELDS.len()
+        );
         assert!(missing
             .iter()
             .any(|field| field.as_str() == Some("capture_plan_root")));
@@ -33024,10 +33692,7 @@ mod tests {
         assert!(missing_endpoints
             .iter()
             .any(|field| field.as_str() == Some("public_rpc_url")));
-        assert_eq!(
-            audit["public_launch_package_file_set_root_matches"],
-            false
-        );
+        assert_eq!(audit["public_launch_package_file_set_root_matches"], false);
         assert!(is_hex_root(
             audit["capture_audit_root"].as_str().expect("audit root")
         ));
@@ -33055,10 +33720,7 @@ mod tests {
         assert_eq!(audit["strict_verifier_passed"], false);
         assert_eq!(audit["strict_verifier_error"], Value::Null);
         assert_eq!(audit["assembler_ready"], false);
-        assert_eq!(
-            audit["missing_endpoint_fields"],
-            json!(["public_rpc_url"])
-        );
+        assert_eq!(audit["missing_endpoint_fields"], json!(["public_rpc_url"]));
         assert!(audit["structural_failed_checks"]
             .as_array()
             .expect("structural failed checks")
@@ -33248,7 +33910,10 @@ mod tests {
             PUBLIC_TLS_ENDPOINT_PIN_ROLES.len() as u64 - 1
         );
         assert_eq!(audit["tls_endpoint_pin_coverage_valid"], false);
-        assert_eq!(audit["missing_tls_endpoint_pin_roles"], json!([missing_role]));
+        assert_eq!(
+            audit["missing_tls_endpoint_pin_roles"],
+            json!([missing_role])
+        );
         assert!(audit["structural_failed_checks"]
             .as_array()
             .expect("structural failed checks")
@@ -33279,10 +33944,19 @@ mod tests {
         assert_eq!(audit["strict_verifier_passed"], false);
         assert_eq!(audit["strict_verifier_error"], Value::Null);
         assert_eq!(audit["tls_endpoint_pin_fields_valid"], false);
-        assert_eq!(audit["invalid_tls_endpoint_pin_binding_indexes"], json!([0]));
-        assert_eq!(audit["invalid_tls_endpoint_pin_endpoint_indexes"], json!([0, 1]));
+        assert_eq!(
+            audit["invalid_tls_endpoint_pin_binding_indexes"],
+            json!([0])
+        );
+        assert_eq!(
+            audit["invalid_tls_endpoint_pin_endpoint_indexes"],
+            json!([0, 1])
+        );
         assert_eq!(audit["duplicate_tls_endpoint_pin_url_indexes"], json!([1]));
-        assert_eq!(audit["invalid_tls_endpoint_pin_assertion_indexes"], json!([0]));
+        assert_eq!(
+            audit["invalid_tls_endpoint_pin_assertion_indexes"],
+            json!([0])
+        );
         assert_eq!(
             audit["invalid_tls_endpoint_pin_observation_time_indexes"],
             json!([0])
@@ -33310,8 +33984,7 @@ mod tests {
                 .expect("deployment capture json");
         capture["deployment_preflight_receipt"]["completed"] = json!(false);
         capture["deployment_preflight_receipt"]["phases"][0]["completed"] = json!(false);
-        capture["deployment_preflight_receipt"]["phases"][0]["id"] =
-            json!("wrong-preflight-phase");
+        capture["deployment_preflight_receipt"]["phases"][0]["id"] = json!("wrong-preflight-phase");
         capture["deployment_preflight_receipt"]["phases"][0]["completed_at_unix_ms"] = json!(0);
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let audit = public_deployment_capture_audit(&capture_path, &base_summary)
@@ -33429,9 +34102,18 @@ mod tests {
         assert_eq!(audit["strict_verifier_passed"], false);
         assert_eq!(audit["strict_verifier_error"], Value::Null);
         assert_eq!(audit["public_surface_probe_fields_valid"], false);
-        assert_eq!(audit["invalid_public_surface_probe_status_indexes"], json!([0]));
-        assert_eq!(audit["invalid_public_surface_probe_binding_indexes"], json!([0]));
-        assert_eq!(audit["invalid_public_surface_probe_endpoint_indexes"], json!([0]));
+        assert_eq!(
+            audit["invalid_public_surface_probe_status_indexes"],
+            json!([0])
+        );
+        assert_eq!(
+            audit["invalid_public_surface_probe_binding_indexes"],
+            json!([0])
+        );
+        assert_eq!(
+            audit["invalid_public_surface_probe_endpoint_indexes"],
+            json!([0])
+        );
         assert_eq!(
             audit["invalid_public_surface_probe_observation_time_indexes"],
             json!([0])
@@ -33481,7 +34163,10 @@ mod tests {
         );
         assert_eq!(audit["bootstrap_node_count_valid"], true);
         assert_eq!(audit["bootstrap_node_probe_coverage_valid"], false);
-        assert_eq!(audit["missing_bootstrap_node_probe_slots"], json!([missing_slot]));
+        assert_eq!(
+            audit["missing_bootstrap_node_probe_slots"],
+            json!([missing_slot])
+        );
         assert!(audit["structural_failed_checks"]
             .as_array()
             .expect("structural failed checks")
@@ -33512,9 +34197,18 @@ mod tests {
         assert_eq!(audit["strict_verifier_passed"], false);
         assert_eq!(audit["strict_verifier_error"], Value::Null);
         assert_eq!(audit["bootstrap_node_probe_fields_valid"], false);
-        assert_eq!(audit["invalid_bootstrap_node_probe_binding_indexes"], json!([0]));
-        assert_eq!(audit["invalid_bootstrap_node_probe_endpoint_indexes"], json!([0]));
-        assert_eq!(audit["invalid_bootstrap_node_probe_handshake_indexes"], json!([0]));
+        assert_eq!(
+            audit["invalid_bootstrap_node_probe_binding_indexes"],
+            json!([0])
+        );
+        assert_eq!(
+            audit["invalid_bootstrap_node_probe_endpoint_indexes"],
+            json!([0])
+        );
+        assert_eq!(
+            audit["invalid_bootstrap_node_probe_handshake_indexes"],
+            json!([0])
+        );
         assert_eq!(
             audit["invalid_bootstrap_node_probe_status_page_indexes"],
             json!([0])
@@ -33560,11 +34254,16 @@ mod tests {
         assert_eq!(audit["strict_verifier_error"], Value::Null);
         assert_eq!(
             audit["bootstrap_operator_count"],
-            base_summary.public_bootstrap_profile.bootstrap_operator_count
+            base_summary
+                .public_bootstrap_profile
+                .bootstrap_operator_count
         );
         assert_eq!(
             audit["bootstrap_operator_registry_count"],
-            base_summary.public_bootstrap_profile.bootstrap_operator_count - 1
+            base_summary
+                .public_bootstrap_profile
+                .bootstrap_operator_count
+                - 1
         );
         assert_eq!(audit["bootstrap_operator_count_valid"], true);
         assert_eq!(audit["bootstrap_operator_registry_coverage_valid"], false);
@@ -33766,10 +34465,7 @@ mod tests {
         assert_eq!(audit["strict_verifier_error"], Value::Null);
         assert_eq!(audit["probe_observer_signatures_present"], false);
         assert_eq!(audit["probe_observer_signatures_verified"], false);
-        assert_eq!(
-            audit["probe_observer_signature_verifications_valid"],
-            false
-        );
+        assert_eq!(audit["probe_observer_signature_verifications_valid"], false);
         assert_eq!(audit["unsigned_probe_observer_indexes"], json!([0]));
         assert_eq!(audit["unverified_probe_observer_indexes"], json!([1]));
         assert_eq!(
@@ -33798,9 +34494,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let capture_path = write_public_deployment_evidence(&valid_public_deployment_capture(
-            &base_summary,
-        ));
+        let capture_path =
+            write_public_deployment_evidence(&valid_public_deployment_capture(&base_summary));
         let audit = public_deployment_capture_audit(&capture_path, &base_summary)
             .expect("audit complete capture");
         assert_eq!(audit["structural_ready"], true);
@@ -33843,7 +34538,10 @@ mod tests {
         assert_eq!(audit["public_status_manifest_root_matches"], true);
         assert_eq!(
             audit["expected_public_launch_package_file_set_root"],
-            public_launch_package_file_set_root(&base_summary.manifest_id, &base_summary.testnet_id)
+            public_launch_package_file_set_root(
+                &base_summary.manifest_id,
+                &base_summary.testnet_id
+            )
         );
         assert_eq!(audit["public_launch_package_file_set_root_matches"], true);
         assert_eq!(
@@ -33873,8 +34571,10 @@ mod tests {
             json!(root(&["test-public-deployment", "wrong-capture-plan"]));
         capture["capture_contract_root"] =
             json!(root(&["test-public-deployment", "wrong-capture-contract"]));
-        capture["deployment_preflight_checklist_root"] =
-            json!(root(&["test-public-deployment", "wrong-preflight-checklist"]));
+        capture["deployment_preflight_checklist_root"] = json!(root(&[
+            "test-public-deployment",
+            "wrong-preflight-checklist"
+        ]));
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let audit = public_deployment_capture_audit(&capture_path, &base_summary)
             .expect("audit capture root mismatch");
@@ -33884,10 +34584,7 @@ mod tests {
         assert_eq!(audit["assembler_ready"], false);
         assert_eq!(audit["capture_plan_root_matches"], false);
         assert_eq!(audit["capture_contract_root_matches"], false);
-        assert_eq!(
-            audit["deployment_preflight_checklist_root_matches"],
-            false
-        );
+        assert_eq!(audit["deployment_preflight_checklist_root_matches"], false);
         assert!(is_hex_root(
             audit["expected_capture_plan_root"]
                 .as_str()
@@ -33970,8 +34667,10 @@ mod tests {
         let mut capture: Value =
             serde_json::from_str(&valid_public_deployment_capture(&base_summary))
                 .expect("deployment capture json");
-        capture["public_launch_package_file_set_root"] =
-            json!(root(&["test-public-deployment", "wrong-package-file-set-capture"]));
+        capture["public_launch_package_file_set_root"] = json!(root(&[
+            "test-public-deployment",
+            "wrong-package-file-set-capture"
+        ]));
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let audit = public_deployment_capture_audit(&capture_path, &base_summary)
             .expect("audit package-file-set mismatch");
@@ -33981,10 +34680,7 @@ mod tests {
         assert_eq!(audit["assembler_ready"], false);
         assert_eq!(audit["capture_plan_root_matches"], true);
         assert_eq!(audit["capture_contract_root_matches"], true);
-        assert_eq!(
-            audit["deployment_preflight_checklist_root_matches"],
-            true
-        );
+        assert_eq!(audit["deployment_preflight_checklist_root_matches"], true);
         assert_eq!(audit["public_launch_package_file_set_root_matches"], false);
         assert_eq!(
             audit["structural_failed_checks"],
@@ -33996,7 +34692,10 @@ mod tests {
         );
         assert_eq!(
             audit["expected_public_launch_package_file_set_root"],
-            public_launch_package_file_set_root(&base_summary.manifest_id, &base_summary.testnet_id)
+            public_launch_package_file_set_root(
+                &base_summary.manifest_id,
+                &base_summary.testnet_id
+            )
         );
         let _ = fs::remove_file(capture_path);
     }
@@ -34013,8 +34712,10 @@ mod tests {
                 .expect("deployment capture json");
         capture["public_launch_package_manifest_root"] =
             json!(root(&["test-public-deployment", "wrong-package-manifest"]));
-        capture["public_launch_readiness_artifact_root"] =
-            json!(root(&["test-public-deployment", "wrong-readiness-artifact"]));
+        capture["public_launch_readiness_artifact_root"] = json!(root(&[
+            "test-public-deployment",
+            "wrong-readiness-artifact"
+        ]));
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let audit = public_deployment_capture_audit(&capture_path, &base_summary)
             .expect("audit package handoff root mismatch");
@@ -34023,7 +34724,10 @@ mod tests {
         assert_eq!(audit["strict_verifier_error"], Value::Null);
         assert_eq!(audit["assembler_ready"], false);
         assert_eq!(audit["public_launch_package_manifest_root_matches"], false);
-        assert_eq!(audit["public_launch_readiness_artifact_root_matches"], false);
+        assert_eq!(
+            audit["public_launch_readiness_artifact_root_matches"],
+            false
+        );
         assert_eq!(
             audit["expected_public_launch_package_manifest_root"],
             public_launch_package_manifest_root_for_summary(&base_summary)
@@ -34093,9 +34797,12 @@ mod tests {
             json!(root(&["test-public-deployment", "wrong-capture-plan"]));
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let output_path = temp_json_path("nebula-public-deployment-wrong-capture-plan");
-        let error =
-            write_public_deployment_evidence_from_capture(&capture_path, &output_path, &base_summary)
-                .expect_err("mismatched capture plan root must fail assembly");
+        let error = write_public_deployment_evidence_from_capture(
+            &capture_path,
+            &output_path,
+            &base_summary,
+        )
+        .expect_err("mismatched capture plan root must fail assembly");
         assert!(error.contains("public deployment capture_plan_root mismatch"));
         let _ = fs::remove_file(capture_path);
         let _ = fs::remove_file(output_path);
@@ -34117,9 +34824,12 @@ mod tests {
             .remove("deployment_preflight_receipt");
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let output_path = temp_json_path("nebula-public-deployment-missing-preflight-receipt");
-        let error =
-            write_public_deployment_evidence_from_capture(&capture_path, &output_path, &base_summary)
-                .expect_err("missing deployment preflight receipt must fail assembly");
+        let error = write_public_deployment_evidence_from_capture(
+            &capture_path,
+            &output_path,
+            &base_summary,
+        )
+        .expect_err("missing deployment preflight receipt must fail assembly");
         assert!(error.contains("public deployment capture missing 'deployment_preflight_receipt'"));
         let _ = fs::remove_file(capture_path);
         let _ = fs::remove_file(output_path);
@@ -34141,10 +34851,15 @@ mod tests {
             .remove("public_deployment_runbook_receipt");
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let output_path = temp_json_path("nebula-public-deployment-missing-runbook-receipt");
-        let error =
-            write_public_deployment_evidence_from_capture(&capture_path, &output_path, &base_summary)
-                .expect_err("missing deployment runbook receipt must fail assembly");
-        assert!(error.contains("public deployment capture missing 'public_deployment_runbook_receipt'"));
+        let error = write_public_deployment_evidence_from_capture(
+            &capture_path,
+            &output_path,
+            &base_summary,
+        )
+        .expect_err("missing deployment runbook receipt must fail assembly");
+        assert!(
+            error.contains("public deployment capture missing 'public_deployment_runbook_receipt'")
+        );
         let _ = fs::remove_file(capture_path);
         let _ = fs::remove_file(output_path);
     }
@@ -34162,9 +34877,12 @@ mod tests {
         capture["public_deployment_runbook_receipt"]["steps"][0]["completed"] = json!(false);
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let output_path = temp_json_path("nebula-public-deployment-incomplete-runbook-receipt");
-        let error =
-            write_public_deployment_evidence_from_capture(&capture_path, &output_path, &base_summary)
-                .expect_err("incomplete deployment runbook receipt must fail assembly");
+        let error = write_public_deployment_evidence_from_capture(
+            &capture_path,
+            &output_path,
+            &base_summary,
+        )
+        .expect_err("incomplete deployment runbook receipt must fail assembly");
         assert!(error.contains("runbook receipt step must be required and completed"));
         let _ = fs::remove_file(capture_path);
         let _ = fs::remove_file(output_path);
@@ -34184,9 +34902,12 @@ mod tests {
             json!(PUBLIC_DEPLOYMENT_RUNBOOK_STEPS[1]);
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let output_path = temp_json_path("nebula-public-deployment-wrong-runbook-step");
-        let error =
-            write_public_deployment_evidence_from_capture(&capture_path, &output_path, &base_summary)
-                .expect_err("wrong deployment runbook step order must fail assembly");
+        let error = write_public_deployment_evidence_from_capture(
+            &capture_path,
+            &output_path,
+            &base_summary,
+        )
+        .expect_err("wrong deployment runbook step order must fail assembly");
         assert!(error.contains("runbook receipt step order/id mismatch"));
         let _ = fs::remove_file(capture_path);
         let _ = fs::remove_file(output_path);
@@ -34205,9 +34926,12 @@ mod tests {
         capture["deployment_preflight_receipt"]["phases"][0]["completed"] = json!(false);
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let output_path = temp_json_path("nebula-public-deployment-incomplete-preflight-receipt");
-        let error =
-            write_public_deployment_evidence_from_capture(&capture_path, &output_path, &base_summary)
-                .expect_err("incomplete deployment preflight receipt must fail assembly");
+        let error = write_public_deployment_evidence_from_capture(
+            &capture_path,
+            &output_path,
+            &base_summary,
+        )
+        .expect_err("incomplete deployment preflight receipt must fail assembly");
         assert!(error.contains("preflight receipt phase must be required and completed"));
         let _ = fs::remove_file(capture_path);
         let _ = fs::remove_file(output_path);
@@ -34227,9 +34951,12 @@ mod tests {
             json!(REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES[1]);
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let output_path = temp_json_path("nebula-public-deployment-wrong-preflight-phase");
-        let error =
-            write_public_deployment_evidence_from_capture(&capture_path, &output_path, &base_summary)
-                .expect_err("wrong deployment preflight phase order must fail assembly");
+        let error = write_public_deployment_evidence_from_capture(
+            &capture_path,
+            &output_path,
+            &base_summary,
+        )
+        .expect_err("wrong deployment preflight phase order must fail assembly");
         assert!(error.contains("preflight receipt phase order/id mismatch"));
         let _ = fs::remove_file(capture_path);
         let _ = fs::remove_file(output_path);
@@ -34251,9 +34978,12 @@ mod tests {
             .pop();
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let output_path = temp_json_path("nebula-public-deployment-missing-surface-probe");
-        let error =
-            write_public_deployment_evidence_from_capture(&capture_path, &output_path, &base_summary)
-                .expect_err("missing typed public surface probe must fail assembly");
+        let error = write_public_deployment_evidence_from_capture(
+            &capture_path,
+            &output_path,
+            &base_summary,
+        )
+        .expect_err("missing typed public surface probe must fail assembly");
         assert!(error.contains("public_surface_probes must cover every required public surface"));
         let _ = fs::remove_file(capture_path);
         let _ = fs::remove_file(output_path);
@@ -34273,16 +35003,20 @@ mod tests {
             json!("wrong-public-surface-run-id");
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let output_path = temp_json_path("nebula-public-deployment-wrong-surface-run-id");
-        let error =
-            write_public_deployment_evidence_from_capture(&capture_path, &output_path, &base_summary)
-                .expect_err("mismatched typed public surface probe run id must fail assembly");
+        let error = write_public_deployment_evidence_from_capture(
+            &capture_path,
+            &output_path,
+            &base_summary,
+        )
+        .expect_err("mismatched typed public surface probe run id must fail assembly");
         assert!(error.contains("public deployment surface probe deployment_run_id mismatch"));
         let _ = fs::remove_file(capture_path);
         let _ = fs::remove_file(output_path);
     }
 
     #[test]
-    fn public_deployment_evidence_assembler_rejects_missing_public_surface_probe_observation_time() {
+    fn public_deployment_evidence_assembler_rejects_missing_public_surface_probe_observation_time()
+    {
         let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
             .expect("mainnet readiness should parse");
         let mut base_testnet = Testnet::new(base_cli);
@@ -34297,9 +35031,12 @@ mod tests {
             .remove("observed_at_unix_ms");
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let output_path = temp_json_path("nebula-public-deployment-missing-surface-observed-at");
-        let error =
-            write_public_deployment_evidence_from_capture(&capture_path, &output_path, &base_summary)
-                .expect_err("missing typed public surface probe observed_at must fail assembly");
+        let error = write_public_deployment_evidence_from_capture(
+            &capture_path,
+            &output_path,
+            &base_summary,
+        )
+        .expect_err("missing typed public surface probe observed_at must fail assembly");
         assert!(error.contains("public deployment surface probe missing observed_at_unix_ms"));
         let _ = fs::remove_file(capture_path);
         let _ = fs::remove_file(output_path);
@@ -34318,12 +35055,15 @@ mod tests {
         capture["public_surface_probes"][0]["observed_at_unix_ms"] = json!(0);
         let capture_path = write_public_deployment_evidence(&capture.to_string());
         let output_path = temp_json_path("nebula-public-deployment-stale-surface-observed-at");
-        let error =
-            write_public_deployment_evidence_from_capture(&capture_path, &output_path, &base_summary)
-                .expect_err("stale typed public surface probe observed_at must fail assembly");
-        assert!(
-            error.contains("public deployment surface probe observation time is outside freshness window")
-        );
+        let error = write_public_deployment_evidence_from_capture(
+            &capture_path,
+            &output_path,
+            &base_summary,
+        )
+        .expect_err("stale typed public surface probe observed_at must fail assembly");
+        assert!(error.contains(
+            "public deployment surface probe observation time is outside freshness window"
+        ));
         let _ = fs::remove_file(capture_path);
         let _ = fs::remove_file(output_path);
     }
@@ -34414,13 +35154,11 @@ mod tests {
             &base_summary,
         )
         .expect("assemble deployment evidence");
-        let evidence_value =
-            serde_json::to_value(&evidence).expect("deployment evidence value");
+        let evidence_value = serde_json::to_value(&evidence).expect("deployment evidence value");
         assert_ne!(evidence.public_probe_set_root, spoofed_probe_set_root);
         assert_eq!(
             evidence.public_probe_set_root,
-            public_deployment_probe_set_root_from_value(&evidence_value)
-                .expect("probe set root")
+            public_deployment_probe_set_root_from_value(&evidence_value).expect("probe set root")
         );
         assert_eq!(
             evidence.public_probe_count,
@@ -34602,8 +35340,10 @@ mod tests {
         let mut capture: Value =
             serde_json::from_str(&valid_public_deployment_capture(&base_summary))
                 .expect("deployment capture json");
-        capture["bootstrap_nodes"][0]["node_slot_root"] =
-            json!(root(&["test-public-deployment", "tampered-bootstrap-node-slot"]));
+        capture["bootstrap_nodes"][0]["node_slot_root"] = json!(root(&[
+            "test-public-deployment",
+            "tampered-bootstrap-node-slot"
+        ]));
         let capture_path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&capture).expect("capture json"),
         );
@@ -34685,8 +35425,7 @@ mod tests {
         let mut capture: Value =
             serde_json::from_str(&valid_public_deployment_capture(&base_summary))
                 .expect("deployment capture json");
-        capture["bootstrap_node_probes"][0]["deployment_run_id"] =
-            json!("wrong-deployment-run");
+        capture["bootstrap_node_probes"][0]["deployment_run_id"] = json!("wrong-deployment-run");
         let capture_path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&capture).expect("capture json"),
         );
@@ -35073,9 +35812,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
@@ -35100,8 +35838,10 @@ mod tests {
         let mut value: Value =
             serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
                 .expect("deployment evidence json");
-        value["probe_observers"][0]["signature_payload_root"] =
-            json!(root(&["test-public-deployment", "tampered-signature-payload"]));
+        value["probe_observers"][0]["signature_payload_root"] = json!(root(&[
+            "test-public-deployment",
+            "tampered-signature-payload"
+        ]));
         let bad_path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&value).expect("bad evidence json"),
         );
@@ -35121,8 +35861,10 @@ mod tests {
         let mut value: Value =
             serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
                 .expect("deployment evidence json");
-        value["deployment_preflight_receipt_root"] =
-            json!(root(&["test-public-deployment", "tampered-preflight-receipt"]));
+        value["deployment_preflight_receipt_root"] = json!(root(&[
+            "test-public-deployment",
+            "tampered-preflight-receipt"
+        ]));
         let bad_path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&value).expect("bad evidence json"),
         );
@@ -35142,8 +35884,10 @@ mod tests {
         let mut value: Value =
             serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
                 .expect("deployment evidence json");
-        value["public_deployment_runbook_receipt_root"] =
-            json!(root(&["test-public-deployment", "tampered-runbook-receipt"]));
+        value["public_deployment_runbook_receipt_root"] = json!(root(&[
+            "test-public-deployment",
+            "tampered-runbook-receipt"
+        ]));
         let bad_path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&value).expect("bad evidence json"),
         );
@@ -35163,8 +35907,10 @@ mod tests {
         let mut value: Value =
             serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
                 .expect("deployment evidence json");
-        value["bootstrap_p2p_endpoint_set_root"] =
-            json!(root(&["test-public-deployment", "tampered-p2p-endpoint-set"]));
+        value["bootstrap_p2p_endpoint_set_root"] = json!(root(&[
+            "test-public-deployment",
+            "tampered-p2p-endpoint-set"
+        ]));
         let bad_path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&value).expect("bad evidence json"),
         );
@@ -35184,11 +35930,14 @@ mod tests {
         let mut value: Value =
             serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
                 .expect("deployment evidence json");
-        value["bootstrap_operator_count"] =
-            json!(base_summary.public_bootstrap_profile.bootstrap_operator_count + 1);
-        value["evidence_root"] = json!(
-            public_deployment_attestation_root_from_value(&value).expect("evidence root")
+        value["bootstrap_operator_count"] = json!(
+            base_summary
+                .public_bootstrap_profile
+                .bootstrap_operator_count
+                + 1
         );
+        value["evidence_root"] =
+            json!(public_deployment_attestation_root_from_value(&value).expect("evidence root"));
         let bad_path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&value).expect("bad evidence json"),
         );
@@ -35208,11 +35957,12 @@ mod tests {
         let mut value: Value =
             serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
                 .expect("deployment evidence json");
-        value["bootstrap_operator_registry_root"] =
-            json!(root(&["test-public-deployment", "tampered-operator-registry"]));
-        value["evidence_root"] = json!(
-            public_deployment_attestation_root_from_value(&value).expect("evidence root")
-        );
+        value["bootstrap_operator_registry_root"] = json!(root(&[
+            "test-public-deployment",
+            "tampered-operator-registry"
+        ]));
+        value["evidence_root"] =
+            json!(public_deployment_attestation_root_from_value(&value).expect("evidence root"));
         let bad_path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&value).expect("bad evidence json"),
         );
@@ -35256,11 +36006,9 @@ mod tests {
         value["public_probe_set_root"] =
             json!(root(&["test-public-deployment", "tampered-probe-set"]));
         value["provenance_root"] =
-            json!(public_deployment_provenance_root_from_value(&value)
-                .expect("provenance root"));
+            json!(public_deployment_provenance_root_from_value(&value).expect("provenance root"));
         value["evidence_root"] =
-            json!(public_deployment_attestation_root_from_value(&value)
-                .expect("evidence root"));
+            json!(public_deployment_attestation_root_from_value(&value).expect("evidence root"));
         let bad_path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&value).expect("bad evidence json"),
         );
@@ -35277,9 +36025,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         evidence.capture_plan_root = root(&["test-public-deployment", "wrong-capture-plan"]);
@@ -35293,9 +36040,11 @@ mod tests {
         assert!(!summary.public_deployment.capture_plan_bound);
         assert!(!summary.public_deployment.capture_plan_root_bound);
         assert!(!summary.public_deployment.capture_contract_root_bound);
-        assert!(!summary
-            .public_deployment
-            .deployment_preflight_checklist_root_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .deployment_preflight_checklist_root_bound
+        );
         assert!(is_hex_root(
             summary
                 .public_deployment
@@ -35344,14 +36093,20 @@ mod tests {
                 .repair_roots
                 .get("capture_plan_root_bound")
                 .map(String::as_str),
-            summary.public_deployment.expected_capture_plan_root.as_deref()
+            summary
+                .public_deployment
+                .expected_capture_plan_root
+                .as_deref()
         );
         assert_eq!(
             remediation
                 .repair_roots
                 .get("capture_contract_root_bound")
                 .map(String::as_str),
-            summary.public_deployment.expected_capture_contract_root.as_deref()
+            summary
+                .public_deployment
+                .expected_capture_contract_root
+                .as_deref()
         );
         assert_eq!(
             remediation
@@ -35374,9 +36129,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
@@ -35394,12 +36148,16 @@ mod tests {
         assert!(!summary.public_deployment.passed);
         assert!(!summary.public_deployment.preflight_receipt_bound);
         assert!(!summary.public_deployment.preflight_receipt_root_bound);
-        assert!(!summary
-            .public_deployment
-            .deployment_preflight_phase_set_root_bound);
-        assert!(!summary
-            .public_deployment
-            .deployment_preflight_phase_count_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .deployment_preflight_phase_set_root_bound
+        );
+        assert!(
+            !summary
+                .public_deployment
+                .deployment_preflight_phase_count_bound
+        );
         assert_eq!(
             summary
                 .public_deployment
@@ -35465,9 +36223,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         evidence.placeholders_absent = false;
@@ -35501,11 +36258,9 @@ mod tests {
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
         assert!(base_summary.public_bootstrap_profile.passed);
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
-        let evidence =
-            load_public_deployment_evidence(&path).expect("public deployment evidence");
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
+        let evidence = load_public_deployment_evidence(&path).expect("public deployment evidence");
         base_testnet.cli.public_bootstrap_node_count = 1;
         base_testnet.cli.public_deployment_evidence = Some(evidence);
         let summary = base_testnet.summary(Vec::new());
@@ -35539,9 +36294,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         evidence.public_rpc_url = "http://127.0.0.1:58480/status".to_string();
@@ -35552,8 +36306,7 @@ mod tests {
         evidence.incident_contact_url =
             "http://ops.public.nebula.example/incident-contact".to_string();
         evidence.faucet_url = "http://faucet.public.nebula.example".to_string();
-        evidence.reset_runbook_url =
-            "http://ops.public.nebula.example/reset-runbook".to_string();
+        evidence.reset_runbook_url = "http://ops.public.nebula.example/reset-runbook".to_string();
         base_testnet.cli.public_deployment_evidence = Some(evidence);
         let summary = base_testnet.summary(Vec::new());
         assert!(!summary.public_deployment.passed);
@@ -35612,9 +36365,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let expected_tls_spki_pin_root = evidence.tls_spki_pin_root.clone();
@@ -35630,9 +36382,7 @@ mod tests {
         assert!(!summary.public_deployment.tls_pins_bound);
         assert!(!summary.public_deployment.tls_spki_pin_root_bound);
         assert!(!summary.public_deployment.tls_endpoint_pin_set_root_bound);
-        assert!(!summary
-            .public_deployment
-            .tls_endpoint_pin_count_sufficient);
+        assert!(!summary.public_deployment.tls_endpoint_pin_count_sufficient);
         assert!(!summary.public_deployment.tls_required);
         assert_eq!(summary.public_deployment.tls_endpoint_pin_count, 1);
         assert_eq!(
@@ -35709,16 +36459,14 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let expected_tls_spki_pin_root = evidence.tls_spki_pin_root.clone();
         let expected_tls_endpoint_pin_set_root = evidence.tls_endpoint_pin_set_root.clone();
         let expected_tls_endpoint_pin_count = evidence.tls_endpoint_pin_count;
-        evidence.tls_spki_pin_root =
-            root(&["test-public-deployment", "stale-tls-spki-pin-root"]);
+        evidence.tls_spki_pin_root = root(&["test-public-deployment", "stale-tls-spki-pin-root"]);
         evidence.tls_endpoint_pin_set_root =
             root(&["test-public-deployment", "stale-tls-endpoint-pin-set-root"]);
         base_testnet.cli.public_deployment_evidence = Some(evidence);
@@ -35727,9 +36475,7 @@ mod tests {
         assert!(!summary.public_deployment.tls_pins_bound);
         assert!(!summary.public_deployment.tls_spki_pin_root_bound);
         assert!(!summary.public_deployment.tls_endpoint_pin_set_root_bound);
-        assert!(summary
-            .public_deployment
-            .tls_endpoint_pin_count_sufficient);
+        assert!(summary.public_deployment.tls_endpoint_pin_count_sufficient);
         assert_eq!(
             summary
                 .public_deployment
@@ -35793,22 +36539,19 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let expected_proxy_policy_claims_root = evidence.proxy_policy_claims_root.clone();
         let expected_firewall_policy_claims_root = evidence.firewall_policy_claims_root.clone();
-        let expected_rate_limit_policy_claims_root =
-            evidence.rate_limit_policy_claims_root.clone();
+        let expected_rate_limit_policy_claims_root = evidence.rate_limit_policy_claims_root.clone();
         evidence.rate_limits_enforced = false;
         evidence.firewall_allows_public_only = false;
         evidence.no_private_summary_exposed = false;
         evidence.public_status_manifest_redacted = false;
         evidence.proxy_policy_claims_root = "missing-proxy-policy-claims-root".to_string();
-        evidence.firewall_policy_claims_root =
-            "missing-firewall-policy-claims-root".to_string();
+        evidence.firewall_policy_claims_root = "missing-firewall-policy-claims-root".to_string();
         evidence.rate_limit_policy_claims_root =
             "missing-rate-limit-policy-claims-root".to_string();
         evidence.private_summary_probe_root = "missing-private-summary-probe-root".to_string();
@@ -35821,12 +36564,12 @@ mod tests {
         assert!(!summary.public_deployment.no_private_summary_exposed);
         assert!(!summary.public_deployment.public_status_manifest_redacted);
         assert!(!summary.public_deployment.proxy_policy_claims_root_bound);
-        assert!(!summary
-            .public_deployment
-            .firewall_policy_claims_root_bound);
-        assert!(!summary
-            .public_deployment
-            .rate_limit_policy_claims_root_bound);
+        assert!(!summary.public_deployment.firewall_policy_claims_root_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .rate_limit_policy_claims_root_bound
+        );
         assert!(!summary.public_deployment.private_summary_probe_root_bound);
         assert_eq!(
             summary
@@ -35916,32 +36659,34 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let expected_proxy_policy_claims_root = evidence.proxy_policy_claims_root.clone();
         let expected_firewall_policy_claims_root = evidence.firewall_policy_claims_root.clone();
-        let expected_rate_limit_policy_claims_root =
-            evidence.rate_limit_policy_claims_root.clone();
+        let expected_rate_limit_policy_claims_root = evidence.rate_limit_policy_claims_root.clone();
         evidence.proxy_policy_claims_root =
             root(&["test-public-deployment", "stale-proxy-policy-claims-root"]);
-        evidence.firewall_policy_claims_root =
-            root(&["test-public-deployment", "stale-firewall-policy-claims-root"]);
-        evidence.rate_limit_policy_claims_root =
-            root(&["test-public-deployment", "stale-rate-limit-policy-claims-root"]);
+        evidence.firewall_policy_claims_root = root(&[
+            "test-public-deployment",
+            "stale-firewall-policy-claims-root",
+        ]);
+        evidence.rate_limit_policy_claims_root = root(&[
+            "test-public-deployment",
+            "stale-rate-limit-policy-claims-root",
+        ]);
         base_testnet.cli.public_deployment_evidence = Some(evidence);
         let summary = base_testnet.summary(Vec::new());
         assert!(!summary.public_deployment.passed);
         assert!(!summary.public_deployment.proxy_policy_verified);
         assert!(!summary.public_deployment.proxy_policy_claims_root_bound);
-        assert!(!summary
-            .public_deployment
-            .firewall_policy_claims_root_bound);
-        assert!(!summary
-            .public_deployment
-            .rate_limit_policy_claims_root_bound);
+        assert!(!summary.public_deployment.firewall_policy_claims_root_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .rate_limit_policy_claims_root_bound
+        );
         assert!(summary.public_deployment.rate_limits_enforced);
         assert!(summary.public_deployment.firewall_allows_public_only);
         assert!(summary.public_deployment.public_status_manifest_redacted);
@@ -36017,9 +36762,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         evidence.bootstrap_node_set_root =
@@ -36030,10 +36774,13 @@ mod tests {
             .saturating_sub(1);
         evidence.bootstrap_operator_set_root =
             root(&["test-public-deployment", "wrong-bootstrap-operator-set"]);
-        evidence.bootstrap_operator_count =
-            base_summary.public_bootstrap_profile.bootstrap_operator_count + 1;
-        evidence.bootstrap_operator_registry_count =
-            base_summary.public_bootstrap_profile.bootstrap_operator_count;
+        evidence.bootstrap_operator_count = base_summary
+            .public_bootstrap_profile
+            .bootstrap_operator_count
+            + 1;
+        evidence.bootstrap_operator_registry_count = base_summary
+            .public_bootstrap_profile
+            .bootstrap_operator_count;
         evidence.bootstrap_operator_registry_root =
             "missing-bootstrap-operator-registry-root".to_string();
         evidence.bootstrap_operator_signature_root =
@@ -36054,36 +36801,51 @@ mod tests {
         assert!(!summary.public_deployment.bootstrap_nodes_bound);
         assert!(!summary.public_deployment.bootstrap_node_set_root_bound);
         assert!(!summary.public_deployment.bootstrap_node_count_sufficient);
-        assert!(!summary
-            .public_deployment
-            .bootstrap_operator_set_root_bound);
+        assert!(!summary.public_deployment.bootstrap_operator_set_root_bound);
         assert!(!summary.public_deployment.bootstrap_operator_count_bound);
-        assert!(!summary
-            .public_deployment
-            .bootstrap_operator_registry_count_bound);
-        assert!(!summary
-            .public_deployment
-            .bootstrap_operator_registry_root_bound);
-        assert!(!summary
-            .public_deployment
-            .bootstrap_operator_signature_root_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .bootstrap_operator_registry_count_bound
+        );
+        assert!(
+            !summary
+                .public_deployment
+                .bootstrap_operator_registry_root_bound
+        );
+        assert!(
+            !summary
+                .public_deployment
+                .bootstrap_operator_signature_root_bound
+        );
         assert!(!summary.public_deployment.bootstrap_region_set_root_bound);
-        assert!(!summary
-            .public_deployment
-            .bootstrap_public_endpoint_count_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .bootstrap_public_endpoint_count_bound
+        );
         assert!(!summary.public_deployment.bootstrap_node_probe_count_bound);
-        assert!(!summary
-            .public_deployment
-            .bootstrap_node_probe_set_root_bound);
-        assert!(!summary
-            .public_deployment
-            .bootstrap_p2p_endpoint_set_root_bound);
-        assert!(!summary
-            .public_deployment
-            .bootstrap_status_page_set_root_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .bootstrap_node_probe_set_root_bound
+        );
+        assert!(
+            !summary
+                .public_deployment
+                .bootstrap_p2p_endpoint_set_root_bound
+        );
+        assert!(
+            !summary
+                .public_deployment
+                .bootstrap_status_page_set_root_bound
+        );
         assert_eq!(
             summary.public_deployment.bootstrap_operator_count,
-            base_summary.public_bootstrap_profile.bootstrap_operator_count + 1
+            base_summary
+                .public_bootstrap_profile
+                .bootstrap_operator_count
+                + 1
         );
         assert_eq!(
             summary
@@ -36115,7 +36877,11 @@ mod tests {
         );
         assert_eq!(
             summary.public_deployment.expected_bootstrap_operator_count,
-            Some(base_summary.public_bootstrap_profile.bootstrap_operator_count)
+            Some(
+                base_summary
+                    .public_bootstrap_profile
+                    .bootstrap_operator_count
+            )
         );
         assert_eq!(
             summary
@@ -36208,9 +36974,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         evidence.status_probe_root = "missing-status-probe-root".to_string();
@@ -36218,10 +36983,8 @@ mod tests {
         evidence.health_probe_root = "missing-health-probe-root".to_string();
         evidence.status_page_probe_root = "missing-status-page-probe-root".to_string();
         evidence.metrics_probe_root = "missing-metrics-probe-root".to_string();
-        evidence.deployed_finality_probe_root =
-            "missing-deployed-finality-probe-root".to_string();
-        evidence.incident_contact_probe_root =
-            "missing-incident-contact-probe-root".to_string();
+        evidence.deployed_finality_probe_root = "missing-deployed-finality-probe-root".to_string();
+        evidence.incident_contact_probe_root = "missing-incident-contact-probe-root".to_string();
         evidence.faucet_probe_root = "missing-faucet-probe-root".to_string();
         evidence.reset_runbook_probe_root = "missing-reset-runbook-probe-root".to_string();
         evidence.private_summary_probe_root = "missing-private-summary-probe-root".to_string();
@@ -36239,20 +37002,20 @@ mod tests {
         assert!(!summary.public_deployment.health_probe_root_bound);
         assert!(!summary.public_deployment.status_page_probe_root_bound);
         assert!(!summary.public_deployment.metrics_probe_root_bound);
-        assert!(!summary
-            .public_deployment
-            .deployed_finality_probe_root_bound);
-        assert!(!summary
-            .public_deployment
-            .incident_contact_probe_root_bound);
+        assert!(!summary.public_deployment.deployed_finality_probe_root_bound);
+        assert!(!summary.public_deployment.incident_contact_probe_root_bound);
         assert!(!summary.public_deployment.faucet_probe_root_bound);
         assert!(!summary.public_deployment.reset_runbook_probe_root_bound);
-        assert!(!summary
-            .public_deployment
-            .live_private_summary_probe_root_bound);
-        assert!(!summary
-            .public_deployment
-            .public_surface_probe_set_root_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .live_private_summary_probe_root_bound
+        );
+        assert!(
+            !summary
+                .public_deployment
+                .public_surface_probe_set_root_bound
+        );
         assert!(!summary.public_deployment.public_surface_probe_count_bound);
         assert!(!summary.public_deployment.public_probe_set_root_bound);
         assert!(!summary.public_deployment.public_probe_count_bound);
@@ -36299,7 +37062,9 @@ mod tests {
             );
         }
         assert_eq!(
-            summary.public_deployment.expected_public_surface_probe_count,
+            summary
+                .public_deployment
+                .expected_public_surface_probe_count,
             Some(REQUIRED_PUBLIC_SURFACE_PROBE_COUNT)
         );
         assert_eq!(
@@ -36319,9 +37084,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let expected_surface_probe_set_root = evidence.public_surface_probe_set_root.clone();
@@ -36336,9 +37100,11 @@ mod tests {
         let summary = base_testnet.summary(Vec::new());
         assert!(!summary.public_deployment.passed);
         assert!(!summary.public_deployment.live_probe_roots_bound);
-        assert!(!summary
-            .public_deployment
-            .public_surface_probe_set_root_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .public_surface_probe_set_root_bound
+        );
         assert!(!summary.public_deployment.public_surface_probe_count_bound);
         assert!(!summary.public_deployment.public_probe_set_root_bound);
         assert!(!summary.public_deployment.public_probe_count_bound);
@@ -36350,7 +37116,9 @@ mod tests {
             Some(expected_surface_probe_set_root.as_str())
         );
         assert_eq!(
-            summary.public_deployment.expected_public_surface_probe_count,
+            summary
+                .public_deployment
+                .expected_public_surface_probe_count,
             Some(REQUIRED_PUBLIC_SURFACE_PROBE_COUNT)
         );
         assert_eq!(
@@ -36418,14 +37186,14 @@ mod tests {
                 .expect("deployment evidence json");
         value["public_launch_package_manifest_root"] =
             json!(root(&["test-public-deployment", "wrong-package-manifest"]));
-        value["public_launch_readiness_artifact_root"] =
-            json!(root(&["test-public-deployment", "wrong-readiness-artifact"]));
+        value["public_launch_readiness_artifact_root"] = json!(root(&[
+            "test-public-deployment",
+            "wrong-readiness-artifact"
+        ]));
         value["provenance_root"] =
-            json!(public_deployment_provenance_root_from_value(&value)
-                .expect("provenance root"));
+            json!(public_deployment_provenance_root_from_value(&value).expect("provenance root"));
         value["evidence_root"] =
-            json!(public_deployment_attestation_root_from_value(&value)
-                .expect("evidence root"));
+            json!(public_deployment_attestation_root_from_value(&value).expect("evidence root"));
         let path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&value).expect("deployment evidence json"),
         );
@@ -36434,12 +37202,16 @@ mod tests {
         base_testnet.cli.public_deployment_evidence = Some(evidence);
         let summary = base_testnet.summary(Vec::new());
         assert!(!summary.public_deployment.passed);
-        assert!(!summary
-            .public_deployment
-            .public_launch_package_manifest_root_bound);
-        assert!(!summary
-            .public_deployment
-            .public_launch_readiness_artifact_root_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .public_launch_package_manifest_root_bound
+        );
+        assert!(
+            !summary
+                .public_deployment
+                .public_launch_readiness_artifact_root_bound
+        );
         assert_eq!(
             summary
                 .public_deployment
@@ -36505,11 +37277,9 @@ mod tests {
         value["public_launch_package_file_set_root"] =
             json!(root(&["test-public-deployment", "wrong-package-file-set"]));
         value["provenance_root"] =
-            json!(public_deployment_provenance_root_from_value(&value)
-                .expect("provenance root"));
+            json!(public_deployment_provenance_root_from_value(&value).expect("provenance root"));
         value["evidence_root"] =
-            json!(public_deployment_attestation_root_from_value(&value)
-                .expect("evidence root"));
+            json!(public_deployment_attestation_root_from_value(&value).expect("evidence root"));
         let path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&value).expect("deployment evidence json"),
         );
@@ -36518,7 +37288,11 @@ mod tests {
         base_testnet.cli.public_deployment_evidence = Some(evidence);
         let summary = base_testnet.summary(Vec::new());
         assert!(!summary.public_deployment.passed);
-        assert!(!summary.public_deployment.public_launch_package_file_set_root_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .public_launch_package_file_set_root_bound
+        );
         assert_eq!(
             summary
                 .public_deployment
@@ -36561,35 +37335,42 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
         let expected_receipt_root = evidence.public_deployment_runbook_receipt_root.clone();
-        let expected_step_receipt_set_root =
-            evidence.public_deployment_runbook_step_receipt_set_root.clone();
+        let expected_step_receipt_set_root = evidence
+            .public_deployment_runbook_step_receipt_set_root
+            .clone();
         let expected_step_receipt_count = evidence.public_deployment_runbook_step_receipt_count;
         evidence.public_deployment_runbook_receipt_root =
             root(&["test-public-deployment", "wrong-runbook-receipt"]);
         evidence.public_deployment_runbook_step_receipt_set_root =
             root(&["test-public-deployment", "wrong-runbook-step-receipt-set"]);
-        evidence.public_deployment_runbook_step_receipt_count =
-            evidence.public_deployment_runbook_step_receipt_count.saturating_add(1);
+        evidence.public_deployment_runbook_step_receipt_count = evidence
+            .public_deployment_runbook_step_receipt_count
+            .saturating_add(1);
         base_testnet.cli.public_deployment_evidence = Some(evidence);
         let summary = base_testnet.summary(Vec::new());
         assert!(!summary.public_deployment.passed);
         assert!(!summary.public_deployment.runbook_receipt_bound);
-        assert!(!summary
-            .public_deployment
-            .public_deployment_runbook_receipt_root_bound);
-        assert!(!summary
-            .public_deployment
-            .public_deployment_runbook_step_receipt_set_root_bound);
-        assert!(!summary
-            .public_deployment
-            .public_deployment_runbook_step_receipt_count_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .public_deployment_runbook_receipt_root_bound
+        );
+        assert!(
+            !summary
+                .public_deployment
+                .public_deployment_runbook_step_receipt_set_root_bound
+        );
+        assert!(
+            !summary
+                .public_deployment
+                .public_deployment_runbook_step_receipt_count_bound
+        );
         assert_eq!(
             summary
                 .public_deployment
@@ -36655,9 +37436,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
@@ -36677,12 +37457,16 @@ mod tests {
         let expected_runbook = public_deployment_runbook(&summary);
         assert!(!summary.public_deployment.passed);
         assert!(!summary.public_deployment.runbook_receipt_bound);
-        assert!(!summary
-            .public_deployment
-            .public_deployment_runbook_root_bound);
-        assert!(summary
-            .public_deployment
-            .public_deployment_runbook_step_set_root_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .public_deployment_runbook_root_bound
+        );
+        assert!(
+            summary
+                .public_deployment
+                .public_deployment_runbook_step_set_root_bound
+        );
         assert_eq!(
             summary
                 .public_deployment
@@ -36738,17 +37522,15 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
-        evidence.public_deployment_runbook_receipt["steps"][0]["source_root"] =
-            json!(root(&[
-                "test-public-deployment",
-                "wrong-runbook-source-root"
-            ]));
+        evidence.public_deployment_runbook_receipt["steps"][0]["source_root"] = json!(root(&[
+            "test-public-deployment",
+            "wrong-runbook-source-root"
+        ]));
         refresh_public_deployment_runbook_receipt_fields(&mut evidence);
         evidence.provenance_root = public_deployment_provenance_root(&evidence);
         evidence.evidence_root = public_deployment_attestation_root(&evidence);
@@ -36777,14 +37559,14 @@ mod tests {
         let mut value: Value =
             serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
                 .expect("deployment evidence json");
-        value["public_surface_probe_set_root"] =
-            json!(root(&["test-public-deployment", "tampered-surface-probe-set"]));
+        value["public_surface_probe_set_root"] = json!(root(&[
+            "test-public-deployment",
+            "tampered-surface-probe-set"
+        ]));
         value["provenance_root"] =
-            json!(public_deployment_provenance_root_from_value(&value)
-                .expect("provenance root"));
+            json!(public_deployment_provenance_root_from_value(&value).expect("provenance root"));
         value["evidence_root"] =
-            json!(public_deployment_attestation_root_from_value(&value)
-                .expect("evidence root"));
+            json!(public_deployment_attestation_root_from_value(&value).expect("evidence root"));
         let bad_path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&value).expect("bad evidence json"),
         );
@@ -36807,11 +37589,9 @@ mod tests {
         value["bootstrap_node_probe_set_root"] =
             json!(root(&["test-public-deployment", "tampered-node-probe-set"]));
         value["provenance_root"] =
-            json!(public_deployment_provenance_root_from_value(&value)
-                .expect("provenance root"));
+            json!(public_deployment_provenance_root_from_value(&value).expect("provenance root"));
         value["evidence_root"] =
-            json!(public_deployment_attestation_root_from_value(&value)
-                .expect("evidence root"));
+            json!(public_deployment_attestation_root_from_value(&value).expect("evidence root"));
         let bad_path = write_public_deployment_evidence(
             &serde_json::to_string_pretty(&value).expect("bad evidence json"),
         );
@@ -36849,9 +37629,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
@@ -36873,9 +37652,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
@@ -36904,9 +37682,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
@@ -36936,9 +37713,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
@@ -37063,9 +37839,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
@@ -37109,9 +37884,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
@@ -37243,9 +38017,8 @@ mod tests {
         evidence.provenance_root = public_deployment_provenance_root(&evidence);
         evidence.evidence_root = public_deployment_attestation_root(&evidence);
 
-        let stale_path = write_public_deployment_evidence(&public_deployment_evidence_json(
-            &evidence,
-        ));
+        let stale_path =
+            write_public_deployment_evidence(&public_deployment_evidence_json(&evidence));
         let loaded = load_public_deployment_evidence(&stale_path)
             .expect("self-consistent stale evidence should load");
         base_testnet.cli.public_deployment_evidence = Some(loaded);
@@ -37255,9 +38028,11 @@ mod tests {
         assert!(summary.public_deployment.public_launch_bundle_root_bound);
         assert!(!summary.public_deployment.status_manifest_root_bound);
         assert!(!summary.public_deployment.public_status_manifest_root_bound);
-        assert!(!summary
-            .public_deployment
-            .public_status_manifest_payload_bound);
+        assert!(
+            !summary
+                .public_deployment
+                .public_status_manifest_payload_bound
+        );
         assert!(is_hex_root(
             summary
                 .public_deployment
@@ -37351,14 +38126,12 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
-        evidence.metrics_probe["p95_local_quorum_certificate_latency_micros"] =
-            json!(999_999_u64);
+        evidence.metrics_probe["p95_local_quorum_certificate_latency_micros"] = json!(999_999_u64);
         let metrics_probe_body_root =
             value_root("public-deployment-metrics-body", &evidence.metrics_probe);
         evidence.metrics_probe_root = root(&[
@@ -37384,16 +38157,13 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
-        evidence.deployed_finality_probe["p95_quorum_certificate_micros"] =
-            json!(250_000_u64);
-        evidence.deployed_finality_probe["max_quorum_certificate_micros"] =
-            json!(250_000_u64);
+        evidence.deployed_finality_probe["p95_quorum_certificate_micros"] = json!(250_000_u64);
+        evidence.deployed_finality_probe["max_quorum_certificate_micros"] = json!(250_000_u64);
         evidence.deployed_finality_probe["all_samples_under_target"] = json!(false);
         let body_root = value_root(
             "public-deployment-deployed-finality-body",
@@ -37422,17 +38192,17 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
-        evidence.deployed_finality_probe["validator_threshold"] =
-            json!(evidence.deployed_finality_probe["validator_count"]
+        evidence.deployed_finality_probe["validator_threshold"] = json!(
+            evidence.deployed_finality_probe["validator_count"]
                 .as_u64()
                 .expect("validator count")
-                + 1);
+                + 1
+        );
         let body_root = value_root(
             "public-deployment-deployed-finality-body",
             &evidence.deployed_finality_probe,
@@ -37460,9 +38230,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let mut evidence =
             load_public_deployment_evidence(&path).expect("public deployment evidence");
         let _ = fs::remove_file(path);
@@ -37496,9 +38265,8 @@ mod tests {
         let mut base_testnet = Testnet::new(base_cli);
         base_testnet.run().expect("base testnet run");
         let base_summary = base_testnet.summary(Vec::new());
-        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
-            &base_summary,
-        ));
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
         let evidence = load_public_deployment_evidence(&path).expect("deployment evidence");
         let mut endpoint_changed = evidence.clone();
         endpoint_changed.public_rpc_url =
@@ -37509,8 +38277,10 @@ mod tests {
         tls_changed.evidence_root = public_deployment_attestation_root(&tls_changed);
         let mut transcript_changed = evidence.clone();
         transcript_changed.health_probe["status"] = json!("degraded");
-        let body_root =
-            value_root("public-deployment-health-body", &transcript_changed.health_probe);
+        let body_root = value_root(
+            "public-deployment-health-body",
+            &transcript_changed.health_probe,
+        );
         transcript_changed.health_probe_root = root(&[
             "public-deployment-health-probe",
             &transcript_changed.health_check_url,
@@ -37641,10 +38411,12 @@ mod tests {
             summary_json["public_launch_readiness"]["remediations"][0]["remediation_kind"],
             "external-capture"
         );
-        assert!(summary_json["public_launch_readiness"]["remediations"][0]["failed_subchecks"]
-            .as_array()
-            .expect("failed subchecks")
-            .contains(&json!("public_launch_package_file_set_root_bound")));
+        assert!(
+            summary_json["public_launch_readiness"]["remediations"][0]["failed_subchecks"]
+                .as_array()
+                .expect("failed subchecks")
+                .contains(&json!("public_launch_package_file_set_root_bound"))
+        );
     }
 
     #[test]
@@ -37693,7 +38465,10 @@ mod tests {
             assert_eq!(remediation.expected_artifact_path, expected_artifact_path);
             assert_eq!(remediation.expected_artifact, expected_artifact);
             assert_eq!(remediation.remediation_kind, remediation_kind);
-            assert_ne!(remediation.expected_artifact_id, "public-launch-readiness-artifact");
+            assert_ne!(
+                remediation.expected_artifact_id,
+                "public-launch-readiness-artifact"
+            );
             assert!(remediation.command.contains("--mainnet-readiness"));
             assert!(is_hex_root(&remediation.remediation_root));
         }
@@ -39149,7 +39924,9 @@ mod tests {
             );
             map.insert(
                 "status_page_url".to_string(),
-                json!(format!("https://status.public.nebula.example/nodes/{index}")),
+                json!(format!(
+                    "https://status.public.nebula.example/nodes/{index}"
+                )),
             );
         }
         let bootstrap_node_validation = validate_public_bootstrap_nodes(
@@ -39199,18 +39976,17 @@ mod tests {
             "phase_count": REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len(),
             "phases": preflight_phase_entries,
         });
-        let deployment_preflight_receipt_validation =
-            derive_public_deployment_preflight_receipt(
-                &mut deployment_preflight_receipt,
-                &deployment_preflight_checklist_root,
-                &capture_contract_root,
-                &public_launch_bundle_root,
-                &public_status_manifest_root,
-                &deployment_run_id,
-                observed_at_unix_ms,
-                expires_at_unix_ms,
-            )
-            .expect("derive deployment preflight receipt roots");
+        let deployment_preflight_receipt_validation = derive_public_deployment_preflight_receipt(
+            &mut deployment_preflight_receipt,
+            &deployment_preflight_checklist_root,
+            &capture_contract_root,
+            &public_launch_bundle_root,
+            &public_status_manifest_root,
+            &deployment_run_id,
+            observed_at_unix_ms,
+            expires_at_unix_ms,
+        )
+        .expect("derive deployment preflight receipt roots");
         let runbook_step_entries = deployment_runbook["steps"]
             .as_array()
             .expect("deployment runbook steps")
@@ -39485,8 +40261,7 @@ mod tests {
             expires_at_unix_ms,
         )
         .expect("derive bootstrap node probe roots");
-        let bootstrap_node_probes =
-            bootstrap_node_probe_payload["bootstrap_node_probes"].clone();
+        let bootstrap_node_probes = bootstrap_node_probe_payload["bootstrap_node_probes"].clone();
         let health_probe_http_status = 200;
         let health_probe = json!({
             "status": "ok",
@@ -39535,8 +40310,7 @@ mod tests {
             "reserve_covered": summary.acceptance.reserve_covered,
             "no_mainnet_custody": true,
         });
-        let metrics_probe_body_root =
-            value_root("public-deployment-metrics-body", &metrics_probe);
+        let metrics_probe_body_root = value_root("public-deployment-metrics-body", &metrics_probe);
         let metrics_probe_root = root(&[
             "public-deployment-metrics-probe",
             &metrics_url,
@@ -39653,8 +40427,10 @@ mod tests {
             private_summary_probe_status,
             &private_summary_probe,
         );
-        let private_summary_probe_body_root =
-            value_root("public-deployment-private-summary-body", &private_summary_probe);
+        let private_summary_probe_body_root = value_root(
+            "public-deployment-private-summary-body",
+            &private_summary_probe,
+        );
         let public_surface_specs = public_surface_probe_specs(
             &public_rpc_url,
             &public_p2p_endpoint,
@@ -39717,8 +40493,7 @@ mod tests {
             expires_at_unix_ms,
         )
         .expect("derive public surface probe roots");
-        let public_surface_probes =
-            public_surface_probe_payload["public_surface_probes"].clone();
+        let public_surface_probes = public_surface_probe_payload["public_surface_probes"].clone();
         let public_probe_roots = [
             ("status_probe_root", status_probe_root.clone()),
             ("p2p_handshake_root", p2p_handshake_root.clone()),
@@ -39730,7 +40505,9 @@ mod tests {
             ),
             (
                 "bootstrap_node_probe_set_root",
-                bootstrap_node_probe_validation.bootstrap_node_probe_set_root.clone(),
+                bootstrap_node_probe_validation
+                    .bootstrap_node_probe_set_root
+                    .clone(),
             ),
             ("health_probe_root", health_probe_root.clone()),
             ("status_page_probe_root", status_page_probe_root.clone()),
@@ -39744,10 +40521,7 @@ mod tests {
                 incident_contact_probe_root.clone(),
             ),
             ("faucet_probe_root", faucet_probe_root.clone()),
-            (
-                "reset_runbook_probe_root",
-                reset_runbook_probe_root.clone(),
-            ),
+            ("reset_runbook_probe_root", reset_runbook_probe_root.clone()),
             (
                 "private_summary_probe_root",
                 private_summary_probe_root.clone(),
@@ -39853,10 +40627,9 @@ mod tests {
             public_deployment_runbook_step_set_root: public_deployment_runbook_step_set_root
                 .clone(),
             public_deployment_runbook_receipt: public_deployment_runbook_receipt.clone(),
-            public_deployment_runbook_receipt_root:
-                public_deployment_runbook_receipt_validation
-                    .public_deployment_runbook_receipt_root
-                    .clone(),
+            public_deployment_runbook_receipt_root: public_deployment_runbook_receipt_validation
+                .public_deployment_runbook_receipt_root
+                .clone(),
             public_deployment_runbook_step_receipt_set_root:
                 public_deployment_runbook_receipt_validation
                     .public_deployment_runbook_step_receipt_set_root
@@ -39937,9 +40710,7 @@ mod tests {
                     .map(|node| {
                         root(&[
                             "public-bootstrap-status-page",
-                            node["status_page_url"]
-                                .as_str()
-                                .expect("status page url"),
+                            node["status_page_url"].as_str().expect("status page url"),
                         ])
                     })
                     .collect(),
@@ -40023,8 +40794,7 @@ mod tests {
     }
 
     fn public_deployment_evidence_json(evidence: &PublicDeploymentEvidence) -> String {
-        let mut value =
-            serde_json::to_value(evidence).expect("public deployment evidence value");
+        let mut value = serde_json::to_value(evidence).expect("public deployment evidence value");
         let map = value
             .as_object_mut()
             .expect("public deployment evidence object");
@@ -40039,8 +40809,7 @@ mod tests {
     }
 
     fn refresh_public_deployment_observer_fields(evidence: &mut PublicDeploymentEvidence) {
-        let mut value =
-            serde_json::to_value(&*evidence).expect("public deployment evidence value");
+        let mut value = serde_json::to_value(&*evidence).expect("public deployment evidence value");
         derive_public_probe_observer_fields(&mut value).expect("derive observer fields");
         evidence.probe_observers = value["probe_observers"].clone();
         evidence.probe_observer_set_root = value["probe_observer_set_root"]
@@ -40055,17 +40824,13 @@ mod tests {
             .as_str()
             .expect("pq signature root")
             .to_string();
-        evidence.observer_count = value["observer_count"]
-            .as_u64()
-            .expect("observer count");
+        evidence.observer_count = value["observer_count"].as_u64().expect("observer count");
         evidence.observed_region_count = value["observed_region_count"]
             .as_u64()
             .expect("observed region count");
     }
 
-    fn refresh_public_deployment_preflight_receipt_fields(
-        evidence: &mut PublicDeploymentEvidence,
-    ) {
+    fn refresh_public_deployment_preflight_receipt_fields(evidence: &mut PublicDeploymentEvidence) {
         let validation = derive_public_deployment_preflight_receipt(
             &mut evidence.deployment_preflight_receipt,
             &evidence.deployment_preflight_checklist_root,
@@ -40077,17 +40842,13 @@ mod tests {
             evidence.expires_at_unix_ms,
         )
         .expect("derive preflight receipt fields");
-        evidence.deployment_preflight_receipt_root =
-            validation.deployment_preflight_receipt_root;
+        evidence.deployment_preflight_receipt_root = validation.deployment_preflight_receipt_root;
         evidence.deployment_preflight_phase_set_root =
             validation.deployment_preflight_phase_set_root;
-        evidence.deployment_preflight_phase_count =
-            validation.deployment_preflight_phase_count;
+        evidence.deployment_preflight_phase_count = validation.deployment_preflight_phase_count;
     }
 
-    fn refresh_public_deployment_runbook_receipt_fields(
-        evidence: &mut PublicDeploymentEvidence,
-    ) {
+    fn refresh_public_deployment_runbook_receipt_fields(evidence: &mut PublicDeploymentEvidence) {
         let validation = derive_public_deployment_runbook_receipt(
             &mut evidence.public_deployment_runbook_receipt,
             &evidence.public_deployment_runbook_root,
@@ -40114,10 +40875,7 @@ mod tests {
         if let Some(probes) = evidence.bootstrap_node_probes.as_array_mut() {
             for probe in probes {
                 if let Some(map) = probe.as_object_mut() {
-                    map.insert(
-                        "p2p_handshake".to_string(),
-                        json!(&evidence.p2p_handshake),
-                    );
+                    map.insert("p2p_handshake".to_string(), json!(&evidence.p2p_handshake));
                 }
             }
         }
@@ -40137,18 +40895,17 @@ mod tests {
         )
         .expect("derive bootstrap node probe fields");
         evidence.bootstrap_node_probes = value["bootstrap_node_probes"].clone();
-        evidence.bootstrap_node_probe_set_root =
-            validation.bootstrap_node_probe_set_root;
+        evidence.bootstrap_node_probe_set_root = validation.bootstrap_node_probe_set_root;
         evidence.bootstrap_node_probe_count = validation.bootstrap_node_probe_count;
     }
 
-    fn refresh_public_deployment_surface_probe_fields(
-        evidence: &mut PublicDeploymentEvidence,
-    ) {
+    fn refresh_public_deployment_surface_probe_fields(evidence: &mut PublicDeploymentEvidence) {
         let health_probe_body_root =
             value_root("public-deployment-health-body", &evidence.health_probe);
-        let status_page_probe_body_root =
-            value_root("public-deployment-status-page-body", &evidence.status_page_probe);
+        let status_page_probe_body_root = value_root(
+            "public-deployment-status-page-body",
+            &evidence.status_page_probe,
+        );
         let metrics_probe_body_root =
             value_root("public-deployment-metrics-body", &evidence.metrics_probe);
         let deployed_finality_probe_body_root = value_root(
@@ -40221,8 +40978,7 @@ mod tests {
         )
         .expect("derive public surface probe fields");
         evidence.public_surface_probes = value["public_surface_probes"].clone();
-        evidence.public_surface_probe_set_root =
-            validation.public_surface_probe_set_root;
+        evidence.public_surface_probe_set_root = validation.public_surface_probe_set_root;
         evidence.public_surface_probe_count = validation.public_surface_probe_count;
     }
 
@@ -40268,9 +41024,8 @@ mod tests {
     }
 
     fn valid_public_deployment_capture(summary: &TestnetSummary) -> String {
-        let mut value: Value =
-            serde_json::from_str(&valid_public_deployment_evidence(summary))
-                .expect("deployment evidence json");
+        let mut value: Value = serde_json::from_str(&valid_public_deployment_evidence(summary))
+            .expect("deployment evidence json");
         let map = value
             .as_object_mut()
             .expect("deployment evidence capture object");
@@ -40389,7 +41144,10 @@ mod tests {
             ("fee_efficiency", evidence_root_from(&fee_efficiency)),
             ("crypto_policy", evidence_root_from(&crypto_policy)),
             ("external_review", evidence_root_from(&external_review)),
-            ("proof_system_audit", evidence_root_from(&proof_system_audit)),
+            (
+                "proof_system_audit",
+                evidence_root_from(&proof_system_audit),
+            ),
         ]);
         json!({
             "schema_version": 1,
@@ -40491,8 +41249,10 @@ mod tests {
                 "attestation_root": attestation_root,
             }));
         }
-        let attestation_root =
-            collection_root("readiness-evidence-provenance-attestations", attestation_roots);
+        let attestation_root = collection_root(
+            "readiness-evidence-provenance-attestations",
+            attestation_roots,
+        );
         let evidence_root = root(&[
             "readiness-evidence-provenance",
             CHAIN_ID,

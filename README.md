@@ -3163,6 +3163,11 @@ real XMR.
   paired `--verify-readiness-template` command recomputes the worksheet root
   and rejects stale or cross-run evidence collection templates before external
   producers and release authorities fill them.
+- Standalone `--write-release-approval-template` and
+  `--write-release-authority-registry-template` exports split those release
+  authority handoff skeletons into exact-verifiable JSON files. Their paired
+  verifiers reject stale, filled, or incomplete signoff packets before external
+  authorities turn them into real approval and registry artifacts.
 - One Monero anchor can commit at least 10,000 L2 transactions, backed by signed
   capacity policy, fixed-format payload, capacity, and benchmark roots.
 - Mainnet readiness evidence includes signed privacy profiles for anchor
