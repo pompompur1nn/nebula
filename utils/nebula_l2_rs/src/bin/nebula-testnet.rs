@@ -7242,6 +7242,36 @@ fn public_launch_remediation_for_check(
                 false,
                 false,
             ),
+            "public-launch-wallet-recovery-audit" => (
+                "local wallet recovery audit report",
+                "local-wallet-recovery-audit-report",
+                "local://wallet-recovery-audit",
+                "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --json",
+                "local-run",
+                "public-redacted",
+                false,
+                false,
+            ),
+            "public-launch-mempool-accountability" => (
+                "local mempool accountability report",
+                "local-mempool-accountability-report",
+                "local://mempool-accountability",
+                "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --json",
+                "local-run",
+                "public-redacted",
+                false,
+                false,
+            ),
+            "public-launch-bridge-release-safety" => (
+                "local bridge release safety report",
+                "local-bridge-release-safety-report",
+                "local://bridge-release-safety",
+                "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --adversarial-self-test --json",
+                "local-drill",
+                "public-redacted",
+                false,
+                false,
+            ),
             _ => (
                 "public launch readiness artifact",
                 "public-launch-readiness-artifact",
@@ -32394,6 +32424,58 @@ mod tests {
             .as_array()
             .expect("failed subchecks")
             .contains(&json!("public_launch_package_file_set_root_bound")));
+    }
+
+    #[test]
+    fn public_launch_remediations_cover_all_local_safety_gates() {
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        let checks = public_launch_checks(&summary);
+        for (
+            check_id,
+            expected_artifact_id,
+            expected_artifact_path,
+            expected_artifact,
+            remediation_kind,
+        ) in [
+            (
+                "public-launch-wallet-recovery-audit",
+                "local-wallet-recovery-audit-report",
+                "local://wallet-recovery-audit",
+                "local wallet recovery audit report",
+                "local-run",
+            ),
+            (
+                "public-launch-mempool-accountability",
+                "local-mempool-accountability-report",
+                "local://mempool-accountability",
+                "local mempool accountability report",
+                "local-run",
+            ),
+            (
+                "public-launch-bridge-release-safety",
+                "local-bridge-release-safety-report",
+                "local://bridge-release-safety",
+                "local bridge release safety report",
+                "local-drill",
+            ),
+        ] {
+            let check = checks
+                .iter()
+                .find(|check| check.id == check_id)
+                .expect("public launch safety check");
+            let remediation = public_launch_remediation_for_check(&summary, check);
+            assert_eq!(remediation.expected_artifact_id, expected_artifact_id);
+            assert_eq!(remediation.expected_artifact_path, expected_artifact_path);
+            assert_eq!(remediation.expected_artifact, expected_artifact);
+            assert_eq!(remediation.remediation_kind, remediation_kind);
+            assert_ne!(remediation.expected_artifact_id, "public-launch-readiness-artifact");
+            assert!(remediation.command.contains("--mainnet-readiness"));
+            assert!(is_hex_root(&remediation.remediation_root));
+        }
     }
 
     #[test]

@@ -690,9 +690,10 @@ file-set, bootstrap profile/report/rate-limit policy roots, status-manifest
 root/payload, preflight, runbook, bootstrap topology/count/registry/probe
 bindings, per-endpoint publicness, TLS pin roots/counts,
 proxy/firewall/rate-limit policy roots, per-surface probe roots/counts,
-placeholder hygiene, local bootstrap/finality dependencies, privacy-denial, and
-custody bindings; the redacted public status manifest does not include that
-local operator report.
+placeholder hygiene, local bootstrap/finality dependencies, wallet recovery,
+mempool accountability, bridge release safety, privacy-denial, and custody
+bindings; the redacted public status manifest does not include that local
+operator report.
 
 `--fail-on-readiness-gaps` also requires `--mainnet-readiness` and turns the
 dry-run report into a CI/release gate: the command exits nonzero until every
