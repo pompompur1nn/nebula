@@ -460,10 +460,10 @@ records each filename, root field, artifact root, record root,
 required-before-capture flag, operator-fill flag, and
 non-evidence/non-custody flags under an `artifact_set_root`, plus a
 `package_file_set_root` over the exact ordered top-level file list. It also
-binds the package-level launch status, blocker/remediation counts, and
-readiness report/artifact roots so deployment automation can detect stale,
-swapped, cross-run, extra, or metadata-tampered files before filling public
-probe evidence.
+binds the package-level launch status, blocker/remediation counts, readiness
+report/artifact roots, rooted `next_steps`, and the rooted capture command
+sequence so deployment automation can detect stale, swapped, cross-run, extra,
+or metadata-tampered files before filling public probe evidence.
 `--verify-public-launch-package path\to\package-dir` reruns those checks against
 the current release-candidate summary, so CI should combine it with the export
 step for the same runner invocation. It recomputes every artifact and package
@@ -497,10 +497,10 @@ authority registry handoff templates, and writes
 `public_launch_ready`, package roots, launch report roots, blocking gaps,
 release-template roots, the public deployment evidence root, its
 readiness-report binding boolean, package-bound release-template roots,
-package-binding booleans for both release handoff templates, remediations, whether external capture is still
-required, and the exact capture-audit, audit-verification, strict
-capture-verification, assemble, and launch-gate commands plus a rooted command
-sequence for that order.
+package-binding booleans for both release handoff templates, remediations,
+whether external capture is still required, and the exact capture-audit,
+audit-verification, strict capture-verification, assemble, and launch-gate
+commands plus rooted next steps and a rooted command sequence for that order.
 The certification artifact is
 operator-local, not public deployment evidence and not mainnet custody approval;
 it truthfully remains `public-launch-blocked` until a filled schema v5
