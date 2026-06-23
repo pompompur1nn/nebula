@@ -589,6 +589,11 @@ separates cheap `structural_ready` checks from `strict_verifier_passed`; when a
 top-level-complete capture still fails nested policy/probe/receipt validation,
 `failed_checks` contains `strict_public_deployment_verifier_passed` and
 `strict_verifier_error` records the first assembler/verifier failure.
+`--verify-public-deployment-capture-audit path\to\capture-audit.json` uses the
+same `--audit-public-deployment-capture path\to\capture.json` source, recomputes
+the audit and `capture_audit_root` against the current release-candidate
+summary, and rejects stale, tampered, cross-run, or capture-mismatched audit
+reports before deployment CI trusts the diagnostic result.
 
 `--verify-public-deployment-capture path\to\capture.json` also requires
 `--mainnet-readiness` and dry-runs the same assembler/verifier path without

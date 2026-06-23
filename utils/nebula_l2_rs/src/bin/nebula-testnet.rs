@@ -394,6 +394,7 @@ struct Cli {
     public_deployment_capture_verify_path: Option<String>,
     public_deployment_capture_audit_path: Option<String>,
     public_deployment_capture_audit_output_path: Option<String>,
+    public_deployment_capture_audit_verify_path: Option<String>,
     public_deployment_evidence_assembly_path: Option<String>,
     public_deployment_evidence_output_path: Option<String>,
     adversarial_self_test: bool,
@@ -467,6 +468,7 @@ impl Default for Cli {
             public_deployment_capture_verify_path: None,
             public_deployment_capture_audit_path: None,
             public_deployment_capture_audit_output_path: None,
+            public_deployment_capture_audit_verify_path: None,
             public_deployment_evidence_assembly_path: None,
             public_deployment_evidence_output_path: None,
             adversarial_self_test: false,
@@ -7142,6 +7144,12 @@ fn run() -> Result<(), String> {
     ) {
         write_public_deployment_capture_audit(capture_path, output_path, &summary)?;
     }
+    if let (Some(capture_path), Some(audit_path)) = (
+        cli.public_deployment_capture_audit_path.as_deref(),
+        cli.public_deployment_capture_audit_verify_path.as_deref(),
+    ) {
+        verify_public_deployment_capture_audit(capture_path, audit_path, &summary)?;
+    }
     let readiness_gap_error = if cli.fail_on_readiness_gaps {
         ensure_artifact_readiness_gates(&summary).err()
     } else {
@@ -9666,6 +9674,42 @@ fn write_public_deployment_capture_audit(
     })?;
     fs::write(output_path, format!("{encoded}\n"))
         .map_err(|error| format!("failed to write public deployment capture audit: {error}"))
+}
+
+fn verify_public_deployment_capture_audit(
+    capture_path: &str,
+    audit_path: &str,
+    summary: &TestnetSummary,
+) -> Result<(), String> {
+    ensure_local_json_path(capture_path, "--audit-public-deployment-capture")?;
+    ensure_local_json_path(audit_path, "--verify-public-deployment-capture-audit")?;
+    let actual = read_json_file(
+        &PathBuf::from(audit_path),
+        "public deployment capture audit",
+    )?;
+    ensure(
+        actual["kind"] == "nebula-public-deployment-capture-audit",
+        "public deployment capture audit has the wrong kind",
+    )?;
+    ensure(
+        actual["usable_as_public_deployment_evidence"] == false
+            && actual["usable_as_mainnet_custody_approval"] == false,
+        "public deployment capture audit must remain non-evidence",
+    )?;
+    let actual_root = required_root(&actual, "capture_audit_root")?;
+    let mut rooted_actual = actual.clone();
+    if let Some(object) = rooted_actual.as_object_mut() {
+        object.remove("capture_audit_root");
+    }
+    ensure(
+        value_root("public-deployment-capture-audit", &rooted_actual) == actual_root,
+        "public deployment capture audit root mismatch",
+    )?;
+    let expected = public_deployment_capture_audit(capture_path, summary)?;
+    ensure(
+        actual == expected,
+        "public deployment capture audit does not match this capture and run",
+    )
 }
 
 fn public_deployment_capture_audit(
@@ -18353,6 +18397,14 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
                     "--write-public-deployment-capture-audit",
                 )?);
             }
+            "--verify-public-deployment-capture-audit" => {
+                index += 1;
+                cli.public_deployment_capture_audit_verify_path = Some(parse_string(
+                    &args,
+                    index,
+                    "--verify-public-deployment-capture-audit",
+                )?);
+            }
             "--assemble-public-deployment-evidence" => {
                 index += 1;
                 cli.public_deployment_evidence_assembly_path = Some(parse_string(
@@ -18609,8 +18661,9 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
         )?;
         ensure_local_json_path(path, "--audit-public-deployment-capture")?;
         ensure(
-            cli.public_deployment_capture_audit_output_path.is_some(),
-            "--audit-public-deployment-capture requires --write-public-deployment-capture-audit",
+            cli.public_deployment_capture_audit_output_path.is_some()
+                || cli.public_deployment_capture_audit_verify_path.is_some(),
+            "--audit-public-deployment-capture requires --write-public-deployment-capture-audit or --verify-public-deployment-capture-audit",
         )?;
     }
     if let Some(path) = cli
@@ -18626,6 +18679,20 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             "--write-public-deployment-capture-audit requires --audit-public-deployment-capture",
         )?;
         ensure_local_json_path(path, "--write-public-deployment-capture-audit")?;
+    }
+    if let Some(path) = cli
+        .public_deployment_capture_audit_verify_path
+        .as_deref()
+    {
+        ensure(
+            cli.mainnet_readiness,
+            "--verify-public-deployment-capture-audit requires --mainnet-readiness",
+        )?;
+        ensure(
+            cli.public_deployment_capture_audit_path.is_some(),
+            "--verify-public-deployment-capture-audit requires --audit-public-deployment-capture",
+        )?;
+        ensure_local_json_path(path, "--verify-public-deployment-capture-audit")?;
     }
     if let Some(path) = cli.public_deployment_evidence_assembly_path.as_deref() {
         ensure(
@@ -25994,6 +26061,8 @@ OPTIONS:
                               Inspect captured deployment JSON and list missing fields/placeholders before assembly
         --write-public-deployment-capture-audit PATH
                               Write the non-passing public deployment capture audit JSON
+        --verify-public-deployment-capture-audit PATH
+                              Verify a public deployment capture audit JSON against the capture and this run
         --assemble-public-deployment-evidence PATH
                               Read captured deployment probe/policy JSON and assemble rooted schema v5 public evidence
         --write-public-deployment-evidence PATH
@@ -28366,6 +28435,7 @@ mod tests {
     fn public_deployment_capture_audit_requires_mainnet_readiness_and_output() {
         let capture = temp_json_path("nebula-public-deployment-capture-audit-rejected");
         let output = temp_json_path("nebula-public-deployment-capture-audit-output-rejected");
+        let verify = temp_json_path("nebula-public-deployment-capture-audit-verify-rejected");
         let error = parse_cli(vec![
             "--audit-public-deployment-capture".to_string(),
             capture.clone(),
@@ -28375,17 +28445,40 @@ mod tests {
         let error = parse_cli(vec![
             "--mainnet-readiness".to_string(),
             "--audit-public-deployment-capture".to_string(),
-            capture,
+            capture.clone(),
         ])
-        .expect_err("public deployment capture audit should require output path");
+        .expect_err("public deployment capture audit should require output or verify path");
         assert!(error.contains("--write-public-deployment-capture-audit"));
         let error = parse_cli(vec![
             "--mainnet-readiness".to_string(),
             "--write-public-deployment-capture-audit".to_string(),
-            output,
+            output.clone(),
         ])
         .expect_err("public deployment capture audit output should require capture path");
         assert!(error.contains("--audit-public-deployment-capture"));
+        let error = parse_cli(vec![
+            "--verify-public-deployment-capture-audit".to_string(),
+            verify.clone(),
+            "--audit-public-deployment-capture".to_string(),
+            capture.clone(),
+        ])
+        .expect_err("public deployment capture audit verification should require mainnet-readiness mode");
+        assert!(error.contains("requires --mainnet-readiness"));
+        let error = parse_cli(vec![
+            "--mainnet-readiness".to_string(),
+            "--verify-public-deployment-capture-audit".to_string(),
+            verify,
+        ])
+        .expect_err("public deployment capture audit verification should require capture path");
+        assert!(error.contains("--audit-public-deployment-capture"));
+        parse_cli(vec![
+            "--mainnet-readiness".to_string(),
+            "--audit-public-deployment-capture".to_string(),
+            capture,
+            "--write-public-deployment-capture-audit".to_string(),
+            output,
+        ])
+        .expect("public deployment capture audit write should parse");
     }
 
     #[test]
@@ -30588,6 +30681,75 @@ mod tests {
         assert!(error.contains("file_set_root mismatch"));
 
         let _ = fs::remove_file(scaffold_path);
+        let _ = fs::remove_dir_all(package_dir);
+    }
+
+    #[test]
+    fn public_deployment_capture_audit_verifier_rejects_stale_or_tampered_reports() {
+        let counter = TEST_FILE_COUNTER.fetch_add(1, AtomicOrdering::SeqCst);
+        let package_dir = env::temp_dir().join(format!(
+            "nebula-public-launch-package-audit-verify-{}",
+            root(&[
+                "test-public-capture-audit-verify-package",
+                &counter.to_string()
+            ])
+        ));
+        let package_dir_string = package_dir.to_string_lossy().into_owned();
+        let scaffold_path = temp_json_path("nebula-public-deployment-capture-audit-source");
+        let audit_path = temp_json_path("nebula-public-deployment-capture-audit-verify");
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness cli should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_launch_package(&package_dir_string, &summary)
+            .expect("write public launch package");
+        write_public_deployment_capture_scaffold(
+            &scaffold_path,
+            &package_dir_string,
+            &summary,
+        )
+        .expect("write public deployment capture scaffold");
+        write_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
+            .expect("write public deployment capture audit");
+        verify_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
+            .expect("verify public deployment capture audit");
+
+        let mut audit: Value =
+            serde_json::from_slice(&fs::read(&audit_path).expect("read capture audit"))
+                .expect("capture audit json");
+        audit["assembler_ready"] = json!(true);
+        if let Some(object) = audit.as_object_mut() {
+            object.remove("capture_audit_root");
+        }
+        let audit_root = value_root("public-deployment-capture-audit", &audit);
+        audit["capture_audit_root"] = json!(audit_root);
+        fs::write(
+            &audit_path,
+            serde_json::to_string_pretty(&audit).expect("capture audit json"),
+        )
+        .expect("write tampered capture audit");
+        let error = verify_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
+            .expect_err("tampered capture audit should fail verification");
+        assert!(error.contains("does not match this capture and run"));
+
+        write_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
+            .expect("rewrite public deployment capture audit");
+        let mut scaffold: Value =
+            serde_json::from_slice(&fs::read(&scaffold_path).expect("read scaffold"))
+                .expect("scaffold json");
+        scaffold["capture_plan_root"] = json!(root(&["tampered-capture-plan-root"]));
+        fs::write(
+            &scaffold_path,
+            serde_json::to_string_pretty(&scaffold).expect("scaffold json"),
+        )
+        .expect("write tampered capture source");
+        let error = verify_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
+            .expect_err("stale capture audit should fail verification");
+        assert!(error.contains("does not match this capture and run"));
+
+        let _ = fs::remove_file(scaffold_path);
+        let _ = fs::remove_file(audit_path);
         let _ = fs::remove_dir_all(package_dir);
     }
 

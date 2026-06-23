@@ -3420,7 +3420,9 @@ real XMR.
   keys, current capture-plan and package file-set root mismatches, structural
   readiness, machine-readable
   structural and full failed-check lists, strict verifier status, and the first
-  nested verifier error, then run
+  nested verifier error. CI can verify the audit report itself against the
+  capture and current release-candidate summary to reject stale, tampered,
+  cross-run, or capture-mismatched diagnostics, then run
   `--verify-public-deployment-capture` to dry-run the same assembler/verifier
   path and feed the resulting temporary attestation into
   `--fail-on-public-launch-gaps` before writing the final public deployment
