@@ -376,6 +376,7 @@ struct Cli {
     readiness_template_path: Option<String>,
     public_bootstrap_profile_path: Option<String>,
     public_status_manifest_path: Option<String>,
+    public_status_manifest_verify_path: Option<String>,
     public_deployment_runbook_path: Option<String>,
     public_launch_artifact_manifest_path: Option<String>,
     public_launch_artifact_manifest_verify_path: Option<String>,
@@ -453,6 +454,7 @@ impl Default for Cli {
             readiness_template_path: None,
             public_bootstrap_profile_path: None,
             public_status_manifest_path: None,
+            public_status_manifest_verify_path: None,
             public_deployment_runbook_path: None,
             public_launch_artifact_manifest_path: None,
             public_launch_artifact_manifest_verify_path: None,
@@ -7093,6 +7095,9 @@ fn run() -> Result<(), String> {
     if let Some(path) = cli.public_status_manifest_path.as_deref() {
         write_public_status_manifest(path, &summary)?;
     }
+    if let Some(path) = cli.public_status_manifest_verify_path.as_deref() {
+        verify_public_status_manifest(path, &summary)?;
+    }
     if let Some(path) = cli.public_deployment_runbook_path.as_deref() {
         write_public_deployment_runbook(path, &summary)?;
     }
@@ -8435,6 +8440,35 @@ fn write_public_status_manifest(path: &str, summary: &TestnetSummary) -> Result<
     fs::write(path, format!("{encoded}\n"))
         .map_err(|error| format!("failed to write public status manifest: {error}"))?;
     Ok(())
+}
+
+fn verify_public_status_manifest(path: &str, summary: &TestnetSummary) -> Result<(), String> {
+    ensure_local_json_path(path, "--verify-public-status-manifest")?;
+    let actual = read_json_file(&PathBuf::from(path), "public status manifest")?;
+    ensure(
+        actual.get("kind").and_then(Value::as_str) == Some("nebula-public-status-manifest"),
+        "public status manifest has the wrong kind",
+    )?;
+    ensure_public_status_manifest_redacted(&actual)?;
+    let mut root_payload = actual.clone();
+    let Some(map) = root_payload.as_object_mut() else {
+        return Err("public status manifest must be an object".to_string());
+    };
+    map.remove("public_status_manifest_root");
+    let computed_root = value_root("public-status-manifest", &root_payload);
+    ensure(
+        actual
+            .get("public_status_manifest_root")
+            .and_then(Value::as_str)
+            == Some(computed_root.as_str()),
+        "public status manifest root mismatch",
+    )?;
+    let expected = public_status_manifest(summary);
+    ensure_public_status_manifest_redacted(&expected)?;
+    ensure(
+        actual == expected,
+        "public status manifest does not match this run",
+    )
 }
 
 fn write_public_deployment_runbook(path: &str, summary: &TestnetSummary) -> Result<(), String> {
@@ -18347,6 +18381,11 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
                 cli.public_status_manifest_path =
                     Some(parse_string(&args, index, "--write-public-status-manifest")?);
             }
+            "--verify-public-status-manifest" => {
+                index += 1;
+                cli.public_status_manifest_verify_path =
+                    Some(parse_string(&args, index, "--verify-public-status-manifest")?);
+            }
             "--write-public-deployment-runbook" => {
                 index += 1;
                 cli.public_deployment_runbook_path = Some(parse_string(
@@ -18629,6 +18668,13 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             "--write-public-status-manifest requires --mainnet-readiness",
         )?;
         ensure_local_json_path(path, "--write-public-status-manifest")?;
+    }
+    if let Some(path) = cli.public_status_manifest_verify_path.as_deref() {
+        ensure(
+            cli.mainnet_readiness,
+            "--verify-public-status-manifest requires --mainnet-readiness",
+        )?;
+        ensure_local_json_path(path, "--verify-public-status-manifest")?;
     }
     if let Some(path) = cli.public_deployment_runbook_path.as_deref() {
         ensure(
@@ -26149,6 +26195,8 @@ OPTIONS:
                               Write a redacted public-testnet bootstrap/deployment profile
         --write-public-status-manifest PATH
                               Write a redacted public status manifest suitable for deployment proxies
+        --verify-public-status-manifest PATH
+                              Verify a redacted public status manifest against this run
         --write-public-deployment-runbook PATH
                               Write a rooted public-alpha deployment runbook for external launch operators
         --write-public-launch-artifact-manifest PATH
@@ -28398,6 +28446,14 @@ mod tests {
     }
 
     #[test]
+    fn public_status_manifest_verify_requires_mainnet_readiness_mode() {
+        let path = temp_json_path("nebula-public-status-manifest-verify-rejected");
+        let error = parse_cli(vec!["--verify-public-status-manifest".to_string(), path])
+            .expect_err("public status verification should require mainnet-readiness mode");
+        assert!(error.contains("requires --mainnet-readiness"));
+    }
+
+    #[test]
     fn public_deployment_runbook_requires_mainnet_readiness_mode() {
         let path = temp_json_path("nebula-public-deployment-runbook-rejected");
         let error = parse_cli(vec!["--write-public-deployment-runbook".to_string(), path])
@@ -28797,6 +28853,64 @@ mod tests {
                 .expect("manifest root")
         ));
         ensure_public_status_manifest_redacted(&value).expect("redacted exported manifest");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_status_manifest_verifier_accepts_current_run_export() {
+        let path = temp_json_path("nebula-public-status-manifest-verify-current");
+        let cli = parse_cli(vec![
+            "--mainnet-readiness".to_string(),
+            "--write-public-status-manifest".to_string(),
+            path.clone(),
+            "--verify-public-status-manifest".to_string(),
+            path.clone(),
+        ])
+        .expect("public status manifest write+verify flags should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_status_manifest(&path, &summary).expect("write public status manifest");
+        verify_public_status_manifest(&path, &summary)
+            .expect("current-run public status manifest should verify");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_status_manifest_verifier_rejects_re_rooted_stale_manifest() {
+        let path = temp_json_path("nebula-public-status-manifest-stale");
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet-readiness CLI should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_status_manifest(&path, &summary).expect("write public status manifest");
+        verify_public_status_manifest(&path, &summary)
+            .expect("fresh public status manifest should verify");
+
+        let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read status"))
+            .expect("public status manifest json");
+        stale["latest_block_height"] = json!(summary.latest_block_height + 1);
+        let mut rootless = stale.clone();
+        if let Some(map) = rootless.as_object_mut() {
+            map.remove("public_status_manifest_root");
+        }
+        stale["public_status_manifest_root"] =
+            json!(value_root("public-status-manifest", &rootless));
+        ensure_public_status_manifest_redacted(&stale)
+            .expect("re-rooted status manifest should still be redacted");
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&stale).expect("encode stale status manifest")
+            ),
+        )
+        .expect("write stale status manifest");
+
+        let error = verify_public_status_manifest(&path, &summary)
+            .expect_err("re-rooted stale status manifest should fail exact verification");
+        assert!(error.contains("does not match this run"));
         let _ = fs::remove_file(path);
     }
 
