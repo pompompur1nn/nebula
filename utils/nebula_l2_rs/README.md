@@ -540,7 +540,8 @@ requires `--mainnet-readiness` and writes a
 does not contain captured evidence and is not loadable as deployment evidence;
 instead it binds the launch bundle, public status manifest, bootstrap profile,
 typed public deployment runbook, launch artifact manifest, artifact-set, and
-package file-set roots plus the evidence-template root while listing the exact
+package file-set roots, release approval template root, release-authority
+registry template root, and the evidence-template root while listing the exact
 required capture fields, public endpoint fields, public surfaces, probe-root
 fields, freshness window, bootstrap node slots, operator commitments, TLS pin
 roles, the required typed public surface probe roles, observer quorum, a rooted
@@ -555,9 +556,12 @@ It also includes a `package_handoff_capture` section that names
 `nebula-public-launch-package.json` as the source of
 `public_launch_package_manifest_root` and
 `nebula-public-launch-readiness-report.json` as the source of
-`public_launch_readiness_artifact_root`; those values must be copied into the
-deployment capture from the pre-capture package, but the plan does not embed
-the actual roots so the package manifest root stays non-circular.
+`public_launch_readiness_artifact_root`, plus
+`nebula-release-approval-template.json` and
+`nebula-release-authority-registry-template.json` as the sources of the
+release-template roots; those values must be copied into the deployment capture
+from the pre-capture package, but the plan does not embed the actual package
+manifest or readiness roots so the package manifest root stays non-circular.
 This turns the remaining public-launch blocker into a deterministic capture
 checklist without letting the local runner invent external reachability, TLS,
 or observer-signature evidence.
@@ -570,7 +574,7 @@ bootstrap-node probes, capture observer attestations, verify private-summary
 denial, assemble the public deployment attestation, and confirm no mainnet
 custody. Its `checklist_root` is copied into the capture contract so deployment
 CI can fail fast when a capture skipped a phase or was assembled against the
-wrong launch/package/status/template roots. The capture contract also requires a
+wrong launch/package/status/release-template roots. The capture contract also requires a
 completed `deployment_preflight_receipt` covering the same twelve phases in
 order. The assembler derives `deployment_preflight_phase_set_root`,
 `deployment_preflight_receipt_root`, and `deployment_preflight_phase_count`
@@ -587,8 +591,9 @@ endpoint evidence is filled.
 then writes a non-evidence schema v5 capture scaffold with the current
 `capture_plan_root`, `capture_contract_root`,
 `deployment_preflight_checklist_root`, package file-set root, package manifest
-root, readiness artifact root, and matching preflight/runbook receipt bindings
-already filled from the verified package and current release-candidate summary.
+root, readiness artifact root, release-template roots, and matching
+preflight/runbook receipt bindings already filled from the verified package and
+current release-candidate summary.
 The scaffold still contains placeholders for the live public endpoints, TLS
 pins, probe transcripts, bootstrap/operator records, observer signatures,
 freshness window, and evidence root, so `--audit-public-deployment-capture`

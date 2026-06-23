@@ -3324,7 +3324,8 @@ real XMR.
   export or package verification.
 - Public deployment evidence templates give deployment automation a schema v5
   worksheet with the canonical public status manifest, launch bundle root,
-  launch artifact manifest roots, package file-set root, typed public
+  launch artifact manifest roots, package file-set root, release approval
+  template root, release-authority registry template root, typed public
   deployment runbook roots, a public deployment runbook receipt template,
   typed bootstrap node commitments, typed proxy/firewall/rate-limit policy claims,
   health/status-page/metrics/deployed-finality/incident-contact/faucet/reset body shapes,
@@ -3337,8 +3338,8 @@ real XMR.
   replaced by captured deployment evidence. The paired
   `--verify-public-deployment-evidence-template` command recomputes the
   template root and rejects stale status, launch-bundle, launch-artifact,
-  package-file-set, runbook, bootstrap, or local probe roots before operators
-  fill public endpoint evidence.
+  package-file-set, release-template, runbook, bootstrap, or local probe roots
+  before operators fill public endpoint evidence.
 - A public deployment capture-plan export gives deployment CI a rooted
   `nebula-public-deployment-capture-plan` work order before capture starts. It
   is not evidence; it lists the exact required capture fields, public endpoint
@@ -3352,11 +3353,14 @@ real XMR.
   recomputes the preflight checklist, capture contract, and plan roots before
   export or package verification. The capture contract also freezes the public
   launch artifact manifest root, artifact-set root, package file-set root,
+  release approval template root, release-authority registry template root,
   typed public deployment runbook root, and step-set root, and includes a
   `package_handoff_capture` section that tells operators to copy
   `public_launch_package_manifest_root` from `nebula-public-launch-package.json`
   and `public_launch_readiness_artifact_root` from
-  `nebula-public-launch-readiness-report.json` into the deployment capture. The
+  `nebula-public-launch-readiness-report.json`, plus the release-template roots
+  from `nebula-release-approval-template.json` and
+  `nebula-release-authority-registry-template.json`, into the deployment capture. The
   plan names those required source files and capture fields without embedding
   the actual package manifest/readiness roots, avoiding a circular package
   manifest root while keeping the operator handoff aligned with the same status,
@@ -3372,8 +3376,8 @@ real XMR.
   verified `nebula-public-launch-package` directory and write a schema v5
   capture worksheet with the current capture-plan root, capture-contract root,
   deployment preflight checklist root, package file-set root, package manifest
-  root, readiness artifact root, and matching preflight/runbook receipt
-  bindings already filled. The scaffold is still marked operator-fill-required
+  root, readiness artifact root, release-template roots, and matching
+  preflight/runbook receipt bindings already filled. The scaffold is still marked operator-fill-required
   and unusable as public deployment evidence; live endpoints, TLS pins, public
   probes, bootstrap/operator records, observer signatures, freshness, and the
   final evidence root must still be captured before the public launch gate can
