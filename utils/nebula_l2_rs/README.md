@@ -700,8 +700,9 @@ includes `public_launch_readiness` with check roots, blocker ids, machine-action
 `remediations`, a `remediation_root`, and a `public-launch-ready` or
 `public-launch-blocked` level. Each remediation names the stable expected
 artifact id/path, expected artifact, remediation kind, relevant command,
-expected evidence root, granular failed subchecks, privacy classification, and
-whether external deployment capture is required.
+expected evidence root, granular failed subchecks, root-specific `repair_roots`
+for failed capture/package/status/bootstrap policy bindings, privacy
+classification, and whether external deployment capture is required.
 Deployment-attestation remediations
 also list failed subchecks, including capture-plan, launch-bundle, package
 file-set, bootstrap profile/report/rate-limit policy roots, status-manifest

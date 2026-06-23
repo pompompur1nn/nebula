@@ -3467,7 +3467,8 @@ real XMR.
   machine-actionable remediation entries, and a remediation root. Each
   remediation names the stable expected artifact id/path, expected artifact,
   remediation kind, relevant command, expected evidence root, granular failed
-  subchecks for capture roots, bootstrap profile/report/rate-limit roots,
+  subchecks, root-specific `repair_roots` for failed capture/package/status/
+  bootstrap policy bindings, and capture roots, bootstrap profile/report/rate-limit roots,
   bootstrap topology/count/registry/probe bindings,
   endpoint publicness, TLS pin roots/counts,
   proxy/firewall/rate-limit policy roots, status-manifest root/payload, and

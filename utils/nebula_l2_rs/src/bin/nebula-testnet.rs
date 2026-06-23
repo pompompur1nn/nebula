@@ -1405,6 +1405,7 @@ struct PublicLaunchRemediation {
     remediation_kind: String,
     expected_evidence_root: String,
     failed_subchecks: Vec<String>,
+    repair_roots: BTreeMap<String, String>,
     privacy_classification: String,
     operator_private: bool,
     external_capture_required: bool,
@@ -7337,9 +7338,27 @@ fn public_launch_remediation_for_check(
     } else {
         Vec::new()
     };
+    let repair_roots = if check.id == "public-launch-deployment-attestation" {
+        public_deployment_repair_roots(&summary.public_deployment, &failed_subchecks)
+    } else {
+        BTreeMap::new()
+    };
     let failed_subcheck_root = collection_root(
         "public-launch-remediation-failed-subchecks",
         failed_subchecks.clone(),
+    );
+    let repair_root = collection_root(
+        "public-launch-remediation-repair-roots",
+        repair_roots
+            .iter()
+            .map(|(subcheck, expected_root)| {
+                root(&[
+                    "public-launch-remediation-repair-root",
+                    subcheck,
+                    expected_root,
+                ])
+            })
+            .collect::<Vec<_>>(),
     );
     let remediation_root = root(&[
         "public-launch-remediation",
@@ -7352,6 +7371,7 @@ fn public_launch_remediation_for_check(
         remediation_kind,
         &check.evidence_root,
         &failed_subcheck_root,
+        &repair_root,
         privacy_classification,
         bool_str(operator_private),
         bool_str(external_capture_required),
@@ -7365,11 +7385,73 @@ fn public_launch_remediation_for_check(
         remediation_kind: remediation_kind.to_string(),
         expected_evidence_root: check.evidence_root.clone(),
         failed_subchecks,
+        repair_roots,
         privacy_classification: privacy_classification.to_string(),
         operator_private,
         external_capture_required,
         remediation_root,
     }
+}
+
+fn public_deployment_repair_roots(
+    report: &PublicDeploymentReport,
+    failed_subchecks: &[String],
+) -> BTreeMap<String, String> {
+    let mut repair_roots = BTreeMap::new();
+    let failed = failed_subchecks
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let candidates = [
+        (
+            "capture_plan_root_bound",
+            report.expected_capture_plan_root.as_deref(),
+        ),
+        (
+            "capture_contract_root_bound",
+            report.expected_capture_contract_root.as_deref(),
+        ),
+        (
+            "deployment_preflight_checklist_root_bound",
+            report.expected_deployment_preflight_checklist_root.as_deref(),
+        ),
+        (
+            "public_launch_package_file_set_root_bound",
+            report.expected_public_launch_package_file_set_root.as_deref(),
+        ),
+        (
+            "public_launch_package_manifest_root_bound",
+            report.expected_public_launch_package_manifest_root.as_deref(),
+        ),
+        (
+            "public_launch_readiness_artifact_root_bound",
+            report.expected_public_launch_readiness_artifact_root.as_deref(),
+        ),
+        (
+            "public_bootstrap_profile_root_bound",
+            report.expected_public_bootstrap_profile_root.as_deref(),
+        ),
+        (
+            "public_bootstrap_profile_report_root_bound",
+            report.expected_public_bootstrap_profile_report_root.as_deref(),
+        ),
+        (
+            "rate_limit_policy_root_bound",
+            report.expected_rate_limit_policy_root.as_deref(),
+        ),
+        (
+            "public_status_manifest_root_bound",
+            report.expected_public_status_manifest_root.as_deref(),
+        ),
+    ];
+    for (subcheck, expected_root) in candidates {
+        if failed.contains(subcheck) {
+            if let Some(expected_root) = expected_root {
+                repair_roots.insert(subcheck.to_string(), expected_root.to_string());
+            }
+        }
+    }
+    repair_roots
 }
 
 fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<String> {
@@ -31602,6 +31684,31 @@ mod tests {
         assert!(remediation
             .failed_subchecks
             .contains(&"deployment_preflight_checklist_root_bound".to_string()));
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("capture_plan_root_bound")
+                .map(String::as_str),
+            summary.public_deployment.expected_capture_plan_root.as_deref()
+        );
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("capture_contract_root_bound")
+                .map(String::as_str),
+            summary.public_deployment.expected_capture_contract_root.as_deref()
+        );
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("deployment_preflight_checklist_root_bound")
+                .map(String::as_str),
+            summary
+                .public_deployment
+                .expected_deployment_preflight_checklist_root
+                .as_deref()
+        );
+        assert!(!remediation.repair_roots.contains_key("capture_plan_bound"));
         let _ = fs::remove_file(path);
     }
 
@@ -32165,6 +32272,26 @@ mod tests {
                 "public_launch_readiness_artifact_root_bound".to_string()
             ]
         );
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("public_launch_package_manifest_root_bound")
+                .map(String::as_str),
+            summary
+                .public_deployment
+                .expected_public_launch_package_manifest_root
+                .as_deref()
+        );
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("public_launch_readiness_artifact_root_bound")
+                .map(String::as_str),
+            summary
+                .public_deployment
+                .expected_public_launch_readiness_artifact_root
+                .as_deref()
+        );
         let _ = fs::remove_file(path);
     }
 
@@ -32216,6 +32343,16 @@ mod tests {
         assert_eq!(
             remediation.failed_subchecks,
             vec!["public_launch_package_file_set_root_bound".to_string()]
+        );
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("public_launch_package_file_set_root_bound")
+                .map(String::as_str),
+            summary
+                .public_deployment
+                .expected_public_launch_package_file_set_root
+                .as_deref()
         );
         let _ = fs::remove_file(path);
     }
