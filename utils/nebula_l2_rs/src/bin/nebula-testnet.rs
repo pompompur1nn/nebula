@@ -380,6 +380,7 @@ struct Cli {
     public_launch_artifact_manifest_path: Option<String>,
     public_launch_bundle_path: Option<String>,
     public_launch_readiness_report_path: Option<String>,
+    public_capture_todo_path: Option<String>,
     public_launch_package_dir: Option<String>,
     public_launch_package_verify_dir: Option<String>,
     public_testnet_certification_dir: Option<String>,
@@ -447,6 +448,7 @@ impl Default for Cli {
             public_launch_artifact_manifest_path: None,
             public_launch_bundle_path: None,
             public_launch_readiness_report_path: None,
+            public_capture_todo_path: None,
             public_launch_package_dir: None,
             public_launch_package_verify_dir: None,
             public_testnet_certification_dir: None,
@@ -7085,6 +7087,9 @@ fn run() -> Result<(), String> {
     if let Some(path) = cli.public_launch_readiness_report_path.as_deref() {
         write_public_launch_readiness_report(path, &summary)?;
     }
+    if let Some(path) = cli.public_capture_todo_path.as_deref() {
+        write_public_capture_todo(path, &summary)?;
+    }
     if let Some(path) = cli.public_launch_package_dir.as_deref() {
         write_public_launch_package(path, &summary)?;
     }
@@ -7514,7 +7519,7 @@ fn public_launch_remediation_for_check(
                 "nebula-public-launch-artifacts.json + nebula-public-deployment.json",
                 "public-deployment-attestation",
                 "nebula-public-deployment.json",
-                "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --write-public-launch-artifact-manifest nebula-public-launch-artifacts.json --write-public-deployment-capture-plan nebula-public-deployment-capture-plan.json --write-public-deployment-evidence-template nebula-public-deployment-template.json --json; cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --verify-public-deployment-capture capture.json --fail-on-public-launch-gaps --json; cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --assemble-public-deployment-evidence capture.json --write-public-deployment-evidence nebula-public-deployment.json --json",
+                "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --write-public-launch-artifact-manifest nebula-public-launch-artifacts.json --write-public-deployment-capture-plan nebula-public-deployment-capture-plan.json --write-public-capture-todo nebula-public-capture-todo.json --write-public-deployment-evidence-template nebula-public-deployment-template.json --json; cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --verify-public-deployment-capture capture.json --fail-on-public-launch-gaps --json; cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --assemble-public-deployment-evidence capture.json --write-public-deployment-evidence nebula-public-deployment.json --json",
                 "external-capture",
                 "operator-captured-redacted",
                 true,
@@ -8600,6 +8605,115 @@ fn public_capture_todo_artifact(summary: &TestnetSummary) -> Value {
     todo
 }
 
+fn ensure_public_capture_todo_artifact(value: &Value) -> Result<(), String> {
+    ensure(
+        value.get("kind").and_then(Value::as_str) == Some("nebula-public-capture-todo"),
+        "public capture todo kind mismatch",
+    )?;
+    ensure(
+        value.get("schema_version").and_then(Value::as_u64) == Some(1),
+        "public capture todo schema_version mismatch",
+    )?;
+    ensure(
+        value.get("chain_id").and_then(Value::as_str) == Some(CHAIN_ID),
+        "public capture todo chain_id mismatch",
+    )?;
+    ensure(
+        value
+            .get("operator_fill_required")
+            .and_then(Value::as_bool)
+            == Some(true),
+        "public capture todo must require operator fill-in",
+    )?;
+    ensure(
+        value
+            .get("usable_as_public_deployment_evidence")
+            .and_then(Value::as_bool)
+            == Some(false),
+        "public capture todo must not claim deployment evidence status",
+    )?;
+    ensure(
+        value
+            .get("usable_as_mainnet_custody_approval")
+            .and_then(Value::as_bool)
+            == Some(false),
+        "public capture todo must not claim mainnet custody approval",
+    )?;
+    ensure(
+        value.get("custody_mode").and_then(Value::as_str) == Some("no-mainnet-custody"),
+        "public capture todo custody_mode mismatch",
+    )?;
+    for (field, expected_len) in [
+        (
+            "required_capture_fields",
+            REQUIRED_PUBLIC_DEPLOYMENT_CAPTURE_FIELDS.len(),
+        ),
+        (
+            "required_endpoint_fields",
+            REQUIRED_PUBLIC_DEPLOYMENT_ENDPOINT_FIELDS.len(),
+        ),
+        (
+            "required_public_surfaces",
+            REQUIRED_PUBLIC_DEPLOYMENT_SURFACES.len(),
+        ),
+        (
+            "required_probe_root_fields",
+            REQUIRED_PUBLIC_DEPLOYMENT_PROBE_ROOT_FIELDS.len(),
+        ),
+        (
+            "required_preflight_phase_ids",
+            REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len(),
+        ),
+        ("required_runbook_step_ids", PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len()),
+        (
+            "required_tls_endpoint_pin_roles",
+            PUBLIC_TLS_ENDPOINT_PIN_ROLES.len(),
+        ),
+        (
+            "required_public_surface_probe_roles",
+            REQUIRED_PUBLIC_SURFACE_PROBE_ROLES.len(),
+        ),
+    ] {
+        ensure(
+            value.get(field).and_then(Value::as_array).map(Vec::len) == Some(expected_len),
+            &format!("public capture todo {field} length mismatch"),
+        )?;
+    }
+    ensure(
+        value.get("capture_contract").and_then(Value::as_object).is_some(),
+        "public capture todo missing capture_contract",
+    )?;
+    ensure(
+        value
+            .get("deployment_preflight")
+            .and_then(Value::as_object)
+            .is_some(),
+        "public capture todo missing deployment_preflight",
+    )?;
+    let mut rootless = value.clone();
+    if let Some(map) = rootless.as_object_mut() {
+        map.remove("public_capture_todo_root");
+    }
+    let expected_root = value_root("public-capture-todo", &rootless);
+    ensure(
+        value
+            .get("public_capture_todo_root")
+            .and_then(Value::as_str)
+            == Some(expected_root.as_str()),
+        "public capture todo root mismatch",
+    )
+}
+
+fn write_public_capture_todo(path: &str, summary: &TestnetSummary) -> Result<(), String> {
+    ensure_local_json_path(path, "--write-public-capture-todo")?;
+    let todo = public_capture_todo_artifact(summary);
+    ensure_public_capture_todo_artifact(&todo)?;
+    let encoded = serde_json::to_string_pretty(&todo)
+        .map_err(|error| format!("failed to encode public capture todo json: {error}"))?;
+    fs::write(path, format!("{encoded}\n"))
+        .map_err(|error| format!("failed to write public capture todo: {error}"))
+}
+
 fn write_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<(), String> {
     ensure_local_output_dir_path(path, "--write-public-launch-package")?;
     let dir = PathBuf::from(path);
@@ -9195,7 +9309,11 @@ fn public_launch_package_artifact_value(
             ensure_public_deployment_capture_plan_redacted(&plan)?;
             Ok(plan)
         }
-        "public-capture-todo" => Ok(public_capture_todo_artifact(summary)),
+        "public-capture-todo" => {
+            let todo = public_capture_todo_artifact(summary);
+            ensure_public_capture_todo_artifact(&todo)?;
+            Ok(todo)
+        }
         other => Err(format!("unknown public launch package artifact '{other}'")),
     }
 }
@@ -17841,6 +17959,11 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
                     "--write-public-launch-readiness-report",
                 )?);
             }
+            "--write-public-capture-todo" => {
+                index += 1;
+                cli.public_capture_todo_path =
+                    Some(parse_string(&args, index, "--write-public-capture-todo")?);
+            }
             "--write-public-launch-package" => {
                 index += 1;
                 cli.public_launch_package_dir =
@@ -18051,6 +18174,13 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             "--write-public-launch-readiness-report requires --mainnet-readiness",
         )?;
         ensure_local_json_path(path, "--write-public-launch-readiness-report")?;
+    }
+    if let Some(path) = cli.public_capture_todo_path.as_deref() {
+        ensure(
+            cli.mainnet_readiness,
+            "--write-public-capture-todo requires --mainnet-readiness",
+        )?;
+        ensure_local_json_path(path, "--write-public-capture-todo")?;
     }
     if let Some(path) = cli.public_launch_package_dir.as_deref() {
         ensure(
@@ -25458,6 +25588,8 @@ OPTIONS:
                               Write a redacted public-alpha deployment handoff bundle
         --write-public-launch-readiness-report PATH
                               Write a local operator-only public launch gate report and remediation list
+        --write-public-capture-todo PATH
+                              Write a rooted machine-readable external capture work order for deployment CI
         --write-public-launch-package DIR
                               Write the full redacted public-alpha launch package into a directory
         --verify-public-launch-package DIR
@@ -27717,6 +27849,14 @@ mod tests {
     }
 
     #[test]
+    fn public_capture_todo_requires_mainnet_readiness_mode() {
+        let path = temp_json_path("nebula-public-capture-todo-rejected");
+        let error = parse_cli(vec!["--write-public-capture-todo".to_string(), path])
+            .expect_err("public capture todo should require mainnet-readiness mode");
+        assert!(error.contains("requires --mainnet-readiness"));
+    }
+
+    #[test]
     fn public_launch_package_requires_mainnet_readiness_mode() {
         let path = temp_json_path("nebula-public-launch-package-rejected");
         let error = parse_cli(vec!["--write-public-launch-package".to_string(), path])
@@ -28486,6 +28626,84 @@ mod tests {
                 .expect("artifact root")
         ));
         let _ = fs::remove_file(evidence_path);
+    }
+
+    #[test]
+    fn public_capture_todo_export_writes_rooted_external_capture_work_order() {
+        let path = temp_json_path("nebula-public-capture-todo");
+        let cli = parse_cli(vec![
+            "--mainnet-readiness".to_string(),
+            "--write-public-capture-todo".to_string(),
+            path.clone(),
+        ])
+        .expect("public capture todo flag should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_capture_todo(&path, &summary).expect("write public capture todo");
+        let value: Value = serde_json::from_slice(&fs::read(&path).expect("read capture todo"))
+            .expect("capture todo json");
+        let capture_plan = public_deployment_capture_plan(&summary);
+        let readiness_report = public_launch_readiness_report_artifact(&summary);
+        assert_eq!(value["kind"], "nebula-public-capture-todo");
+        assert_eq!(value["operator_fill_required"], true);
+        assert_eq!(value["external_capture_required"], true);
+        assert_eq!(value["usable_as_public_deployment_evidence"], false);
+        assert_eq!(value["usable_as_mainnet_custody_approval"], false);
+        assert_eq!(value["capture_plan_root"], capture_plan["capture_plan_root"]);
+        assert_eq!(
+            value["capture_contract_root"],
+            capture_plan["capture_contract_root"]
+        );
+        assert_eq!(
+            value["deployment_preflight_checklist_root"],
+            capture_plan["deployment_preflight"]["checklist_root"]
+        );
+        assert_eq!(
+            value["public_launch_readiness_artifact_root"],
+            readiness_report["public_launch_readiness_artifact_root"]
+        );
+        assert_eq!(
+            value["public_launch_package_file_set_root"],
+            public_launch_package_file_set_root(&summary.manifest_id, &summary.testnet_id)
+        );
+        assert_eq!(
+            value["required_capture_fields"]
+                .as_array()
+                .expect("required capture fields")
+                .len(),
+            REQUIRED_PUBLIC_DEPLOYMENT_CAPTURE_FIELDS.len()
+        );
+        assert_eq!(
+            value["required_endpoint_fields"]
+                .as_array()
+                .expect("required endpoint fields")
+                .len(),
+            REQUIRED_PUBLIC_DEPLOYMENT_ENDPOINT_FIELDS.len()
+        );
+        assert_eq!(
+            value["required_preflight_phase_ids"]
+                .as_array()
+                .expect("required preflight phases")
+                .len(),
+            REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len()
+        );
+        assert_eq!(
+            value["blocking_gaps"][0],
+            "public-launch-deployment-attestation"
+        );
+        assert!(is_hex_root(
+            value["public_capture_todo_root"]
+                .as_str()
+                .expect("capture todo root")
+        ));
+        ensure_public_capture_todo_artifact(&value).expect("capture todo root guard");
+        let mut tampered = value.clone();
+        tampered["required_capture_fields"] = json!([]);
+        let error = ensure_public_capture_todo_artifact(&tampered)
+            .expect_err("tampered capture todo should fail");
+        assert!(error.contains("required_capture_fields"));
+        let _ = fs::remove_file(path);
     }
 
     #[test]

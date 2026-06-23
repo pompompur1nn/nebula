@@ -3270,7 +3270,9 @@ real XMR.
   and no-mainnet-custody inputs. It is required before public capture,
   operator-fill-required, and explicitly not deployment evidence or custody
   approval; it avoids embedding the package manifest root to keep package roots
-  acyclic.
+  acyclic. The same rooted todo can be written standalone with
+  `--write-public-capture-todo` for deployment CI that does not need the full
+  package directory.
 - A local operator-only public launch readiness report export gives CI a
   standalone `nebula-public-launch-readiness-report` with the launch level,
   blocker ids, remediation commands, public status/bundle/capture-plan roots,
