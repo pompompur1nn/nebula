@@ -3271,15 +3271,18 @@ real XMR.
   fails on stale, tampered, swapped, cross-run, shape-tampered, or extra-file
   package directories before public evidence capture begins.
 - A public testnet certification export writes and verifies the rooted launch
-  package, emits the operator-only launch readiness report, and records
-  `local_testnet_ready`, `public_launch_ready`, package/report roots, blocking
-  gaps, remediation commands, and whether external capture is still required in
-  `nebula-public-testnet-certification.json`. It is deliberately operator-local
-  and remains blocked until the filled schema v5 deployment attestation passes.
+  package, emits the operator-only launch readiness report, writes exact release
+  approval and release-authority registry handoff templates, and records
+  `local_testnet_ready`, `public_launch_ready`, package/report/template roots,
+  blocking gaps, remediation commands, and whether external capture is still
+  required in `nebula-public-testnet-certification.json`. It is deliberately
+  operator-local and remains blocked until the filled schema v5 deployment
+  attestation passes.
   The paired `--verify-public-testnet-certification` command verifies the nested
-  package, recomputes the launch report and certification root, enforces the
-  exact top-level directory shape, and rejects stale, tampered, cross-run,
-  extra-file, or swapped package/report/cert roots.
+  package, recomputes the launch report and certification root, verifies both
+  release handoff templates, enforces the exact top-level directory shape, and
+  rejects stale, tampered, cross-run, extra-file, or swapped
+  package/report/template/cert roots.
 - The package-level public capture todo export gives CI a rooted
   `nebula-public-capture-todo` artifact that repeats the exact remaining
   external-capture work without scraping prose: capture-plan, capture-contract,

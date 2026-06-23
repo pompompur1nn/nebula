@@ -9452,6 +9452,19 @@ fn write_public_testnet_certification(path: &str, summary: &TestnetSummary) -> R
         &launch_report,
         "public-testnet-certification-readiness-report",
     )?;
+    let release_approval_template_path = dir.join("nebula-release-approval-template.json");
+    let release_approval_template_path_string =
+        release_approval_template_path.to_string_lossy().into_owned();
+    write_release_approval_template(&release_approval_template_path_string, summary)?;
+    verify_release_approval_template(&release_approval_template_path_string, summary)?;
+    let release_authority_registry_template_path =
+        dir.join("nebula-release-authority-registry-template.json");
+    let release_authority_registry_template_path_string =
+        release_authority_registry_template_path
+            .to_string_lossy()
+            .into_owned();
+    write_release_authority_registry_template(&release_authority_registry_template_path_string)?;
+    verify_release_authority_registry_template(&release_authority_registry_template_path_string)?;
     let package_manifest = read_json_file(
         &package_dir.join("nebula-public-launch-package.json"),
         "public launch package manifest",
@@ -9484,6 +9497,17 @@ fn verify_public_testnet_certification(path: &str, summary: &TestnetSummary) -> 
         actual_launch_report == expected_launch_report,
         "public testnet certification readiness report does not match this run",
     )?;
+    let release_approval_template_path = dir.join("nebula-release-approval-template.json");
+    let release_approval_template_path_string =
+        release_approval_template_path.to_string_lossy().into_owned();
+    verify_release_approval_template(&release_approval_template_path_string, summary)?;
+    let release_authority_registry_template_path =
+        dir.join("nebula-release-authority-registry-template.json");
+    let release_authority_registry_template_path_string =
+        release_authority_registry_template_path
+            .to_string_lossy()
+            .into_owned();
+    verify_release_authority_registry_template(&release_authority_registry_template_path_string)?;
 
     let package_manifest = read_json_file(
         &package_dir.join("nebula-public-launch-package.json"),
@@ -9526,6 +9550,14 @@ fn public_testnet_certification_artifact(
     let package_manifest_root = required_root(package_manifest, "package_manifest_root")?;
     let public_launch_readiness_artifact_root =
         required_root(launch_report, "public_launch_readiness_artifact_root")?;
+    let release_approval_template = release_approval_template_for_summary(summary);
+    let release_approval_template_root =
+        value_root("release-approval-template", &release_approval_template);
+    let release_authority_registry_template = release_authority_registry_template();
+    let release_authority_registry_template_root = value_root(
+        "release-authority-registry-template",
+        &release_authority_registry_template,
+    );
     let external_capture_required = summary
         .public_launch_readiness
         .remediations
@@ -9559,8 +9591,13 @@ fn public_testnet_certification_artifact(
         "public_launch_readiness_report_file": "nebula-public-launch-readiness-report.json",
         "public_launch_readiness_report_root": &summary.public_launch_readiness.report_root,
         "public_launch_readiness_artifact_root": public_launch_readiness_artifact_root,
+        "release_approval_template_file": "nebula-release-approval-template.json",
+        "release_approval_template_root": release_approval_template_root,
+        "release_authority_registry_template_file": "nebula-release-authority-registry-template.json",
+        "release_authority_registry_template_root": release_authority_registry_template_root,
         "next_steps": {
             "capture_public_deployment": "Fill nebula-public-launch-package/nebula-public-deployment-template.json with captured public endpoint, TLS, probe, observer, operator-registry, preflight, and runbook receipt evidence.",
+            "collect_release_authority_handoff": "Fill nebula-release-approval-template.json and nebula-release-authority-registry-template.json only after public deployment evidence and external authority signoff are complete.",
             "verify_capture": "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --verify-public-deployment-capture capture.json --fail-on-public-launch-gaps --json",
             "assemble_public_deployment": "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --assemble-public-deployment-evidence capture.json --write-public-deployment-evidence nebula-public-deployment.json --json",
             "verify_public_launch": "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --verify-public-deployment-evidence nebula-public-deployment.json --json"
@@ -9575,6 +9612,8 @@ fn ensure_public_testnet_certification_exact_file_set(dir: &PathBuf) -> Result<(
     let expected_files = [
         "nebula-public-launch-readiness-report.json",
         "nebula-public-testnet-certification.json",
+        "nebula-release-approval-template.json",
+        "nebula-release-authority-registry-template.json",
     ];
     let expected_dirs = ["nebula-public-launch-package"];
 
@@ -31674,6 +31713,16 @@ mod tests {
                 .expect("readiness artifact root")
         ));
         assert!(is_hex_root(
+            certification["release_approval_template_root"]
+                .as_str()
+                .expect("release approval template root")
+        ));
+        assert!(is_hex_root(
+            certification["release_authority_registry_template_root"]
+                .as_str()
+                .expect("release authority registry template root")
+        ));
+        assert!(is_hex_root(
             certification["certification_root"]
                 .as_str()
                 .expect("certification root")
@@ -31682,6 +31731,10 @@ mod tests {
         assert_eq!(certification["usable_as_mainnet_custody_approval"], false);
         assert!(cert_dir
             .join("nebula-public-launch-readiness-report.json")
+            .exists());
+        assert!(cert_dir.join("nebula-release-approval-template.json").exists());
+        assert!(cert_dir
+            .join("nebula-release-authority-registry-template.json")
             .exists());
         let _ = fs::remove_dir_all(cert_dir);
     }
@@ -31743,6 +31796,25 @@ mod tests {
         let error = verify_public_testnet_certification(&cert_dir_string, &summary)
             .expect_err("tampered readiness report should fail verification");
         assert!(error.contains("readiness report does not match this run"));
+
+        write_public_testnet_certification(&cert_dir_string, &summary)
+            .expect("rewrite public testnet certification");
+        let approval_template_path = cert_dir.join("nebula-release-approval-template.json");
+        let mut approval_template: Value = serde_json::from_slice(
+            &fs::read(&approval_template_path).expect("read release approval template"),
+        )
+        .expect("release approval template json");
+        approval_template["testnet_run_checkpoint_root"] =
+            json!(root(&["tampered-certification-release-template"]));
+        fs::write(
+            &approval_template_path,
+            serde_json::to_string_pretty(&approval_template)
+                .expect("release approval template json"),
+        )
+        .expect("write tampered release approval template");
+        let error = verify_public_testnet_certification(&cert_dir_string, &summary)
+            .expect_err("tampered release approval template should fail verification");
+        assert!(error.contains("release approval template does not match this run"));
 
         write_public_testnet_certification(&cert_dir_string, &summary)
             .expect("rewrite public testnet certification");

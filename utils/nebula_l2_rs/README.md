@@ -489,20 +489,23 @@ orders before public evidence capture starts.
 `--write-public-testnet-certification path\to\cert-dir` also requires
 `--mainnet-readiness` and writes a one-command public-testnet certification
 directory. It exports and verifies `nebula-public-launch-package`, writes the
-operator-only launch readiness report, and writes
+operator-only launch readiness report, writes the release approval and release
+authority registry handoff templates, and writes
 `nebula-public-testnet-certification.json` with `local_testnet_ready`,
 `public_launch_ready`, package roots, launch report roots, blocking gaps,
-remediations, whether external capture is still required, and the exact capture,
-verify, assemble, and launch-gate commands. The certification artifact is
+release-template roots, remediations, whether external capture is still
+required, and the exact capture, verify, assemble, and launch-gate commands.
+The certification artifact is
 operator-local, not public deployment evidence and not mainnet custody approval;
 it truthfully remains `public-launch-blocked` until a filled schema v5
 deployment attestation passes the gate.
 `--verify-public-testnet-certification path\to\cert-dir` also requires
 `--mainnet-readiness`, verifies the nested launch package, recomputes the
-launch readiness report and certification root against the current
-release-candidate summary, enforces the exact top-level directory shape, and
-fails on stale, tampered, cross-run, extra-file, or swapped package/report/cert
-roots before public evidence capture starts.
+launch readiness report, verifies both release handoff templates, recomputes
+the certification root against the current release-candidate summary, enforces
+the exact top-level directory shape, and fails on stale, tampered, cross-run,
+extra-file, or swapped package/report/template/cert roots before public evidence
+capture starts.
 
 `--write-public-deployment-evidence-template path\to\deployment-template.json`
 also requires `--mainnet-readiness` and writes the schema v5 worksheet that a
