@@ -680,9 +680,10 @@ filled schema v5 public deployment attestation all pass. This is a public
 testnet launch gate, not a mainnet value gate. The full local `--json` summary
 includes `public_launch_readiness` with check roots, blocker ids, machine-actionable
 `remediations`, a `remediation_root`, and a `public-launch-ready` or
-`public-launch-blocked` level. Each remediation names the expected artifact,
-relevant command, expected evidence root, granular failed subchecks, privacy
-classification, and whether external deployment capture is required.
+`public-launch-blocked` level. Each remediation names the stable expected
+artifact id/path, expected artifact, remediation kind, relevant command,
+expected evidence root, granular failed subchecks, privacy classification, and
+whether external deployment capture is required.
 Deployment-attestation remediations
 also list failed subchecks, including capture-plan, launch-bundle, package
 file-set, bootstrap profile/report/rate-limit policy roots, status-manifest

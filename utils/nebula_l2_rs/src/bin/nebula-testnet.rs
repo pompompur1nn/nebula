@@ -1388,7 +1388,10 @@ struct PublicLaunchReadiness {
 struct PublicLaunchRemediation {
     blocker_id: String,
     expected_artifact: String,
+    expected_artifact_id: String,
+    expected_artifact_path: String,
     command: String,
+    remediation_kind: String,
     expected_evidence_root: String,
     failed_subchecks: Vec<String>,
     privacy_classification: String,
@@ -7119,88 +7122,132 @@ fn public_launch_remediation_for_check(
     summary: &TestnetSummary,
     check: &ReadinessCheck,
 ) -> PublicLaunchRemediation {
-    let (expected_artifact, command, privacy_classification, operator_private, external_capture_required) =
-        match check.id.as_str() {
+    let (
+        expected_artifact,
+        expected_artifact_id,
+        expected_artifact_path,
+        command,
+        remediation_kind,
+        privacy_classification,
+        operator_private,
+        external_capture_required,
+    ) = match check.id.as_str() {
             "public-launch-no-mainnet-custody" => (
                 "local no-mainnet-custody run checkpoint",
+                "local-no-mainnet-custody-run-checkpoint",
+                "local://run-checkpoint",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --json",
+                "local-run",
                 "public-redacted",
                 false,
                 false,
             ),
             "public-launch-finality-target" => (
                 "local <=200ms finality report",
+                "local-finality-latency-report",
+                "local://finality-latency-report",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --blocks 8 --target-finality-ms 200 --mainnet-readiness --self-test --json",
+                "local-run",
                 "public-redacted",
                 false,
                 false,
             ),
             "public-launch-bootstrap-profile" | "public-launch-policy-bounds" => (
                 "nebula-public-bootstrap.json",
+                "public-bootstrap-profile",
+                "nebula-public-bootstrap.json",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --write-public-bootstrap-profile nebula-public-bootstrap.json --json",
+                "local-artifact-export",
                 "public-redacted",
                 false,
                 false,
             ),
             "public-launch-runner-loopback-only" => (
                 "local loopback run profile",
+                "local-loopback-run-profile",
+                "local://run-profile",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --json",
+                "local-run",
                 "public-redacted",
                 false,
                 false,
             ),
             "public-launch-status-manifest-redacted" => (
                 "nebula-public-status.json",
+                "public-status-manifest",
+                "nebula-public-status.json",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --write-public-status-manifest nebula-public-status.json --json",
+                "local-artifact-export",
                 "public-redacted",
                 false,
                 false,
             ),
             "public-launch-bundle-redacted" => (
                 "nebula-public-launch-bundle.json",
+                "public-launch-bundle",
+                "nebula-public-launch-bundle.json",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --write-public-launch-bundle nebula-public-launch-bundle.json --json",
+                "local-artifact-export",
                 "public-redacted",
                 false,
                 false,
             ),
             "public-launch-deployment-attestation" => (
                 "nebula-public-launch-artifacts.json + nebula-public-deployment.json",
+                "public-deployment-attestation",
+                "nebula-public-deployment.json",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --write-public-launch-artifact-manifest nebula-public-launch-artifacts.json --write-public-deployment-capture-plan nebula-public-deployment-capture-plan.json --write-public-deployment-evidence-template nebula-public-deployment-template.json --json; cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --verify-public-deployment-capture capture.json --fail-on-public-launch-gaps --json; cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --assemble-public-deployment-evidence capture.json --write-public-deployment-evidence nebula-public-deployment.json --json",
+                "external-capture",
                 "operator-captured-redacted",
                 true,
                 true,
             ),
             "public-launch-reserve-monitoring" => (
                 "local reserve monitoring report",
+                "local-reserve-monitoring-report",
+                "local://reserve-monitoring",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --adversarial-self-test --json",
+                "local-run",
                 "public-redacted",
                 false,
                 false,
             ),
             "public-launch-operations-drills" => (
                 "local operations drill report",
+                "local-operations-drill-report",
+                "local://operations-drills",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --adversarial-self-test --json",
+                "local-drill",
                 "operator-redacted",
                 false,
                 false,
             ),
             "public-launch-privacy-surface" => (
                 "local privacy surface report",
+                "local-privacy-surface-report",
+                "local://privacy-surface",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --json",
+                "local-run",
                 "public-redacted",
                 false,
                 false,
             ),
             "public-launch-da-watchtower-coverage" => (
                 "local DA/proof/watchtower coverage report",
+                "local-da-proof-watchtower-coverage-report",
+                "local://da-proof-watchtower-coverage",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --adversarial-self-test --json",
+                "local-drill",
                 "public-redacted",
                 false,
                 false,
             ),
             _ => (
                 "public launch readiness artifact",
+                "public-launch-readiness-artifact",
+                "local://public-launch-readiness",
                 "cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --json",
+                "local-run",
                 "public-redacted",
                 false,
                 false,
@@ -7220,7 +7267,10 @@ fn public_launch_remediation_for_check(
         CHAIN_ID,
         &check.id,
         expected_artifact,
+        expected_artifact_id,
+        expected_artifact_path,
         command,
+        remediation_kind,
         &check.evidence_root,
         &failed_subcheck_root,
         privacy_classification,
@@ -7230,7 +7280,10 @@ fn public_launch_remediation_for_check(
     PublicLaunchRemediation {
         blocker_id: check.id.clone(),
         expected_artifact: expected_artifact.to_string(),
+        expected_artifact_id: expected_artifact_id.to_string(),
+        expected_artifact_path: expected_artifact_path.to_string(),
         command: command.to_string(),
+        remediation_kind: remediation_kind.to_string(),
         expected_evidence_root: check.evidence_root.clone(),
         failed_subchecks,
         privacy_classification: privacy_classification.to_string(),
@@ -32271,6 +32324,15 @@ mod tests {
             remediation.expected_artifact,
             "nebula-public-launch-artifacts.json + nebula-public-deployment.json"
         );
+        assert_eq!(
+            remediation.expected_artifact_id,
+            "public-deployment-attestation"
+        );
+        assert_eq!(
+            remediation.expected_artifact_path,
+            "nebula-public-deployment.json"
+        );
+        assert_eq!(remediation.remediation_kind, "external-capture");
         assert!(remediation
             .command
             .contains("--write-public-launch-artifact-manifest"));
@@ -32315,6 +32377,18 @@ mod tests {
         assert_eq!(
             summary_json["public_launch_readiness"]["remediations"][0]["expected_artifact"],
             "nebula-public-launch-artifacts.json + nebula-public-deployment.json"
+        );
+        assert_eq!(
+            summary_json["public_launch_readiness"]["remediations"][0]["expected_artifact_id"],
+            "public-deployment-attestation"
+        );
+        assert_eq!(
+            summary_json["public_launch_readiness"]["remediations"][0]["expected_artifact_path"],
+            "nebula-public-deployment.json"
+        );
+        assert_eq!(
+            summary_json["public_launch_readiness"]["remediations"][0]["remediation_kind"],
+            "external-capture"
         );
         assert!(summary_json["public_launch_readiness"]["remediations"][0]["failed_subchecks"]
             .as_array()

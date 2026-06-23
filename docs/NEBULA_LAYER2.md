@@ -3453,9 +3453,10 @@ real XMR.
   and custody-approval gate, and the full local operator summary exposes a
   `public_launch_readiness` report with blocker ids, check roots,
   machine-actionable remediation entries, and a remediation root. Each
-  remediation names the expected artifact, relevant command, expected evidence
-  root, granular failed subchecks for capture roots, bootstrap profile/report/
-  rate-limit roots, bootstrap topology/count/registry/probe bindings,
+  remediation names the stable expected artifact id/path, expected artifact,
+  remediation kind, relevant command, expected evidence root, granular failed
+  subchecks for capture roots, bootstrap profile/report/rate-limit roots,
+  bootstrap topology/count/registry/probe bindings,
   endpoint publicness, TLS pin roots/counts,
   proxy/firewall/rate-limit policy roots, status-manifest root/payload, and
   per-surface probe roots/counts, placeholder hygiene, and local bootstrap/
