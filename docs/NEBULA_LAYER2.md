@@ -3469,7 +3469,7 @@ real XMR.
   remediation kind, relevant command, expected evidence root, granular failed
   subchecks, root-specific `repair_roots` for failed capture/preflight/package/
   runbook receipt/status/bootstrap topology and policy bindings, and capture roots, bootstrap profile/report/rate-limit roots,
-  bootstrap topology/count/registry/probe bindings,
+  bootstrap topology/count/registry/probe bindings, aggregate probe repair roots/counts,
   endpoint publicness, TLS pin roots/counts,
   proxy/firewall/rate-limit policy roots, status-manifest root/payload, and
   per-surface probe roots/counts, placeholder hygiene, and local bootstrap/
