@@ -378,6 +378,7 @@ struct Cli {
     public_status_manifest_path: Option<String>,
     public_status_manifest_verify_path: Option<String>,
     public_deployment_runbook_path: Option<String>,
+    public_deployment_runbook_verify_path: Option<String>,
     public_launch_artifact_manifest_path: Option<String>,
     public_launch_artifact_manifest_verify_path: Option<String>,
     public_launch_bundle_path: Option<String>,
@@ -456,6 +457,7 @@ impl Default for Cli {
             public_status_manifest_path: None,
             public_status_manifest_verify_path: None,
             public_deployment_runbook_path: None,
+            public_deployment_runbook_verify_path: None,
             public_launch_artifact_manifest_path: None,
             public_launch_artifact_manifest_verify_path: None,
             public_launch_bundle_path: None,
@@ -7101,6 +7103,9 @@ fn run() -> Result<(), String> {
     if let Some(path) = cli.public_deployment_runbook_path.as_deref() {
         write_public_deployment_runbook(path, &summary)?;
     }
+    if let Some(path) = cli.public_deployment_runbook_verify_path.as_deref() {
+        verify_public_deployment_runbook(path, &summary)?;
+    }
     if let Some(path) = cli.public_launch_artifact_manifest_path.as_deref() {
         write_public_launch_artifact_manifest(path, &summary)?;
     }
@@ -8480,6 +8485,35 @@ fn write_public_deployment_runbook(path: &str, summary: &TestnetSummary) -> Resu
     fs::write(path, format!("{encoded}\n"))
         .map_err(|error| format!("failed to write public deployment runbook: {error}"))?;
     Ok(())
+}
+
+fn verify_public_deployment_runbook(path: &str, summary: &TestnetSummary) -> Result<(), String> {
+    ensure_local_json_path(path, "--verify-public-deployment-runbook")?;
+    let actual = read_json_file(&PathBuf::from(path), "public deployment runbook")?;
+    ensure(
+        actual.get("kind").and_then(Value::as_str) == Some("nebula-public-deployment-runbook"),
+        "public deployment runbook has the wrong kind",
+    )?;
+    ensure_public_deployment_runbook_redacted(&actual)?;
+    let mut root_payload = actual.clone();
+    let Some(map) = root_payload.as_object_mut() else {
+        return Err("public deployment runbook must be an object".to_string());
+    };
+    map.remove("public_deployment_runbook_root");
+    let computed_root = value_root("public-deployment-runbook", &root_payload);
+    ensure(
+        actual
+            .get("public_deployment_runbook_root")
+            .and_then(Value::as_str)
+            == Some(computed_root.as_str()),
+        "public deployment runbook root mismatch",
+    )?;
+    let expected = public_deployment_runbook(summary);
+    ensure_public_deployment_runbook_redacted(&expected)?;
+    ensure(
+        actual == expected,
+        "public deployment runbook does not match this run",
+    )
 }
 
 fn write_public_launch_artifact_manifest(
@@ -18394,6 +18428,14 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
                     "--write-public-deployment-runbook",
                 )?);
             }
+            "--verify-public-deployment-runbook" => {
+                index += 1;
+                cli.public_deployment_runbook_verify_path = Some(parse_string(
+                    &args,
+                    index,
+                    "--verify-public-deployment-runbook",
+                )?);
+            }
             "--write-public-launch-artifact-manifest" => {
                 index += 1;
                 cli.public_launch_artifact_manifest_path = Some(parse_string(
@@ -18682,6 +18724,13 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             "--write-public-deployment-runbook requires --mainnet-readiness",
         )?;
         ensure_local_json_path(path, "--write-public-deployment-runbook")?;
+    }
+    if let Some(path) = cli.public_deployment_runbook_verify_path.as_deref() {
+        ensure(
+            cli.mainnet_readiness,
+            "--verify-public-deployment-runbook requires --mainnet-readiness",
+        )?;
+        ensure_local_json_path(path, "--verify-public-deployment-runbook")?;
     }
     if let Some(path) = cli.public_launch_artifact_manifest_path.as_deref() {
         ensure(
@@ -26199,6 +26248,8 @@ OPTIONS:
                               Verify a redacted public status manifest against this run
         --write-public-deployment-runbook PATH
                               Write a rooted public-alpha deployment runbook for external launch operators
+        --verify-public-deployment-runbook PATH
+                              Verify a rooted public-alpha deployment runbook against this run
         --write-public-launch-artifact-manifest PATH
                               Write a rooted pre-capture manifest over the public status, bootstrap, runbook, and launch bundle artifacts
         --verify-public-launch-artifact-manifest PATH
@@ -28462,6 +28513,14 @@ mod tests {
     }
 
     #[test]
+    fn public_deployment_runbook_verify_requires_mainnet_readiness_mode() {
+        let path = temp_json_path("nebula-public-deployment-runbook-verify-rejected");
+        let error = parse_cli(vec!["--verify-public-deployment-runbook".to_string(), path])
+            .expect_err("public deployment runbook verification should require mainnet-readiness mode");
+        assert!(error.contains("requires --mainnet-readiness"));
+    }
+
+    #[test]
     fn public_launch_artifact_manifest_requires_mainnet_readiness_mode() {
         let path = temp_json_path("nebula-public-launch-artifacts-rejected");
         let error = parse_cli(vec![
@@ -29034,6 +29093,67 @@ mod tests {
         assert!(!value_contains_exact_key(&value, "mainnet_readiness"));
         assert!(!value_contains_exact_key(&value, "public_launch_readiness"));
         ensure_public_deployment_runbook_redacted(&value).expect("redacted runbook");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_runbook_verifier_accepts_current_run_export() {
+        let path = temp_json_path("nebula-public-deployment-runbook-verify-current");
+        let cli = parse_cli(vec![
+            "--mainnet-readiness".to_string(),
+            "--write-public-deployment-runbook".to_string(),
+            path.clone(),
+            "--verify-public-deployment-runbook".to_string(),
+            path.clone(),
+        ])
+        .expect("public deployment runbook write+verify flags should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_deployment_runbook(&path, &summary)
+            .expect("write public deployment runbook");
+        verify_public_deployment_runbook(&path, &summary)
+            .expect("current-run public deployment runbook should verify");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_runbook_verifier_rejects_re_rooted_stale_runbook() {
+        let path = temp_json_path("nebula-public-deployment-runbook-stale");
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet-readiness CLI should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_deployment_runbook(&path, &summary)
+            .expect("write public deployment runbook");
+        verify_public_deployment_runbook(&path, &summary)
+            .expect("fresh public deployment runbook should verify");
+
+        let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read runbook"))
+            .expect("public deployment runbook json");
+        stale["source_roots"]["run_checkpoint_root"] =
+            json!(root(&["tampered-public-deployment-runbook", &summary.manifest_id]));
+        let mut rootless = stale.clone();
+        if let Some(map) = rootless.as_object_mut() {
+            map.remove("public_deployment_runbook_root");
+        }
+        stale["public_deployment_runbook_root"] =
+            json!(value_root("public-deployment-runbook", &rootless));
+        ensure_public_deployment_runbook_redacted(&stale)
+            .expect("re-rooted runbook should still be structurally redacted");
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&stale).expect("encode stale runbook")
+            ),
+        )
+        .expect("write stale runbook");
+
+        let error = verify_public_deployment_runbook(&path, &summary)
+            .expect_err("re-rooted stale runbook should fail exact verification");
+        assert!(error.contains("does not match this run"));
         let _ = fs::remove_file(path);
     }
 
