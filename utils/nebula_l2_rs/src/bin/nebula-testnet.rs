@@ -375,6 +375,7 @@ struct Cli {
     public_deployment_evidence_verify_path: Option<String>,
     public_deployment_evidence: Option<PublicDeploymentEvidence>,
     readiness_template_path: Option<String>,
+    readiness_template_verify_path: Option<String>,
     public_bootstrap_profile_path: Option<String>,
     public_bootstrap_profile_verify_path: Option<String>,
     public_status_manifest_path: Option<String>,
@@ -458,6 +459,7 @@ impl Default for Cli {
             public_deployment_evidence_verify_path: None,
             public_deployment_evidence: None,
             readiness_template_path: None,
+            readiness_template_verify_path: None,
             public_bootstrap_profile_path: None,
             public_bootstrap_profile_verify_path: None,
             public_status_manifest_path: None,
@@ -7105,6 +7107,9 @@ fn run() -> Result<(), String> {
     if let Some(path) = cli.readiness_template_path.as_deref() {
         write_readiness_template(path, &summary)?;
     }
+    if let Some(path) = cli.readiness_template_verify_path.as_deref() {
+        verify_readiness_template(path, &summary)?;
+    }
     if let Some(path) = cli.public_bootstrap_profile_path.as_deref() {
         write_public_bootstrap_profile(path, &summary)?;
     }
@@ -8452,11 +8457,28 @@ fn release_authority_registry_matches(
 fn write_readiness_template(path: &str, summary: &TestnetSummary) -> Result<(), String> {
     ensure_local_json_path(path, "--write-readiness-template")?;
     let template = readiness_template(summary);
+    ensure_readiness_template_safe(&template)?;
     let encoded = serde_json::to_string_pretty(&template)
         .map_err(|error| format!("failed to encode readiness template json: {error}"))?;
     fs::write(path, format!("{encoded}\n"))
         .map_err(|error| format!("failed to write readiness template: {error}"))?;
     Ok(())
+}
+
+fn verify_readiness_template(path: &str, summary: &TestnetSummary) -> Result<(), String> {
+    ensure_local_json_path(path, "--verify-readiness-template")?;
+    let actual = read_json_file(&PathBuf::from(path), "readiness template")?;
+    ensure(
+        actual.get("kind").and_then(Value::as_str) == Some("nebula-mainnet-readiness-template"),
+        "readiness template has the wrong kind",
+    )?;
+    ensure_readiness_template_safe(&actual)?;
+    let expected = readiness_template(summary);
+    ensure_readiness_template_safe(&expected)?;
+    ensure(
+        actual == expected,
+        "readiness template does not match this run",
+    )
 }
 
 fn write_public_bootstrap_profile(path: &str, summary: &TestnetSummary) -> Result<(), String> {
@@ -17215,6 +17237,107 @@ fn validate_probe_response(
     }
 }
 
+fn ensure_readiness_template_safe(value: &Value) -> Result<(), String> {
+    ensure(
+        value.get("kind").and_then(Value::as_str) == Some("nebula-mainnet-readiness-template"),
+        "readiness template kind mismatch",
+    )?;
+    ensure(
+        value.get("template_only").and_then(Value::as_bool) == Some(true),
+        "readiness template must remain template_only",
+    )?;
+    ensure(
+        value
+            .get("usable_as_readiness_evidence")
+            .and_then(Value::as_bool)
+            == Some(false),
+        "readiness template must not be accepted as readiness evidence",
+    )?;
+    ensure(
+        value
+            .pointer("/acceptance_snapshot/no_mainnet_custody")
+            .and_then(Value::as_bool)
+            == Some(true),
+        "readiness template must preserve no-mainnet-custody",
+    )?;
+    ensure(
+        value
+            .pointer("/acceptance_snapshot/mainnet_value_ready")
+            .and_then(Value::as_bool)
+            == Some(false),
+        "readiness template must not claim mainnet value readiness",
+    )?;
+    ensure(
+        value
+            .pointer("/readiness_evidence_template/custody_mode")
+            .and_then(Value::as_str)
+            == Some("no-mainnet-custody"),
+        "readiness evidence template custody mode mismatch",
+    )?;
+    ensure(
+        value
+            .pointer("/readiness_evidence_template/template_fill_required")
+            .and_then(Value::as_bool)
+            == Some(true),
+        "readiness evidence template must require fill-in",
+    )?;
+    ensure(
+        value
+            .pointer("/release_approval_template/approved")
+            .and_then(Value::as_bool)
+            == Some(false),
+        "release approval template must not pre-approve release",
+    )?;
+    ensure(
+        value
+            .pointer("/release_approval_template/template_fill_required")
+            .and_then(Value::as_bool)
+            == Some(true),
+        "release approval template must require fill-in",
+    )?;
+    ensure(
+        value
+            .pointer("/release_approval_template/custody_mode")
+            .and_then(Value::as_str)
+            == Some("external-mainnet-process-required"),
+        "release approval template custody mode mismatch",
+    )?;
+    ensure(
+        value
+            .pointer("/release_authority_registry_template/registry_kind")
+            .and_then(Value::as_str)
+            == Some("nebula-release-authority-registry"),
+        "release authority registry template kind mismatch",
+    )?;
+    for marker in SENSITIVE_FIELD_MARKERS {
+        ensure(
+            !value_contains_key_marker(value, marker),
+            &format!("readiness template contains sensitive marker '{marker}'"),
+        )?;
+    }
+    ensure_public_bootstrap_profile_template_redacted(
+        value
+            .get("public_bootstrap_profile_template")
+            .ok_or_else(|| "readiness template missing public bootstrap profile".to_string())?,
+    )?;
+    let checklist_len = value
+        .get("checklist")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .ok_or_else(|| "readiness template missing checklist".to_string())?;
+    ensure(checklist_len > 0, "readiness template checklist must not be empty")?;
+    let mut rootless = value.clone();
+    let Some(map) = rootless.as_object_mut() else {
+        return Err("readiness template must be an object".to_string());
+    };
+    map.remove("template_root");
+    let expected_root = value_root("mainnet-readiness-template", &rootless);
+    ensure(
+        value.get("template_root").and_then(Value::as_str) == Some(expected_root.as_str()),
+        "readiness template root mismatch",
+    )
+}
+
 fn ensure_public_status_manifest_redacted(value: &Value) -> Result<(), String> {
     for key in PUBLIC_STATUS_FORBIDDEN_KEYS {
         ensure(
@@ -18879,6 +19002,11 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
                 cli.readiness_template_path =
                     Some(parse_string(&args, index, "--write-readiness-template")?);
             }
+            "--verify-readiness-template" => {
+                index += 1;
+                cli.readiness_template_verify_path =
+                    Some(parse_string(&args, index, "--verify-readiness-template")?);
+            }
             "--write-public-bootstrap-profile" => {
                 index += 1;
                 cli.public_bootstrap_profile_path =
@@ -19194,6 +19322,13 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             "--write-readiness-template requires --mainnet-readiness",
         )?;
         ensure_local_json_path(path, "--write-readiness-template")?;
+    }
+    if let Some(path) = cli.readiness_template_verify_path.as_deref() {
+        ensure(
+            cli.mainnet_readiness,
+            "--verify-readiness-template requires --mainnet-readiness",
+        )?;
+        ensure_local_json_path(path, "--verify-readiness-template")?;
     }
     if let Some(path) = cli.public_bootstrap_profile_path.as_deref() {
         ensure(
@@ -26788,6 +26923,8 @@ OPTIONS:
                               Verify a filled public-alpha deployment attestation and require public launch gates to pass
         --write-readiness-template PATH
                               Write a redacted operator template/checklist for external evidence collection
+        --verify-readiness-template PATH
+                              Verify a redacted operator template/checklist against this run
         --write-public-bootstrap-profile PATH
                               Write a redacted public-testnet bootstrap/deployment profile
         --verify-public-bootstrap-profile PATH
@@ -28732,6 +28869,7 @@ mod tests {
         testnet.run().expect("testnet run");
         let summary = testnet.summary(Vec::new());
         write_readiness_template(&path, &summary).expect("write readiness template");
+        verify_readiness_template(&path, &summary).expect("verify readiness template");
         let value: Value = serde_json::from_slice(&fs::read(&path).expect("read template"))
             .expect("template json");
 
@@ -29020,9 +29158,50 @@ mod tests {
             .expect("missing blockers")
             .iter()
             .any(|blocker| blocker == "live-monero-rpc-evidence"));
+        ensure_readiness_template_safe(&value).expect("safe readiness template");
         let error = load_readiness_evidence_bundle(&path)
             .expect_err("template wrapper must not be loadable as evidence");
         assert!(error.contains("custody_mode"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn readiness_template_verifier_rejects_re_rooted_stale_template() {
+        let path = temp_json_path("nebula-testnet-readiness-template-stale");
+        let cli = parse_cli(vec![
+            "--mainnet-readiness".to_string(),
+            "--adversarial-self-test".to_string(),
+        ])
+        .expect("mainnet readiness should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_readiness_template(&path, &summary).expect("write readiness template");
+        verify_readiness_template(&path, &summary).expect("fresh readiness template should verify");
+
+        let mut stale: Value = serde_json::from_slice(&fs::read(&path).expect("read template"))
+            .expect("readiness template json");
+        stale["testnet_run_checkpoint_root"] =
+            json!(root(&["tampered-readiness-template-checkpoint", &summary.manifest_id]));
+        let mut rootless = stale.clone();
+        if let Some(map) = rootless.as_object_mut() {
+            map.remove("template_root");
+        }
+        stale["template_root"] = json!(value_root("mainnet-readiness-template", &rootless));
+        ensure_readiness_template_safe(&stale)
+            .expect("re-rooted template should remain structurally safe");
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&stale).expect("encode stale template")
+            ),
+        )
+        .expect("write stale template");
+
+        let error = verify_readiness_template(&path, &summary)
+            .expect_err("re-rooted stale template should fail exact verification");
+        assert!(error.contains("does not match this run"));
         let _ = fs::remove_file(path);
     }
 
@@ -29031,6 +29210,14 @@ mod tests {
         let path = temp_json_path("nebula-testnet-readiness-template-rejected");
         let error = parse_cli(vec!["--write-readiness-template".to_string(), path])
             .expect_err("template export should require mainnet-readiness mode");
+        assert!(error.contains("requires --mainnet-readiness"));
+    }
+
+    #[test]
+    fn readiness_template_verify_requires_mainnet_readiness_mode() {
+        let path = temp_json_path("nebula-testnet-readiness-template-verify-rejected");
+        let error = parse_cli(vec!["--verify-readiness-template".to_string(), path])
+            .expect_err("template verification should require mainnet-readiness mode");
         assert!(error.contains("requires --mainnet-readiness"));
     }
 

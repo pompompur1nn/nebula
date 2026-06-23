@@ -198,7 +198,7 @@ cargo run --manifest-path testnet_runner\Cargo.toml -- --blocks 8 --target-final
 The same dry run can write an operator checklist and redacted evidence template:
 
 ```powershell
-cargo run --manifest-path testnet_runner\Cargo.toml -- --blocks 8 --target-finality-ms 200 --mainnet-readiness --adversarial-self-test --self-test --listen-ms 150 --write-readiness-template .\nebula-readiness-template.json --json
+cargo run --manifest-path testnet_runner\Cargo.toml -- --blocks 8 --target-finality-ms 200 --mainnet-readiness --adversarial-self-test --self-test --listen-ms 150 --write-readiness-template .\nebula-readiness-template.json --verify-readiness-template .\nebula-readiness-template.json --json
 ```
 
 For a controlled public-alpha bootstrap, write the redacted deployment profile,
@@ -342,7 +342,10 @@ distributed-finality roots, deterministic local binding roots such as the
 operations run-binding root, a public-bootstrap profile template, a redacted
 readiness-evidence skeleton, and a redacted release approval skeleton. The
 generated file is a collection worksheet; it is intentionally not accepted by
-`--readiness-evidence`.
+`--readiness-evidence`. `--verify-readiness-template path\to\template.json`
+recomputes the template root and rejects stale run-checkpoint,
+mainnet-readiness-check, public-bootstrap, local binding, release-approval, or
+authority-registry worksheet roots before operators collect external evidence.
 
 `--write-public-bootstrap-profile path\to\bootstrap.json` also requires
 `--mainnet-readiness` and writes a `kind:

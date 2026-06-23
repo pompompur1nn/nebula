@@ -3157,6 +3157,12 @@ real XMR.
   for every external evidence family, binding each section root to a producer
   identity, signer commitment, PQ public-key root, attestation id, and registry
   root before the release authority can consider custody.
+- A redacted readiness-template worksheet binds the current run checkpoint,
+  mainnet-readiness check root, public-bootstrap template, local binding roots,
+  release-approval skeleton, and release-authority registry skeleton. The
+  paired `--verify-readiness-template` command recomputes the worksheet root
+  and rejects stale or cross-run evidence collection templates before external
+  producers and release authorities fill them.
 - One Monero anchor can commit at least 10,000 L2 transactions, backed by signed
   capacity policy, fixed-format payload, capacity, and benchmark roots.
 - Mainnet readiness evidence includes signed privacy profiles for anchor
