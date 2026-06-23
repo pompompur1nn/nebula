@@ -499,7 +499,8 @@ release-template roots, the public deployment evidence root, its
 readiness-report binding boolean, package-bound release-template roots,
 package-binding booleans for both release handoff templates, remediations, whether external capture is still
 required, and the exact capture-audit, audit-verification, strict
-capture-verification, assemble, and launch-gate commands.
+capture-verification, assemble, and launch-gate commands plus a rooted command
+sequence for that order.
 The certification artifact is
 operator-local, not public deployment evidence and not mainnet custody approval;
 it truthfully remains `public-launch-blocked` until a filled schema v5

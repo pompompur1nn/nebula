@@ -3280,7 +3280,7 @@ real XMR.
   package-bound release-template roots, package-binding booleans for both
   release handoff templates, blocking gaps, remediation commands for capture
   audit, audit verification, strict capture verification, assembly, and launch
-  verification, and whether external capture is still
+  verification, a rooted command sequence for that order, and whether external capture is still
   required in `nebula-public-testnet-certification.json`. It is deliberately
   operator-local and remains blocked until the filled schema v5 deployment
   attestation passes.
