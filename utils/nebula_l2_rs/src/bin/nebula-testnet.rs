@@ -388,6 +388,7 @@ struct Cli {
     public_testnet_certification_verify_dir: Option<String>,
     public_deployment_evidence_template_path: Option<String>,
     public_deployment_capture_plan_path: Option<String>,
+    public_deployment_capture_plan_verify_path: Option<String>,
     public_deployment_capture_scaffold_path: Option<String>,
     public_deployment_capture_scaffold_verify_path: Option<String>,
     public_deployment_capture_scaffold_package_dir: Option<String>,
@@ -462,6 +463,7 @@ impl Default for Cli {
             public_testnet_certification_verify_dir: None,
             public_deployment_evidence_template_path: None,
             public_deployment_capture_plan_path: None,
+            public_deployment_capture_plan_verify_path: None,
             public_deployment_capture_scaffold_path: None,
             public_deployment_capture_scaffold_verify_path: None,
             public_deployment_capture_scaffold_package_dir: None,
@@ -7123,6 +7125,9 @@ fn run() -> Result<(), String> {
     if let Some(path) = cli.public_deployment_capture_plan_path.as_deref() {
         write_public_deployment_capture_plan(path, &summary)?;
     }
+    if let Some(path) = cli.public_deployment_capture_plan_verify_path.as_deref() {
+        verify_public_deployment_capture_plan(path, &summary)?;
+    }
     if let (Some(path), Some(package_dir)) = (
         cli.public_deployment_capture_scaffold_path.as_deref(),
         cli.public_deployment_capture_scaffold_package_dir
@@ -9525,6 +9530,27 @@ fn write_public_deployment_capture_plan(
     fs::write(path, format!("{encoded}\n"))
         .map_err(|error| format!("failed to write public deployment capture plan: {error}"))?;
     Ok(())
+}
+
+fn verify_public_deployment_capture_plan(
+    path: &str,
+    summary: &TestnetSummary,
+) -> Result<(), String> {
+    ensure_local_json_path(path, "--verify-public-deployment-capture-plan")?;
+    let actual = read_json_file(
+        &PathBuf::from(path),
+        "public deployment capture plan",
+    )?;
+    ensure(
+        actual["kind"] == "nebula-public-deployment-capture-plan",
+        "public deployment capture plan has the wrong kind",
+    )?;
+    ensure_public_deployment_capture_plan_redacted(&actual)?;
+    let expected = public_deployment_capture_plan(summary);
+    ensure(
+        actual == expected,
+        "public deployment capture plan does not match this run",
+    )
 }
 
 fn write_public_deployment_capture_scaffold(
@@ -18349,6 +18375,14 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
                     "--write-public-deployment-capture-plan",
                 )?);
             }
+            "--verify-public-deployment-capture-plan" => {
+                index += 1;
+                cli.public_deployment_capture_plan_verify_path = Some(parse_string(
+                    &args,
+                    index,
+                    "--verify-public-deployment-capture-plan",
+                )?);
+            }
             "--write-public-deployment-capture-scaffold" => {
                 index += 1;
                 cli.public_deployment_capture_scaffold_path = Some(parse_string(
@@ -18613,6 +18647,13 @@ fn parse_cli(args: Vec<String>) -> Result<Cli, String> {
             "--write-public-deployment-capture-plan requires --mainnet-readiness",
         )?;
         ensure_local_json_path(path, "--write-public-deployment-capture-plan")?;
+    }
+    if let Some(path) = cli.public_deployment_capture_plan_verify_path.as_deref() {
+        ensure(
+            cli.mainnet_readiness,
+            "--verify-public-deployment-capture-plan requires --mainnet-readiness",
+        )?;
+        ensure_local_json_path(path, "--verify-public-deployment-capture-plan")?;
     }
     if cli.public_deployment_capture_scaffold_path.is_some()
         || cli
@@ -26049,6 +26090,8 @@ OPTIONS:
                               Write a schema v5 public deployment evidence worksheet for incident-contact probes, runbook receipts, probe transcripts, and observer provenance
         --write-public-deployment-capture-plan PATH
                               Write a redacted deployment CI capture plan listing required public evidence and probe coverage
+        --verify-public-deployment-capture-plan PATH
+                              Verify a redacted deployment CI capture plan against this run
         --write-public-deployment-capture-scaffold PATH
                               Write a package-bound public deployment capture scaffold with provable roots filled
         --verify-public-deployment-capture-scaffold PATH
@@ -28382,6 +28425,17 @@ mod tests {
     }
 
     #[test]
+    fn public_deployment_capture_plan_verify_requires_mainnet_readiness_mode() {
+        let path = temp_json_path("nebula-public-deployment-capture-plan-verify-rejected");
+        let error = parse_cli(vec![
+            "--verify-public-deployment-capture-plan".to_string(),
+            path,
+        ])
+        .expect_err("public deployment capture plan verification should require mainnet-readiness mode");
+        assert!(error.contains("requires --mainnet-readiness"));
+    }
+
+    #[test]
     fn public_deployment_capture_scaffold_requires_mainnet_readiness_and_package() {
         let path = temp_json_path("nebula-public-deployment-capture-scaffold-rejected");
         let package_dir = temp_json_path("nebula-public-launch-package-scaffold-rejected");
@@ -30107,6 +30161,8 @@ mod tests {
             "--mainnet-readiness".to_string(),
             "--write-public-deployment-capture-plan".to_string(),
             path.clone(),
+            "--verify-public-deployment-capture-plan".to_string(),
+            path.clone(),
         ])
         .expect("public deployment capture plan flag should parse");
         let mut testnet = Testnet::new(cli);
@@ -30114,6 +30170,8 @@ mod tests {
         let summary = testnet.summary(Vec::new());
         write_public_deployment_capture_plan(&path, &summary)
             .expect("write public deployment capture plan");
+        verify_public_deployment_capture_plan(&path, &summary)
+            .expect("verify public deployment capture plan");
         let value: Value = serde_json::from_slice(&fs::read(&path).expect("read capture plan"))
             .expect("public deployment capture plan json");
         let expected_runbook = public_deployment_runbook(&summary);
@@ -30485,6 +30543,55 @@ mod tests {
             .expect_err("root-tampered capture plan should fail");
         assert!(error.contains("capture plan root mismatch"));
         assert!(!value_contains_placeholder(&value));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_capture_plan_verifier_rejects_stale_or_tampered_plan() {
+        let path = temp_json_path("nebula-public-deployment-capture-plan-verify");
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness cli should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_deployment_capture_plan(&path, &summary)
+            .expect("write public deployment capture plan");
+        verify_public_deployment_capture_plan(&path, &summary)
+            .expect("verify public deployment capture plan");
+
+        let mut plan: Value =
+            serde_json::from_slice(&fs::read(&path).expect("read capture plan"))
+                .expect("capture plan json");
+        plan["capture_contract"]["freshness_window_ms"] =
+            json!(MAX_PUBLIC_DEPLOYMENT_FRESHNESS_MS + 1);
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&plan).expect("capture plan json"),
+        )
+        .expect("write tampered capture plan");
+        let error = verify_public_deployment_capture_plan(&path, &summary)
+            .expect_err("contract-tampered capture plan should fail verification");
+        assert!(error.contains("capture contract root mismatch"));
+
+        write_public_deployment_capture_plan(&path, &summary)
+            .expect("rewrite public deployment capture plan");
+        let mut plan: Value =
+            serde_json::from_slice(&fs::read(&path).expect("read capture plan"))
+                .expect("capture plan json");
+        plan["public_launch_bundle_root"] = json!(root(&["stale-launch-bundle-root"]));
+        if let Some(object) = plan.as_object_mut() {
+            object.remove("capture_plan_root");
+        }
+        let plan_root = value_root("public-deployment-capture-plan", &plan);
+        plan["capture_plan_root"] = json!(plan_root);
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&plan).expect("capture plan json"),
+        )
+        .expect("write stale capture plan");
+        let error = verify_public_deployment_capture_plan(&path, &summary)
+            .expect_err("stale capture plan should fail verification");
+        assert!(error.contains("does not match this run"));
         let _ = fs::remove_file(path);
     }
 
