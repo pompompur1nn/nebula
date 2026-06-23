@@ -1238,9 +1238,15 @@ struct PublicDeploymentReport {
     expected_public_deployment_runbook_root: Option<String>,
     public_deployment_runbook_step_set_root: Option<String>,
     expected_public_deployment_runbook_step_set_root: Option<String>,
+    public_deployment_runbook_receipt_root_bound: bool,
+    public_deployment_runbook_step_receipt_set_root_bound: bool,
+    public_deployment_runbook_step_receipt_count_bound: bool,
     public_deployment_runbook_receipt_root: Option<String>,
+    expected_public_deployment_runbook_receipt_root: Option<String>,
     public_deployment_runbook_step_receipt_set_root: Option<String>,
+    expected_public_deployment_runbook_step_receipt_set_root: Option<String>,
     public_deployment_runbook_step_receipt_count: u64,
+    expected_public_deployment_runbook_step_receipt_count: Option<u64>,
     bootstrap_node_set_root: Option<String>,
     bootstrap_node_count: u64,
     bootstrap_operator_set_root: Option<String>,
@@ -5656,32 +5662,43 @@ impl Testnet {
         let public_deployment_runbook_step_set_root_bound =
             evidence.public_deployment_runbook_step_set_root
                 == expected_deployment_runbook_step_set_root;
-        let runbook_receipt_bound =
-            public_deployment_runbook_root_bound
-                && public_deployment_runbook_step_set_root_bound
-                && is_hex_root(&evidence.public_deployment_runbook_receipt_root)
-                && is_hex_root(&evidence.public_deployment_runbook_step_receipt_set_root)
-                && evidence.public_deployment_runbook_step_receipt_count
-                    == PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64
-                && evidence
-                    .public_deployment_runbook_receipt
-                    .get("receipt_root")
-                    .and_then(Value::as_str)
-                    == Some(evidence.public_deployment_runbook_receipt_root.as_str())
-                && evidence
-                    .public_deployment_runbook_receipt
-                    .get("step_receipt_set_root")
-                    .and_then(Value::as_str)
+        let expected_public_deployment_runbook_receipt_root = evidence
+            .public_deployment_runbook_receipt
+            .get("receipt_root")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let expected_public_deployment_runbook_step_receipt_set_root = evidence
+            .public_deployment_runbook_receipt
+            .get("step_receipt_set_root")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let expected_public_deployment_runbook_step_receipt_count = evidence
+            .public_deployment_runbook_receipt
+            .get("step_count")
+            .and_then(Value::as_u64);
+        let public_deployment_runbook_receipt_root_bound =
+            is_hex_root(&evidence.public_deployment_runbook_receipt_root)
+                && expected_public_deployment_runbook_receipt_root.as_deref()
+                    == Some(evidence.public_deployment_runbook_receipt_root.as_str());
+        let public_deployment_runbook_step_receipt_set_root_bound =
+            is_hex_root(&evidence.public_deployment_runbook_step_receipt_set_root)
+                && expected_public_deployment_runbook_step_receipt_set_root.as_deref()
                     == Some(
                         evidence
                             .public_deployment_runbook_step_receipt_set_root
                             .as_str(),
-                    )
-                && evidence
-                    .public_deployment_runbook_receipt
-                    .get("step_count")
-                    .and_then(Value::as_u64)
-                    == Some(evidence.public_deployment_runbook_step_receipt_count)
+                    );
+        let public_deployment_runbook_step_receipt_count_bound =
+            expected_public_deployment_runbook_step_receipt_count
+                == Some(evidence.public_deployment_runbook_step_receipt_count);
+        let runbook_receipt_bound =
+            public_deployment_runbook_root_bound
+                && public_deployment_runbook_step_set_root_bound
+                && public_deployment_runbook_receipt_root_bound
+                && public_deployment_runbook_step_receipt_set_root_bound
+                && public_deployment_runbook_step_receipt_count_bound
+                && evidence.public_deployment_runbook_step_receipt_count
+                    == PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64
                 && public_deployment_runbook_receipt_matches_runbook(
                     &evidence.public_deployment_runbook_receipt,
                     &expected_deployment_runbook,
@@ -5858,6 +5875,12 @@ impl Testnet {
             expected_deployment_preflight_phase_count
                 .map(|count| count.to_string())
                 .unwrap_or_else(|| "missing-deployment-preflight-phase-count".to_string());
+        let expected_public_deployment_runbook_step_receipt_count_string =
+            expected_public_deployment_runbook_step_receipt_count
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| {
+                    "missing-public-deployment-runbook-step-receipt-count".to_string()
+                });
         let report_root = root(&[
             "public-deployment-report",
             CHAIN_ID,
@@ -5880,10 +5903,17 @@ impl Testnet {
             &evidence.public_deployment_runbook_step_set_root,
             &expected_deployment_runbook_step_set_root,
             &evidence.public_deployment_runbook_receipt_root,
+            expected_public_deployment_runbook_receipt_root
+                .as_deref()
+                .unwrap_or("missing-public-deployment-runbook-receipt-root"),
             &evidence.public_deployment_runbook_step_receipt_set_root,
+            expected_public_deployment_runbook_step_receipt_set_root
+                .as_deref()
+                .unwrap_or("missing-public-deployment-runbook-step-receipt-set-root"),
             &evidence
                 .public_deployment_runbook_step_receipt_count
                 .to_string(),
+            &expected_public_deployment_runbook_step_receipt_count_string,
             &evidence.public_launch_bundle_root,
             &expected_public_launch_bundle_root,
             &evidence.public_launch_package_file_set_root,
@@ -6065,16 +6095,22 @@ impl Testnet {
             expected_public_deployment_runbook_step_set_root: Some(
                 expected_deployment_runbook_step_set_root,
             ),
+            public_deployment_runbook_receipt_root_bound,
+            public_deployment_runbook_step_receipt_set_root_bound,
+            public_deployment_runbook_step_receipt_count_bound,
             public_deployment_runbook_receipt_root: Some(
                 evidence.public_deployment_runbook_receipt_root.clone(),
             ),
+            expected_public_deployment_runbook_receipt_root,
             public_deployment_runbook_step_receipt_set_root: Some(
                 evidence
                     .public_deployment_runbook_step_receipt_set_root
                     .clone(),
             ),
+            expected_public_deployment_runbook_step_receipt_set_root,
             public_deployment_runbook_step_receipt_count: evidence
                 .public_deployment_runbook_step_receipt_count,
+            expected_public_deployment_runbook_step_receipt_count,
             bootstrap_node_set_root: Some(evidence.bootstrap_node_set_root.clone()),
             bootstrap_node_count: evidence.bootstrap_node_count,
             bootstrap_operator_set_root: Some(evidence.bootstrap_operator_set_root.clone()),
@@ -7113,9 +7149,15 @@ fn missing_public_deployment_report(manifest_id: &str) -> PublicDeploymentReport
         expected_public_deployment_runbook_root: None,
         public_deployment_runbook_step_set_root: None,
         expected_public_deployment_runbook_step_set_root: None,
+        public_deployment_runbook_receipt_root_bound: false,
+        public_deployment_runbook_step_receipt_set_root_bound: false,
+        public_deployment_runbook_step_receipt_count_bound: false,
         public_deployment_runbook_receipt_root: None,
+        expected_public_deployment_runbook_receipt_root: None,
         public_deployment_runbook_step_receipt_set_root: None,
+        expected_public_deployment_runbook_step_receipt_set_root: None,
         public_deployment_runbook_step_receipt_count: 0,
+        expected_public_deployment_runbook_step_receipt_count: None,
         bootstrap_node_set_root: None,
         bootstrap_node_count: 0,
         bootstrap_operator_set_root: None,
@@ -7520,6 +7562,18 @@ fn public_deployment_repair_roots(
                 .expected_public_deployment_runbook_step_set_root
                 .as_deref(),
         ),
+        (
+            "public_deployment_runbook_receipt_root_bound",
+            report
+                .expected_public_deployment_runbook_receipt_root
+                .as_deref(),
+        ),
+        (
+            "public_deployment_runbook_step_receipt_set_root_bound",
+            report
+                .expected_public_deployment_runbook_step_receipt_set_root
+                .as_deref(),
+        ),
     ];
     for (subcheck, expected_root) in candidates {
         if failed.contains(subcheck) {
@@ -7772,6 +7826,18 @@ fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<St
         (
             "public_deployment_runbook_step_set_root_bound",
             report.public_deployment_runbook_step_set_root_bound,
+        ),
+        (
+            "public_deployment_runbook_receipt_root_bound",
+            report.public_deployment_runbook_receipt_root_bound,
+        ),
+        (
+            "public_deployment_runbook_step_receipt_set_root_bound",
+            report.public_deployment_runbook_step_receipt_set_root_bound,
+        ),
+        (
+            "public_deployment_runbook_step_receipt_count_bound",
+            report.public_deployment_runbook_step_receipt_count_bound,
         ),
     ] {
         if !passed {
@@ -29163,6 +29229,41 @@ mod tests {
         assert!(summary.public_deployment.runbook_receipt_bound);
         assert!(summary
             .public_deployment
+            .public_deployment_runbook_receipt_root_bound);
+        assert!(summary
+            .public_deployment
+            .public_deployment_runbook_step_receipt_set_root_bound);
+        assert!(summary
+            .public_deployment
+            .public_deployment_runbook_step_receipt_count_bound);
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_public_deployment_runbook_receipt_root
+                .as_deref(),
+            summary
+                .public_deployment
+                .public_deployment_runbook_receipt_root
+                .as_deref()
+        );
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_public_deployment_runbook_step_receipt_set_root
+                .as_deref(),
+            summary
+                .public_deployment
+                .public_deployment_runbook_step_receipt_set_root
+                .as_deref()
+        );
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_public_deployment_runbook_step_receipt_count,
+            Some(PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64)
+        );
+        assert!(summary
+            .public_deployment
             .public_deployment_runbook_root_bound);
         assert!(summary
             .public_deployment
@@ -32603,6 +32704,100 @@ mod tests {
                 .as_deref()
         );
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_report_exposes_expected_runbook_receipt_roots() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let path = write_public_deployment_evidence(&valid_public_deployment_evidence(
+            &base_summary,
+        ));
+        let mut evidence =
+            load_public_deployment_evidence(&path).expect("public deployment evidence");
+        let _ = fs::remove_file(path);
+        let expected_receipt_root = evidence.public_deployment_runbook_receipt_root.clone();
+        let expected_step_receipt_set_root =
+            evidence.public_deployment_runbook_step_receipt_set_root.clone();
+        let expected_step_receipt_count = evidence.public_deployment_runbook_step_receipt_count;
+        evidence.public_deployment_runbook_receipt_root =
+            root(&["test-public-deployment", "wrong-runbook-receipt"]);
+        evidence.public_deployment_runbook_step_receipt_set_root =
+            root(&["test-public-deployment", "wrong-runbook-step-receipt-set"]);
+        evidence.public_deployment_runbook_step_receipt_count =
+            evidence.public_deployment_runbook_step_receipt_count.saturating_add(1);
+        base_testnet.cli.public_deployment_evidence = Some(evidence);
+        let summary = base_testnet.summary(Vec::new());
+        assert!(!summary.public_deployment.passed);
+        assert!(!summary.public_deployment.runbook_receipt_bound);
+        assert!(!summary
+            .public_deployment
+            .public_deployment_runbook_receipt_root_bound);
+        assert!(!summary
+            .public_deployment
+            .public_deployment_runbook_step_receipt_set_root_bound);
+        assert!(!summary
+            .public_deployment
+            .public_deployment_runbook_step_receipt_count_bound);
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_public_deployment_runbook_receipt_root
+                .as_deref(),
+            Some(expected_receipt_root.as_str())
+        );
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_public_deployment_runbook_step_receipt_set_root
+                .as_deref(),
+            Some(expected_step_receipt_set_root.as_str())
+        );
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_public_deployment_runbook_step_receipt_count,
+            Some(expected_step_receipt_count)
+        );
+        let remediation = summary
+            .public_launch_readiness
+            .remediations
+            .iter()
+            .find(|remediation| remediation.blocker_id == "public-launch-deployment-attestation")
+            .expect("deployment remediation");
+        for failed_subcheck in [
+            "runbook_receipt_bound",
+            "public_deployment_runbook_receipt_root_bound",
+            "public_deployment_runbook_step_receipt_set_root_bound",
+            "public_deployment_runbook_step_receipt_count_bound",
+        ] {
+            assert!(
+                remediation
+                    .failed_subchecks
+                    .contains(&failed_subcheck.to_string()),
+                "missing failed subcheck {failed_subcheck}"
+            );
+        }
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("public_deployment_runbook_receipt_root_bound")
+                .map(String::as_str),
+            Some(expected_receipt_root.as_str())
+        );
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("public_deployment_runbook_step_receipt_set_root_bound")
+                .map(String::as_str),
+            Some(expected_step_receipt_set_root.as_str())
+        );
+        assert!(!remediation
+            .repair_roots
+            .contains_key("public_deployment_runbook_step_receipt_count_bound"));
     }
 
     #[test]

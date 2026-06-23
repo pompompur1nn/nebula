@@ -3468,7 +3468,7 @@ real XMR.
   remediation names the stable expected artifact id/path, expected artifact,
   remediation kind, relevant command, expected evidence root, granular failed
   subchecks, root-specific `repair_roots` for failed capture/preflight/package/
-  runbook/status/bootstrap policy bindings, and capture roots, bootstrap profile/report/rate-limit roots,
+  runbook receipt/status/bootstrap policy bindings, and capture roots, bootstrap profile/report/rate-limit roots,
   bootstrap topology/count/registry/probe bindings,
   endpoint publicness, TLS pin roots/counts,
   proxy/firewall/rate-limit policy roots, status-manifest root/payload, and
