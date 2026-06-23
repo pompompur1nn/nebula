@@ -495,7 +495,8 @@ operator-only launch readiness report, writes the release approval and release
 authority registry handoff templates, and writes
 `nebula-public-testnet-certification.json` with `local_testnet_ready`,
 `public_launch_ready`, package roots, launch report roots, blocking gaps,
-release-template roots, remediations, whether external capture is still
+release-template roots, package-bound release-template roots, package-binding
+booleans for both release handoff templates, remediations, whether external capture is still
 required, and the exact capture, verify, assemble, and launch-gate commands.
 The certification artifact is
 operator-local, not public deployment evidence and not mainnet custody approval;

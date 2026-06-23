@@ -9754,6 +9754,12 @@ fn public_testnet_certification_artifact(
 ) -> Result<Value, String> {
     let package_file_set_root = required_root(package_manifest, "package_file_set_root")?;
     let package_manifest_root = required_root(package_manifest, "package_manifest_root")?;
+    let package_release_approval_template_root =
+        public_launch_package_artifact_root(package_manifest, "release-approval-template")?;
+    let package_release_authority_registry_template_root = public_launch_package_artifact_root(
+        package_manifest,
+        "release-authority-registry-template",
+    )?;
     let public_launch_readiness_artifact_root =
         required_root(launch_report, "public_launch_readiness_artifact_root")?;
     let release_approval_template = release_approval_template_for_summary(summary);
@@ -9764,6 +9770,10 @@ fn public_testnet_certification_artifact(
         "release-authority-registry-template",
         &release_authority_registry_template,
     );
+    let release_approval_template_root_bound_to_package =
+        release_approval_template_root == package_release_approval_template_root;
+    let release_authority_registry_template_root_bound_to_package =
+        release_authority_registry_template_root == package_release_authority_registry_template_root;
     let external_capture_required = summary
         .public_launch_readiness
         .remediations
@@ -9799,8 +9809,12 @@ fn public_testnet_certification_artifact(
         "public_launch_readiness_artifact_root": public_launch_readiness_artifact_root,
         "release_approval_template_file": "nebula-release-approval-template.json",
         "release_approval_template_root": release_approval_template_root,
+        "package_release_approval_template_root": package_release_approval_template_root,
+        "release_approval_template_root_bound_to_package": release_approval_template_root_bound_to_package,
         "release_authority_registry_template_file": "nebula-release-authority-registry-template.json",
         "release_authority_registry_template_root": release_authority_registry_template_root,
+        "package_release_authority_registry_template_root": package_release_authority_registry_template_root,
+        "release_authority_registry_template_root_bound_to_package": release_authority_registry_template_root_bound_to_package,
         "next_steps": {
             "capture_public_deployment": "Fill nebula-public-launch-package/nebula-public-deployment-template.json with captured public endpoint, TLS, probe, observer, operator-registry, preflight, and runbook receipt evidence.",
             "collect_release_authority_handoff": "Fill nebula-release-approval-template.json and nebula-release-authority-registry-template.json only after public deployment evidence and external authority signoff are complete.",
@@ -9812,6 +9826,35 @@ fn public_testnet_certification_artifact(
     let certification_root = value_root("public-testnet-certification", &certification);
     certification["certification_root"] = json!(certification_root);
     Ok(certification)
+}
+
+fn public_launch_package_artifact_root(
+    package_manifest: &Value,
+    artifact_id: &str,
+) -> Result<String, String> {
+    let artifacts = package_manifest
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "public launch package manifest missing artifacts".to_string())?;
+    let record = artifacts
+        .iter()
+        .find(|record| record.get("artifact_id").and_then(Value::as_str) == Some(artifact_id))
+        .ok_or_else(|| {
+            format!("public launch package manifest missing artifact '{artifact_id}'")
+        })?;
+    let artifact_root = record
+        .get("root")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            format!("public launch package artifact '{artifact_id}' missing root")
+        })?;
+    ensure(
+        is_hex_root(artifact_root),
+        &format!(
+            "public launch package artifact '{artifact_id}' root must be a 64-character hex root"
+        ),
+    )?;
+    Ok(artifact_root.to_string())
 }
 
 fn ensure_public_testnet_certification_exact_file_set(dir: &PathBuf) -> Result<(), String> {
@@ -32285,6 +32328,11 @@ mod tests {
         let package_dir_string = package_dir.to_string_lossy().into_owned();
         verify_public_launch_package(&package_dir_string, &summary)
             .expect("certification package should verify");
+        let package_manifest: Value = serde_json::from_slice(
+            &fs::read(package_dir.join("nebula-public-launch-package.json"))
+                .expect("read package manifest"),
+        )
+        .expect("package manifest json");
         let certification_path = cert_dir.join("nebula-public-testnet-certification.json");
         let certification: Value =
             serde_json::from_slice(&fs::read(&certification_path).expect("read certification"))
@@ -32329,11 +32377,40 @@ mod tests {
                 .as_str()
                 .expect("release approval template root")
         ));
+        assert_eq!(
+            certification["package_release_approval_template_root"],
+            public_launch_package_artifact_root(&package_manifest, "release-approval-template")
+                .expect("package release approval template root")
+        );
+        assert_eq!(
+            certification["release_approval_template_root"],
+            certification["package_release_approval_template_root"]
+        );
+        assert_eq!(
+            certification["release_approval_template_root_bound_to_package"],
+            true
+        );
         assert!(is_hex_root(
             certification["release_authority_registry_template_root"]
                 .as_str()
                 .expect("release authority registry template root")
         ));
+        assert_eq!(
+            certification["package_release_authority_registry_template_root"],
+            public_launch_package_artifact_root(
+                &package_manifest,
+                "release-authority-registry-template"
+            )
+            .expect("package release authority registry template root")
+        );
+        assert_eq!(
+            certification["release_authority_registry_template_root"],
+            certification["package_release_authority_registry_template_root"]
+        );
+        assert_eq!(
+            certification["release_authority_registry_template_root_bound_to_package"],
+            true
+        );
         assert!(is_hex_root(
             certification["certification_root"]
                 .as_str()
@@ -32427,6 +32504,28 @@ mod tests {
         let error = verify_public_testnet_certification(&cert_dir_string, &summary)
             .expect_err("tampered release approval template should fail verification");
         assert!(error.contains("release approval template does not match this run"));
+
+        write_public_testnet_certification(&cert_dir_string, &summary)
+            .expect("rewrite public testnet certification");
+        let mut certification: Value =
+            serde_json::from_slice(&fs::read(&certification_path).expect("read certification"))
+                .expect("certification json");
+        certification["package_release_approval_template_root"] =
+            json!(root(&["tampered-package-release-approval-root"]));
+        certification["release_approval_template_root_bound_to_package"] = json!(false);
+        if let Some(object) = certification.as_object_mut() {
+            object.remove("certification_root");
+        }
+        let certification_root = value_root("public-testnet-certification", &certification);
+        certification["certification_root"] = json!(certification_root);
+        fs::write(
+            &certification_path,
+            serde_json::to_string_pretty(&certification).expect("certification json"),
+        )
+        .expect("write package-bound release root tamper");
+        let error = verify_public_testnet_certification(&cert_dir_string, &summary)
+            .expect_err("tampered package-bound release root should fail verification");
+        assert!(error.contains("public testnet certification does not match this run"));
 
         write_public_testnet_certification(&cert_dir_string, &summary)
             .expect("rewrite public testnet certification");

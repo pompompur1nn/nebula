@@ -3276,7 +3276,8 @@ real XMR.
   package, emits the operator-only launch readiness report, writes exact release
   approval and release-authority registry handoff templates, and records
   `local_testnet_ready`, `public_launch_ready`, package/report/template roots,
-  blocking gaps, remediation commands, and whether external capture is still
+  package-bound release-template roots, package-binding booleans for both
+  release handoff templates, blocking gaps, remediation commands, and whether external capture is still
   required in `nebula-public-testnet-certification.json`. It is deliberately
   operator-local and remains blocked until the filled schema v5 deployment
   attestation passes.
