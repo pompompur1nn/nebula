@@ -1248,13 +1248,18 @@ struct PublicDeploymentReport {
     public_deployment_runbook_step_receipt_count: u64,
     expected_public_deployment_runbook_step_receipt_count: Option<u64>,
     bootstrap_node_set_root: Option<String>,
+    expected_bootstrap_node_set_root: Option<String>,
     bootstrap_node_count: u64,
+    expected_bootstrap_node_count: Option<u64>,
     bootstrap_operator_set_root: Option<String>,
+    expected_bootstrap_operator_set_root: Option<String>,
     bootstrap_operator_count: u64,
+    expected_bootstrap_operator_count: Option<u64>,
     bootstrap_operator_registry_root: Option<String>,
     bootstrap_operator_registry_count: u64,
     bootstrap_operator_signature_root: Option<String>,
     bootstrap_region_set_root: Option<String>,
+    expected_bootstrap_region_set_root: Option<String>,
     bootstrap_public_endpoint_count: u64,
     bootstrap_node_probe_set_root: Option<String>,
     bootstrap_node_probe_count: u64,
@@ -5881,6 +5886,10 @@ impl Testnet {
                 .unwrap_or_else(|| {
                     "missing-public-deployment-runbook-step-receipt-count".to_string()
                 });
+        let expected_bootstrap_node_count_string =
+            summary.public_bootstrap_profile.bootstrap_node_count.to_string();
+        let expected_bootstrap_operator_count_string =
+            summary.public_bootstrap_profile.bootstrap_operator_count.to_string();
         let report_root = root(&[
             "public-deployment-report",
             CHAIN_ID,
@@ -5925,6 +5934,16 @@ impl Testnet {
             &evidence.public_status_manifest_root,
             &expected_public_status_manifest_root,
             &summary.public_bootstrap_profile.report_root,
+            &evidence.bootstrap_node_set_root,
+            &summary.public_bootstrap_profile.bootstrap_node_set_root,
+            &evidence.bootstrap_node_count.to_string(),
+            &expected_bootstrap_node_count_string,
+            &evidence.bootstrap_operator_set_root,
+            &summary.public_bootstrap_profile.bootstrap_operator_set_root,
+            &evidence.bootstrap_operator_count.to_string(),
+            &expected_bootstrap_operator_count_string,
+            &evidence.bootstrap_region_set_root,
+            &summary.public_bootstrap_profile.bootstrap_region_set_root,
             &evidence.schema_version.to_string(),
             bool_str(passed),
         ]);
@@ -6112,9 +6131,24 @@ impl Testnet {
                 .public_deployment_runbook_step_receipt_count,
             expected_public_deployment_runbook_step_receipt_count,
             bootstrap_node_set_root: Some(evidence.bootstrap_node_set_root.clone()),
+            expected_bootstrap_node_set_root: Some(
+                summary.public_bootstrap_profile.bootstrap_node_set_root.clone(),
+            ),
             bootstrap_node_count: evidence.bootstrap_node_count,
+            expected_bootstrap_node_count: Some(
+                summary.public_bootstrap_profile.bootstrap_node_count,
+            ),
             bootstrap_operator_set_root: Some(evidence.bootstrap_operator_set_root.clone()),
+            expected_bootstrap_operator_set_root: Some(
+                summary
+                    .public_bootstrap_profile
+                    .bootstrap_operator_set_root
+                    .clone(),
+            ),
             bootstrap_operator_count: evidence.bootstrap_operator_count,
+            expected_bootstrap_operator_count: Some(
+                summary.public_bootstrap_profile.bootstrap_operator_count,
+            ),
             bootstrap_operator_registry_root: Some(
                 evidence.bootstrap_operator_registry_root.clone(),
             ),
@@ -6123,6 +6157,9 @@ impl Testnet {
                 evidence.bootstrap_operator_signature_root.clone(),
             ),
             bootstrap_region_set_root: Some(evidence.bootstrap_region_set_root.clone()),
+            expected_bootstrap_region_set_root: Some(
+                summary.public_bootstrap_profile.bootstrap_region_set_root.clone(),
+            ),
             bootstrap_public_endpoint_count: evidence.bootstrap_public_endpoint_count,
             bootstrap_node_probe_set_root: Some(evidence.bootstrap_node_probe_set_root.clone()),
             bootstrap_node_probe_count: evidence.bootstrap_node_probe_count,
@@ -7159,13 +7196,18 @@ fn missing_public_deployment_report(manifest_id: &str) -> PublicDeploymentReport
         public_deployment_runbook_step_receipt_count: 0,
         expected_public_deployment_runbook_step_receipt_count: None,
         bootstrap_node_set_root: None,
+        expected_bootstrap_node_set_root: None,
         bootstrap_node_count: 0,
+        expected_bootstrap_node_count: None,
         bootstrap_operator_set_root: None,
+        expected_bootstrap_operator_set_root: None,
         bootstrap_operator_count: 0,
+        expected_bootstrap_operator_count: None,
         bootstrap_operator_registry_root: None,
         bootstrap_operator_registry_count: 0,
         bootstrap_operator_signature_root: None,
         bootstrap_region_set_root: None,
+        expected_bootstrap_region_set_root: None,
         bootstrap_public_endpoint_count: 0,
         bootstrap_node_probe_set_root: None,
         bootstrap_node_probe_count: 0,
@@ -7573,6 +7615,18 @@ fn public_deployment_repair_roots(
             report
                 .expected_public_deployment_runbook_step_receipt_set_root
                 .as_deref(),
+        ),
+        (
+            "bootstrap_node_set_root_bound",
+            report.expected_bootstrap_node_set_root.as_deref(),
+        ),
+        (
+            "bootstrap_operator_set_root_bound",
+            report.expected_bootstrap_operator_set_root.as_deref(),
+        ),
+        (
+            "bootstrap_region_set_root_bound",
+            report.expected_bootstrap_region_set_root.as_deref(),
         ),
     ];
     for (subcheck, expected_root) in candidates {
@@ -32423,6 +32477,50 @@ mod tests {
             base_summary.public_bootstrap_profile.bootstrap_operator_count + 1
         );
         assert_eq!(
+            summary
+                .public_deployment
+                .expected_bootstrap_node_set_root
+                .as_deref(),
+            Some(
+                base_summary
+                    .public_bootstrap_profile
+                    .bootstrap_node_set_root
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            summary.public_deployment.expected_bootstrap_node_count,
+            Some(base_summary.public_bootstrap_profile.bootstrap_node_count)
+        );
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_bootstrap_operator_set_root
+                .as_deref(),
+            Some(
+                base_summary
+                    .public_bootstrap_profile
+                    .bootstrap_operator_set_root
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            summary.public_deployment.expected_bootstrap_operator_count,
+            Some(base_summary.public_bootstrap_profile.bootstrap_operator_count)
+        );
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_bootstrap_region_set_root
+                .as_deref(),
+            Some(
+                base_summary
+                    .public_bootstrap_profile
+                    .bootstrap_region_set_root
+                    .as_str()
+            )
+        );
+        assert_eq!(
             summary.public_launch_readiness.blocking_gaps,
             vec!["public-launch-deployment-attestation"]
         );
@@ -32455,6 +32553,42 @@ mod tests {
                 "missing failed subcheck {failed_subcheck}"
             );
         }
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("bootstrap_node_set_root_bound")
+                .map(String::as_str),
+            Some(
+                base_summary
+                    .public_bootstrap_profile
+                    .bootstrap_node_set_root
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("bootstrap_operator_set_root_bound")
+                .map(String::as_str),
+            Some(
+                base_summary
+                    .public_bootstrap_profile
+                    .bootstrap_operator_set_root
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            remediation
+                .repair_roots
+                .get("bootstrap_region_set_root_bound")
+                .map(String::as_str),
+            Some(
+                base_summary
+                    .public_bootstrap_profile
+                    .bootstrap_region_set_root
+                    .as_str()
+            )
+        );
         let _ = fs::remove_file(path);
     }
 
