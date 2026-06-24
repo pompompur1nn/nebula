@@ -10109,6 +10109,12 @@ fn public_testnet_certification_artifact(
         package_manifest,
         "release-authority-registry-template",
     )?;
+    let package_public_deployment_evidence_template_root =
+        public_launch_package_artifact_root(package_manifest, "public-deployment-evidence-template")?;
+    let package_public_deployment_capture_plan_root =
+        public_launch_package_artifact_root(package_manifest, "public-deployment-capture-plan")?;
+    let package_public_capture_todo_root =
+        public_launch_package_artifact_root(package_manifest, "public-capture-todo")?;
     let public_launch_readiness_artifact_root =
         required_root(launch_report, "public_launch_readiness_artifact_root")?;
     let readiness_public_deployment_evidence_root = required_str(
@@ -10132,6 +10138,16 @@ fn public_testnet_certification_artifact(
         "release-authority-registry-template",
         &release_authority_registry_template,
     );
+    let public_deployment_evidence_template = public_deployment_evidence_template(summary);
+    let public_deployment_evidence_template_root =
+        required_root(&public_deployment_evidence_template, "template_root")?;
+    let public_deployment_capture_plan = public_deployment_capture_plan(summary);
+    let public_deployment_capture_plan_root =
+        required_root(&public_deployment_capture_plan, "capture_plan_root")?;
+    let public_deployment_capture_contract_root =
+        required_root(&public_deployment_capture_plan, "capture_contract_root")?;
+    let public_capture_todo = public_capture_todo_artifact(summary);
+    let public_capture_todo_root = required_root(&public_capture_todo, "public_capture_todo_root")?;
     let public_launch_package_handoff_root = public_launch_package_handoff_root_from_roots(
         &package_file_set_root,
         &package_manifest_root,
@@ -10143,6 +10159,12 @@ fn public_testnet_certification_artifact(
         release_approval_template_root == package_release_approval_template_root;
     let release_authority_registry_template_root_bound_to_package =
         release_authority_registry_template_root == package_release_authority_registry_template_root;
+    let public_deployment_evidence_template_root_bound_to_package =
+        public_deployment_evidence_template_root == package_public_deployment_evidence_template_root;
+    let public_deployment_capture_plan_root_bound_to_package =
+        public_deployment_capture_plan_root == package_public_deployment_capture_plan_root;
+    let public_capture_todo_root_bound_to_package =
+        public_capture_todo_root == package_public_capture_todo_root;
     let external_capture_required = summary
         .public_launch_readiness
         .remediations
@@ -10199,6 +10221,19 @@ fn public_testnet_certification_artifact(
         "release_authority_registry_template_root": release_authority_registry_template_root,
         "package_release_authority_registry_template_root": package_release_authority_registry_template_root,
         "release_authority_registry_template_root_bound_to_package": release_authority_registry_template_root_bound_to_package,
+        "public_deployment_evidence_template_file": "nebula-public-launch-package/nebula-public-deployment-template.json",
+        "public_deployment_evidence_template_root": public_deployment_evidence_template_root,
+        "package_public_deployment_evidence_template_root": package_public_deployment_evidence_template_root,
+        "public_deployment_evidence_template_root_bound_to_package": public_deployment_evidence_template_root_bound_to_package,
+        "public_deployment_capture_plan_file": "nebula-public-launch-package/nebula-public-deployment-capture-plan.json",
+        "public_deployment_capture_plan_root": public_deployment_capture_plan_root,
+        "package_public_deployment_capture_plan_root": package_public_deployment_capture_plan_root,
+        "public_deployment_capture_plan_root_bound_to_package": public_deployment_capture_plan_root_bound_to_package,
+        "public_deployment_capture_contract_root": public_deployment_capture_contract_root,
+        "public_capture_todo_file": "nebula-public-launch-package/nebula-public-capture-todo.json",
+        "public_capture_todo_root": public_capture_todo_root,
+        "package_public_capture_todo_root": package_public_capture_todo_root,
+        "public_capture_todo_root_bound_to_package": public_capture_todo_root_bound_to_package,
         "next_steps_root": next_steps_root,
         "next_steps": next_steps,
         "command_sequence_root": command_sequence_root,
@@ -33314,6 +33349,57 @@ mod tests {
             certification["release_authority_registry_template_root_bound_to_package"],
             true
         );
+        assert_eq!(
+            certification["public_deployment_evidence_template_root"],
+            public_launch_package_artifact_root(
+                &package_manifest,
+                "public-deployment-evidence-template"
+            )
+            .expect("package public deployment evidence template root")
+        );
+        assert_eq!(
+            certification["package_public_deployment_evidence_template_root"],
+            certification["public_deployment_evidence_template_root"]
+        );
+        assert_eq!(
+            certification["public_deployment_evidence_template_root_bound_to_package"],
+            true
+        );
+        let expected_capture_plan = public_deployment_capture_plan(&summary);
+        assert_eq!(
+            certification["public_deployment_capture_plan_root"],
+            expected_capture_plan["capture_plan_root"]
+        );
+        assert_eq!(
+            certification["package_public_deployment_capture_plan_root"],
+            certification["public_deployment_capture_plan_root"]
+        );
+        assert_eq!(
+            certification["package_public_deployment_capture_plan_root"],
+            public_launch_package_artifact_root(&package_manifest, "public-deployment-capture-plan")
+                .expect("package public deployment capture plan root")
+        );
+        assert_eq!(
+            certification["public_deployment_capture_plan_root_bound_to_package"],
+            true
+        );
+        assert_eq!(
+            certification["public_deployment_capture_contract_root"],
+            expected_capture_plan["capture_contract_root"]
+        );
+        assert_eq!(
+            certification["public_capture_todo_root"],
+            public_launch_package_artifact_root(&package_manifest, "public-capture-todo")
+                .expect("package public capture todo root")
+        );
+        assert_eq!(
+            certification["package_public_capture_todo_root"],
+            certification["public_capture_todo_root"]
+        );
+        assert_eq!(
+            certification["public_capture_todo_root_bound_to_package"],
+            true
+        );
         assert!(is_hex_root(
             certification["certification_root"]
                 .as_str()
@@ -33449,6 +33535,28 @@ mod tests {
         .expect("write package handoff tampered certification");
         let error = verify_public_testnet_certification(&cert_dir_string, &summary)
             .expect_err("tampered package handoff root should fail verification");
+        assert!(error.contains("public testnet certification does not match this run"));
+
+        write_public_testnet_certification(&cert_dir_string, &summary)
+            .expect("rewrite public testnet certification");
+        let mut certification: Value =
+            serde_json::from_slice(&fs::read(&certification_path).expect("read certification"))
+                .expect("certification json");
+        certification["public_deployment_capture_plan_root"] =
+            json!(root(&["tampered-certification-capture-plan-root"]));
+        certification["public_deployment_capture_plan_root_bound_to_package"] = json!(false);
+        if let Some(object) = certification.as_object_mut() {
+            object.remove("certification_root");
+        }
+        let certification_root = value_root("public-testnet-certification", &certification);
+        certification["certification_root"] = json!(certification_root);
+        fs::write(
+            &certification_path,
+            serde_json::to_string_pretty(&certification).expect("certification json"),
+        )
+        .expect("write capture-plan tampered certification");
+        let error = verify_public_testnet_certification(&cert_dir_string, &summary)
+            .expect_err("tampered certification capture-plan root should fail verification");
         assert!(error.contains("public testnet certification does not match this run"));
 
         write_public_testnet_certification(&cert_dir_string, &summary)

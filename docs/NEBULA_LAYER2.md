@@ -3280,7 +3280,9 @@ real XMR.
   `public_launch_package_handoff_root`, the public deployment evidence root,
   its readiness-report binding boolean, package-bound
   release-template roots, package-binding booleans for both release handoff
-  templates, blocking gaps, rooted remediation commands for capture audit, audit
+  templates, package-bound public deployment evidence-template, capture-plan,
+  and capture-todo roots, the capture-contract root, binding booleans for those
+  capture handoff artifacts, blocking gaps, rooted remediation commands for capture audit, audit
   verification, strict capture verification, assembly, and launch verification,
   a rooted command sequence for that order, and whether external capture is still
   required in
