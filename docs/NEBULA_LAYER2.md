@@ -3387,8 +3387,9 @@ real XMR.
 - A package-bound capture scaffold export lets deployment CI start from a
   verified `nebula-public-launch-package` directory and write a schema v5
   capture worksheet with the current capture-plan root, capture-contract root,
-  deployment preflight checklist root, package file-set root, package handoff
-  root, package manifest root, readiness artifact root, release-template roots, and matching
+  public deployment evidence-template root, deployment preflight checklist
+  root, package file-set root, package handoff root, package manifest root,
+  readiness artifact root, release-template roots, and matching
   preflight/runbook receipt bindings already filled. The release-template roots
   are copied from the verified package's release approval and release-authority
   registry template files. The scaffold is still marked operator-fill-required
@@ -3459,9 +3460,10 @@ real XMR.
   endpoint fields, invalid freshness windows, stale capture times,
   invalid deployment run ids, malformed preflight receipt fields or phases,
   malformed runbook receipt fields or steps, expected capture-plan,
-  capture-contract, preflight, package-manifest, readiness-artifact,
-  release-approval-template, and release-authority-registry-template roots,
-  mismatched frozen launch/status roots,
+  capture-contract, evidence-template, preflight, package-manifest,
+  readiness-artifact, release-approval-template, and
+  release-authority-registry-template roots, mismatched frozen launch/status
+  roots,
   missing or extra TLS endpoint pin roles,
   malformed TLS endpoint pin records, missing or extra public-surface probe
   roles, malformed public-surface probe records, insufficient bootstrap node

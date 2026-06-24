@@ -602,6 +602,7 @@ endpoint evidence is filled.
 `--mainnet-readiness`. It first verifies the supplied public launch package,
 then writes a non-evidence schema v5 capture scaffold with the current
 `capture_plan_root`, `capture_contract_root`,
+`public_deployment_evidence_template_root`,
 `deployment_preflight_checklist_root`, package file-set root, package handoff
 root, package manifest root, readiness artifact root, release-template roots, and matching
 preflight/runbook receipt bindings already filled from the verified package and
@@ -627,8 +628,8 @@ required capture fields, missing and invalid public endpoint fields, invalid
 timestamp types, freshness-window bounds, current capture-time validity,
 deployment-run-id validity, malformed preflight receipt fields/phases,
 malformed runbook receipt fields/steps, expected capture-plan, capture-contract,
-and preflight roots, mismatched frozen launch/status roots, TLS endpoint pin
-counts and missing/extra/duplicate TLS endpoint pin roles,
+evidence-template, and preflight roots, mismatched frozen launch/status roots,
+TLS endpoint pin counts and missing/extra/duplicate TLS endpoint pin roles,
 indexed malformed TLS endpoint pin records,
 public-surface probe counts and missing/extra/duplicate probe roles,
 indexed malformed public-surface probe records, bootstrap
@@ -641,9 +642,9 @@ observer region indexes, duplicate observer ids or keys, unsigned/unverified
 observer signature indexes, invalid observer signature-verification transcript
 indexes, sensitive key markers, public-forbidden key names, size/parseability
 checks, current capture-plan/contract/preflight root matches, expected
-capture-plan, capture-contract, and preflight roots, the expected package
-file-set root, expected package handoff root, package file-set/handoff root
-matches, and
+capture-plan, capture-contract, evidence-template, and preflight roots, the
+expected package file-set root, expected package handoff root, package
+file-set/handoff root matches, and
 `structural_failed_checks`/`failed_checks` arrays with counts for CI routing,
 plus an `assembler_ready` boolean. It is diagnostic only:
 `usable_as_public_deployment_evidence` is false, so it helps deployment CI
@@ -670,7 +671,8 @@ publishing or archiving the final attestation.
 --write-public-deployment-evidence path\to\deployment.json` also requires
 `--mainnet-readiness` and turns captured deployment transcripts into a
 loadable schema v5 attestation. The capture JSON supplies the public endpoints,
-the `capture_plan_root`, `capture_contract_root`, and
+the `capture_plan_root`, `capture_contract_root`,
+`public_deployment_evidence_template_root`, and
 `deployment_preflight_checklist_root` exported by
 `--write-public-deployment-capture-plan`, a completed
 `deployment_preflight_receipt` with one rooted completion record per required
@@ -715,7 +717,8 @@ from the required public probe transcript roots, including
 evidence root and immediately validates the assembled output with the same
 `--public-deployment-evidence` verifier.
 The verifier and public deployment report also compare the embedded
-`capture_plan_root`, `capture_contract_root`, and
+`capture_plan_root`, `capture_contract_root`,
+`public_deployment_evidence_template_root`, and
 `deployment_preflight_checklist_root` against the current generated capture plan,
 require the embedded `public_launch_package_file_set_root` to match the current
 rooted package file set, require the embedded

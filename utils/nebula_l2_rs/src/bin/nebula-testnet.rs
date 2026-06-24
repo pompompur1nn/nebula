@@ -10985,6 +10985,8 @@ fn public_deployment_capture_audit(
         expected_capture_plan_root,
         capture_contract_root_matches,
         expected_capture_contract_root,
+        public_deployment_evidence_template_root_matches,
+        expected_public_deployment_evidence_template_root,
         deployment_preflight_checklist_root_matches,
         expected_deployment_preflight_checklist_root,
         public_launch_bundle_root_matches,
@@ -11158,6 +11160,10 @@ fn public_deployment_capture_audit(
             let expected_capture_contract_root = capture_plan["capture_contract_root"]
                 .as_str()
                 .unwrap_or_default();
+            let expected_public_deployment_evidence_template_root = capture_plan
+                ["public_deployment_evidence_template_root"]
+                .as_str()
+                .unwrap_or_default();
             let expected_preflight_checklist_root = capture_plan["deployment_preflight"]
                 ["checklist_root"]
                 .as_str()
@@ -11324,6 +11330,11 @@ fn public_deployment_capture_audit(
                     == Some(expected_capture_contract_root),
                 expected_capture_contract_root.to_string(),
                 value
+                    .get("public_deployment_evidence_template_root")
+                    .and_then(Value::as_str)
+                    == Some(expected_public_deployment_evidence_template_root),
+                expected_public_deployment_evidence_template_root.to_string(),
+                value
                     .get("deployment_preflight_checklist_root")
                     .and_then(Value::as_str)
                     == Some(expected_preflight_checklist_root),
@@ -11478,6 +11489,12 @@ fn public_deployment_capture_audit(
             false,
             String::new(),
             false,
+            public_deployment_capture_plan(summary)
+                .get("public_deployment_evidence_template_root")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            false,
             String::new(),
             false,
             String::new(),
@@ -11564,6 +11581,7 @@ fn public_deployment_capture_audit(
         && forbidden_keys_present.is_empty()
         && capture_plan_root_matches
         && capture_contract_root_matches
+        && public_deployment_evidence_template_root_matches
         && deployment_preflight_checklist_root_matches
         && public_launch_bundle_root_matches
         && public_status_manifest_root_matches
@@ -11681,6 +11699,10 @@ fn public_deployment_capture_audit(
     if !capture_contract_root_matches {
         structural_failed_checks.push("capture_contract_root_matches".to_string());
     }
+    if !public_deployment_evidence_template_root_matches {
+        structural_failed_checks
+            .push("public_deployment_evidence_template_root_matches".to_string());
+    }
     if !deployment_preflight_checklist_root_matches {
         structural_failed_checks.push("deployment_preflight_checklist_root_matches".to_string());
     }
@@ -11761,6 +11783,7 @@ fn public_deployment_capture_audit(
         "forbidden_public_status_keys_present": forbidden_keys_present,
         "capture_plan_root_matches": capture_plan_root_matches,
         "capture_contract_root_matches": capture_contract_root_matches,
+        "public_deployment_evidence_template_root_matches": public_deployment_evidence_template_root_matches,
         "deployment_preflight_checklist_root_matches": deployment_preflight_checklist_root_matches,
         "expected_public_launch_package_file_set_root": expected_public_launch_package_file_set_root,
         "public_launch_package_file_set_root_matches": public_launch_package_file_set_root_matches,
@@ -11792,6 +11815,8 @@ fn public_deployment_capture_audit(
     audit["deployment_run_id_valid"] = json!(deployment_run_id_valid);
     audit["expected_capture_plan_root"] = json!(expected_capture_plan_root);
     audit["expected_capture_contract_root"] = json!(expected_capture_contract_root);
+    audit["expected_public_deployment_evidence_template_root"] =
+        json!(expected_public_deployment_evidence_template_root);
     audit["expected_deployment_preflight_checklist_root"] =
         json!(expected_deployment_preflight_checklist_root);
     audit["expected_public_launch_package_manifest_root"] =
@@ -34701,6 +34726,15 @@ mod tests {
         assert_eq!(audit["missing_required_fields"], json!([]));
         assert_eq!(audit["capture_plan_root_matches"], true);
         assert_eq!(audit["capture_contract_root_matches"], true);
+        assert_eq!(
+            audit["public_deployment_evidence_template_root_matches"],
+            true
+        );
+        let expected_capture_plan = public_deployment_capture_plan(&summary);
+        assert_eq!(
+            audit["expected_public_deployment_evidence_template_root"],
+            expected_capture_plan["public_deployment_evidence_template_root"]
+        );
         assert_eq!(audit["deployment_preflight_checklist_root_matches"], true);
         assert_eq!(audit["public_launch_package_file_set_root_matches"], true);
         assert_eq!(audit["public_launch_package_handoff_root_matches"], true);
@@ -36553,6 +36587,10 @@ mod tests {
             json!(root(&["test-public-deployment", "wrong-capture-plan"]));
         capture["capture_contract_root"] =
             json!(root(&["test-public-deployment", "wrong-capture-contract"]));
+        capture["public_deployment_evidence_template_root"] = json!(root(&[
+            "test-public-deployment",
+            "wrong-evidence-template-root"
+        ]));
         capture["deployment_preflight_checklist_root"] = json!(root(&[
             "test-public-deployment",
             "wrong-preflight-checklist"
@@ -36566,6 +36604,10 @@ mod tests {
         assert_eq!(audit["assembler_ready"], false);
         assert_eq!(audit["capture_plan_root_matches"], false);
         assert_eq!(audit["capture_contract_root_matches"], false);
+        assert_eq!(
+            audit["public_deployment_evidence_template_root_matches"],
+            false
+        );
         assert_eq!(audit["deployment_preflight_checklist_root_matches"], false);
         assert!(is_hex_root(
             audit["expected_capture_plan_root"]
@@ -36578,6 +36620,11 @@ mod tests {
                 .expect("expected capture contract root")
         ));
         assert!(is_hex_root(
+            audit["expected_public_deployment_evidence_template_root"]
+                .as_str()
+                .expect("expected public deployment evidence template root")
+        ));
+        assert!(is_hex_root(
             audit["expected_deployment_preflight_checklist_root"]
                 .as_str()
                 .expect("expected preflight checklist root")
@@ -36587,6 +36634,8 @@ mod tests {
             .expect("structural failed checks");
         assert!(structural_failed_checks.contains(&json!("capture_plan_root_matches")));
         assert!(structural_failed_checks.contains(&json!("capture_contract_root_matches")));
+        assert!(structural_failed_checks
+            .contains(&json!("public_deployment_evidence_template_root_matches")));
         assert!(structural_failed_checks
             .contains(&json!("deployment_preflight_checklist_root_matches")));
         let _ = fs::remove_file(capture_path);
