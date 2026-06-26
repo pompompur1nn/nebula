@@ -1061,6 +1061,12 @@ struct PublicBootstrapProfile {
 #[derive(Clone, Debug, Serialize)]
 struct PublicDeploymentEvidence {
     schema_version: u64,
+    kind: String,
+    template_only: bool,
+    chain_id: String,
+    version: String,
+    public_alpha_only: bool,
+    custody_mode: String,
     evidence_root: String,
     capture_plan_root: String,
     capture_contract_root: String,
@@ -1195,6 +1201,13 @@ struct PublicDeploymentReport {
     expected_provenance_root: Option<String>,
     provenance_root_bound: bool,
     evidence_shape_verified: bool,
+    evidence_identity_bound: bool,
+    evidence_kind_bound: bool,
+    evidence_template_filled: bool,
+    evidence_chain_id_bound: bool,
+    evidence_version_bound: bool,
+    evidence_public_alpha_only: bool,
+    evidence_custody_mode_bound: bool,
     placeholders_absent: bool,
     public_bootstrap_profile_passed: bool,
     finality_latency_profile_passed: bool,
@@ -1283,6 +1296,18 @@ struct PublicDeploymentReport {
     observed_region_count_bound: bool,
     no_private_summary_exposed: bool,
     mainnet_custody_disabled: bool,
+    evidence_kind: Option<String>,
+    expected_evidence_kind: Option<String>,
+    evidence_template_only: Option<bool>,
+    expected_evidence_template_only: Option<bool>,
+    evidence_chain_id: Option<String>,
+    expected_evidence_chain_id: Option<String>,
+    evidence_version: Option<String>,
+    expected_evidence_version: Option<String>,
+    evidence_public_alpha_only_value: Option<bool>,
+    expected_evidence_public_alpha_only: Option<bool>,
+    evidence_custody_mode: Option<String>,
+    expected_evidence_custody_mode: Option<String>,
     public_launch_bundle_root: Option<String>,
     public_launch_package_file_set_root: Option<String>,
     expected_public_launch_package_file_set_root: Option<String>,
@@ -6300,6 +6325,18 @@ impl Testnet {
         let mainnet_custody_disabled = evidence.mainnet_custody_disabled;
         let evidence_shape_verified =
             evidence.schema_version == PUBLIC_DEPLOYMENT_EVIDENCE_SCHEMA_VERSION;
+        let evidence_kind_bound = evidence.kind == "nebula-public-deployment-attestation";
+        let evidence_template_filled = !evidence.template_only;
+        let evidence_chain_id_bound = evidence.chain_id == CHAIN_ID;
+        let evidence_version_bound = evidence.version == VERSION;
+        let evidence_public_alpha_only = evidence.public_alpha_only;
+        let evidence_custody_mode_bound = evidence.custody_mode == "no-mainnet-custody";
+        let evidence_identity_bound = evidence_kind_bound
+            && evidence_template_filled
+            && evidence_chain_id_bound
+            && evidence_version_bound
+            && evidence_public_alpha_only
+            && evidence_custody_mode_bound;
         let expected_provenance_root = public_deployment_provenance_root(evidence);
         let provenance_root_bound = evidence.provenance_root == expected_provenance_root;
         let mut evidence_with_expected_provenance = evidence.clone();
@@ -6308,6 +6345,7 @@ impl Testnet {
             public_deployment_attestation_root(&evidence_with_expected_provenance);
         let evidence_root_bound = evidence.evidence_root == expected_evidence_root;
         let passed = evidence_shape_verified
+            && evidence_identity_bound
             && evidence_root_bound
             && provenance_root_bound
             && placeholders_absent
@@ -6575,6 +6613,18 @@ impl Testnet {
             &evidence.observed_region_count.to_string(),
             &expected_observed_region_count_string,
             &evidence.schema_version.to_string(),
+            &evidence.kind,
+            "nebula-public-deployment-attestation",
+            bool_str(evidence.template_only),
+            bool_str(false),
+            &evidence.chain_id,
+            CHAIN_ID,
+            &evidence.version,
+            VERSION,
+            bool_str(evidence.public_alpha_only),
+            bool_str(true),
+            &evidence.custody_mode,
+            "no-mainnet-custody",
             bool_str(passed),
         ]);
         PublicDeploymentReport {
@@ -6587,6 +6637,13 @@ impl Testnet {
             expected_provenance_root: Some(expected_provenance_root),
             provenance_root_bound,
             evidence_shape_verified,
+            evidence_identity_bound,
+            evidence_kind_bound,
+            evidence_template_filled,
+            evidence_chain_id_bound,
+            evidence_version_bound,
+            evidence_public_alpha_only,
+            evidence_custody_mode_bound,
             placeholders_absent,
             public_bootstrap_profile_passed,
             finality_latency_profile_passed,
@@ -6675,6 +6732,18 @@ impl Testnet {
             observed_region_count_bound,
             no_private_summary_exposed,
             mainnet_custody_disabled,
+            evidence_kind: Some(evidence.kind.clone()),
+            expected_evidence_kind: Some("nebula-public-deployment-attestation".to_string()),
+            evidence_template_only: Some(evidence.template_only),
+            expected_evidence_template_only: Some(false),
+            evidence_chain_id: Some(evidence.chain_id.clone()),
+            expected_evidence_chain_id: Some(CHAIN_ID.to_string()),
+            evidence_version: Some(evidence.version.clone()),
+            expected_evidence_version: Some(VERSION.to_string()),
+            evidence_public_alpha_only_value: Some(evidence.public_alpha_only),
+            expected_evidence_public_alpha_only: Some(true),
+            evidence_custody_mode: Some(evidence.custody_mode.clone()),
+            expected_evidence_custody_mode: Some("no-mainnet-custody".to_string()),
             public_launch_bundle_root: Some(evidence.public_launch_bundle_root.clone()),
             public_launch_package_file_set_root: Some(
                 evidence.public_launch_package_file_set_root.clone(),
@@ -7901,6 +7970,13 @@ fn missing_public_deployment_report(manifest_id: &str) -> PublicDeploymentReport
         expected_provenance_root: None,
         provenance_root_bound: false,
         evidence_shape_verified: false,
+        evidence_identity_bound: false,
+        evidence_kind_bound: false,
+        evidence_template_filled: false,
+        evidence_chain_id_bound: false,
+        evidence_version_bound: false,
+        evidence_public_alpha_only: false,
+        evidence_custody_mode_bound: false,
         placeholders_absent: false,
         public_bootstrap_profile_passed: false,
         finality_latency_profile_passed: false,
@@ -7989,6 +8065,18 @@ fn missing_public_deployment_report(manifest_id: &str) -> PublicDeploymentReport
         observed_region_count_bound: false,
         no_private_summary_exposed: false,
         mainnet_custody_disabled: false,
+        evidence_kind: None,
+        expected_evidence_kind: Some("nebula-public-deployment-attestation".to_string()),
+        evidence_template_only: None,
+        expected_evidence_template_only: Some(false),
+        evidence_chain_id: None,
+        expected_evidence_chain_id: Some(CHAIN_ID.to_string()),
+        evidence_version: None,
+        expected_evidence_version: Some(VERSION.to_string()),
+        evidence_public_alpha_only_value: None,
+        expected_evidence_public_alpha_only: Some(true),
+        evidence_custody_mode: None,
+        expected_evidence_custody_mode: Some("no-mainnet-custody".to_string()),
         public_launch_bundle_root: None,
         public_launch_package_file_set_root: None,
         expected_public_launch_package_file_set_root: None,
@@ -8944,6 +9032,19 @@ fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<St
         (
             "public_deployment_evidence_shape_verified",
             report.evidence_shape_verified,
+        ),
+        ("evidence_identity_bound", report.evidence_identity_bound),
+        ("evidence_kind_bound", report.evidence_kind_bound),
+        ("evidence_template_filled", report.evidence_template_filled),
+        ("evidence_chain_id_bound", report.evidence_chain_id_bound),
+        ("evidence_version_bound", report.evidence_version_bound),
+        (
+            "evidence_public_alpha_only",
+            report.evidence_public_alpha_only,
+        ),
+        (
+            "evidence_custody_mode_bound",
+            report.evidence_custody_mode_bound,
         ),
         ("placeholders_absent", report.placeholders_absent),
         (
@@ -24372,28 +24473,34 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
         schema_version == PUBLIC_DEPLOYMENT_EVIDENCE_SCHEMA_VERSION,
         "unsupported public deployment evidence schema version; expected schema_version 5 with incident-contact probes, runbook receipts, captured probe transcripts, and provenance",
     )?;
+    let kind = required_str(&value, "kind")?.to_string();
     ensure(
-        required_str(&value, "kind")? == "nebula-public-deployment-attestation",
+        kind == "nebula-public-deployment-attestation",
         "public deployment evidence kind mismatch",
     )?;
+    let template_only = required_bool(&value, "template_only")?;
     ensure(
-        !required_bool(&value, "template_only")?,
+        !template_only,
         "public deployment evidence must be a filled artifact with template_only=false",
     )?;
+    let chain_id = required_str(&value, "chain_id")?.to_string();
     ensure(
-        required_str(&value, "chain_id")? == CHAIN_ID,
+        chain_id == CHAIN_ID,
         "public deployment evidence chain_id mismatch",
     )?;
+    let version = required_str(&value, "version")?.to_string();
     ensure(
-        required_str(&value, "version")? == VERSION,
+        version == VERSION,
         "public deployment evidence version mismatch",
     )?;
+    let public_alpha_only = required_bool(&value, "public_alpha_only")?;
     ensure(
-        required_bool(&value, "public_alpha_only")?,
+        public_alpha_only,
         "public deployment evidence must remain public-alpha-only",
     )?;
+    let custody_mode = required_str(&value, "custody_mode")?.to_string();
     ensure(
-        required_str(&value, "custody_mode")? == "no-mainnet-custody",
+        custody_mode == "no-mainnet-custody",
         "public deployment evidence custody_mode must be no-mainnet-custody",
     )?;
     let capture_plan_root = required_root(&value, "capture_plan_root")?;
@@ -25129,6 +25236,12 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
     let evidence_root = required_root(&value, "evidence_root")?;
     let evidence = PublicDeploymentEvidence {
         schema_version,
+        kind,
+        template_only,
+        chain_id,
+        version,
+        public_alpha_only,
+        custody_mode,
         evidence_root,
         capture_plan_root,
         capture_contract_root,
@@ -30928,6 +31041,13 @@ fn public_deployment_attestation_root_from_value(value: &Value) -> Result<String
     Ok(root(&[
         "public-deployment-attestation",
         CHAIN_ID,
+        &required_u64(value, "schema_version")?.to_string(),
+        required_str(value, "kind")?,
+        bool_str(required_bool(value, "template_only")?),
+        required_str(value, "chain_id")?,
+        required_str(value, "version")?,
+        bool_str(required_bool(value, "public_alpha_only")?),
+        required_str(value, "custody_mode")?,
         required_root(value, "capture_plan_root")?.as_str(),
         required_root(value, "capture_contract_root")?.as_str(),
         required_root(value, "public_deployment_evidence_template_root")?.as_str(),
@@ -31153,6 +31273,13 @@ fn public_deployment_attestation_root(evidence: &PublicDeploymentEvidence) -> St
     root(&[
         "public-deployment-attestation",
         CHAIN_ID,
+        &evidence.schema_version.to_string(),
+        &evidence.kind,
+        bool_str(evidence.template_only),
+        &evidence.chain_id,
+        &evidence.version,
+        bool_str(evidence.public_alpha_only),
+        &evidence.custody_mode,
         &evidence.capture_plan_root,
         &evidence.capture_contract_root,
         &evidence.public_deployment_evidence_template_root,
@@ -39017,7 +39144,7 @@ mod tests {
         let summary = base_testnet.summary(Vec::new());
         assert!(!summary.public_deployment.passed);
         assert!(!summary.public_deployment.evidence_shape_verified);
-        assert!(summary.public_deployment.evidence_root_bound);
+        assert!(!summary.public_deployment.evidence_root_bound);
         assert!(summary.public_deployment.provenance_root_bound);
         assert!(!summary.acceptance.public_deployment_attestation_available);
         let remediation = summary
@@ -39029,6 +39156,9 @@ mod tests {
         assert!(remediation
             .failed_subchecks
             .contains(&"public_deployment_evidence_shape_verified".to_string()));
+        assert!(remediation
+            .failed_subchecks
+            .contains(&"evidence_root_bound".to_string()));
         let _ = fs::remove_file(path);
     }
 
@@ -39123,6 +39253,61 @@ mod tests {
         for failed_subcheck in [
             "public_launch_package_identity_bound",
             "public_launch_package_chain_id_bound",
+        ] {
+            assert!(
+                remediation
+                    .failed_subchecks
+                    .contains(&failed_subcheck.to_string()),
+                "missing failed subcheck {failed_subcheck}"
+            );
+        }
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_report_rejects_re_rooted_attestation_identity() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
+        let mut evidence =
+            load_public_deployment_evidence(&path).expect("public deployment evidence");
+        evidence.version = "wrong-version".to_string();
+        evidence.public_alpha_only = false;
+        evidence.evidence_root = public_deployment_attestation_root(&evidence);
+        base_testnet.cli.public_deployment_evidence = Some(evidence);
+        let summary = base_testnet.summary(Vec::new());
+        assert!(!summary.public_deployment.passed);
+        assert!(summary.public_deployment.evidence_root_bound);
+        assert!(!summary.public_deployment.evidence_identity_bound);
+        assert!(!summary.public_deployment.evidence_version_bound);
+        assert!(!summary.public_deployment.evidence_public_alpha_only);
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_evidence_version
+                .as_deref(),
+            Some(VERSION)
+        );
+        assert_eq!(
+            summary
+                .public_deployment
+                .expected_evidence_public_alpha_only,
+            Some(true)
+        );
+        let remediation = summary
+            .public_launch_readiness
+            .remediations
+            .iter()
+            .find(|remediation| remediation.blocker_id == "public-launch-deployment-attestation")
+            .expect("deployment remediation");
+        for failed_subcheck in [
+            "evidence_identity_bound",
+            "evidence_version_bound",
+            "evidence_public_alpha_only",
         ] {
             assert!(
                 remediation
@@ -47827,6 +48012,12 @@ mod tests {
             .expect("observed region count");
         let mut evidence = PublicDeploymentEvidence {
             schema_version: PUBLIC_DEPLOYMENT_EVIDENCE_SCHEMA_VERSION,
+            kind: "nebula-public-deployment-attestation".to_string(),
+            template_only: false,
+            chain_id: CHAIN_ID.to_string(),
+            version: VERSION.to_string(),
+            public_alpha_only: true,
+            custody_mode: "no-mainnet-custody".to_string(),
             evidence_root: String::new(),
             capture_plan_root: capture_plan_root.clone(),
             capture_contract_root: capture_contract_root.clone(),

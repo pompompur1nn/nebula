@@ -3472,6 +3472,9 @@ real XMR.
   `deployment_preflight_checklist_root` against the current generated capture
   plan, binds those actual/expected capture roots into the report root, exposes
   individual root-binding booleans plus expected repair roots,
+  seals the filled attestation's kind, template-only flag, chain id, runner
+  version, public-alpha-only flag, and no-mainnet-custody mode into the report
+  root with individual identity subchecks,
   binds observer-set, attestor-registry, PQ-signature, observer-count, and
   region-count provenance into the public launch report and remediation roots,
   seals the public RPC, P2P, status, health, metrics, incident, faucet, and
