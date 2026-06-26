@@ -46,6 +46,8 @@ cargo fmt --manifest-path crates/nebula-testnet/Cargo.toml -- --check
 cargo build --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet
 cargo test --manifest-path crates/nebula-testnet/Cargo.toml -- --test-threads=1
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --mainnet-readiness --json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-deployment-attestation > /tmp/nebula-attestation.json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-deployment-attestation /tmp/nebula-attestation.json --json
 cmp docs/NEBULA_LAYER2.md README.md
 ```
 
@@ -88,7 +90,8 @@ The active GitHub Actions workflow is Nebula-owned:
 3. Build `nebula-testnet`.
 4. Run the Nebula test suite.
 5. Assert the current readiness contract.
-6. Assert `README.md` and `docs/NEBULA_LAYER2.md` are identical.
+6. Generate and verify a deployment attestation sample.
+7. Assert `README.md` and `docs/NEBULA_LAYER2.md` are identical.
 
 Legacy upstream CI for daemon, wallet, Guix, depends, Docker daemon images, and
 source archives has been removed.
@@ -109,6 +112,13 @@ Public launch requires a filled deployment attestation. The verifier rejects:
 
 Until an operator provides fresh deployment evidence that satisfies those rules,
 `public_launch_ready` must remain `false`.
+
+Operators can generate the required shape and verify a filled attestation with:
+
+```bash
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-deployment-attestation > /tmp/nebula-attestation.json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-deployment-attestation /tmp/nebula-attestation.json --json
+```
 
 ## License
 

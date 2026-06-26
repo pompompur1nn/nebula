@@ -1,6 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha3::{Digest, Sha3_256};
+use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const VERSION: &str = "nebula-testnet-runner/0.2.0";
@@ -98,6 +99,189 @@ pub struct HybridFeeQuote {
     pub settlement_note: &'static str,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentAttestation {
+    pub chain_id: String,
+    pub runtime_version: String,
+    pub generated_at_unix_ms: u128,
+    pub expires_at_unix_ms: u128,
+    pub package_identity: PackageIdentity,
+    pub launch_bundle: LaunchBundle,
+    pub public_status_manifest: PublicStatusManifest,
+    pub public_endpoint: PublicEndpointEvidence,
+    pub policy_claim: PolicyClaim,
+    pub public_probe: PublicProbe,
+    pub preflight_receipt: Receipt,
+    pub runbook_receipt: Receipt,
+    pub bootstrap_nodes: Vec<BootstrapNode>,
+    pub operators: Vec<OperatorAttestation>,
+    pub observers: Vec<ObserverAttestation>,
+    pub rollback_evidence: RollbackEvidence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageIdentity {
+    pub package_name: String,
+    pub chain_id: String,
+    pub runtime_version: String,
+    pub artifact_sha3_256: String,
+    pub cargo_lock_sha3_256: String,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LaunchBundle {
+    pub bundle_id: String,
+    pub chain_id: String,
+    pub package_root: String,
+    pub runtime_root: String,
+    pub economics_root: String,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicStatusManifest {
+    pub chain_id: String,
+    pub status: String,
+    pub public_launch_ready: bool,
+    pub launch_bundle_root: String,
+    pub endpoint_url: String,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicEndpointEvidence {
+    pub url: String,
+    pub public_status_manifest_root: String,
+    pub tls_pins: Vec<TlsEndpointPin>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TlsEndpointPin {
+    pub cert_sha256: String,
+    pub public_key_sha256: String,
+    pub not_after_unix_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyClaim {
+    pub readiness_remediation_root: String,
+    pub economics_root: String,
+    pub native_fee_token: String,
+    pub bridged_fee_token: String,
+    pub native_base_unit: String,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicProbe {
+    pub url: String,
+    pub status_code: u16,
+    pub body: PublicProbeBody,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicProbeBody {
+    pub chain_id: String,
+    pub status: String,
+    pub public_launch_ready: bool,
+    pub launch_bundle_root: String,
+    pub fee_policy_root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Receipt {
+    pub receipt_id: String,
+    pub completed_at_unix_ms: u128,
+    pub phases: Vec<ReceiptPhase>,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptPhase {
+    pub name: String,
+    pub status: String,
+    pub steps: Vec<ReceiptStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptStep {
+    pub name: String,
+    pub status: String,
+    pub evidence_sha3_256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapNode {
+    pub node_id: String,
+    pub operator_id: String,
+    pub region: String,
+    pub endpoint: String,
+    pub attestation_root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatorAttestation {
+    pub operator_id: String,
+    pub region: String,
+    pub public_key: String,
+    pub signed_evidence_root: String,
+    pub signature_sha3_256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObserverAttestation {
+    pub observer_id: String,
+    pub region: String,
+    pub observed_endpoint: String,
+    pub observed_evidence_root: String,
+    pub signature: SignatureVerification,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignatureVerification {
+    pub algorithm: String,
+    pub public_key: String,
+    pub signature_sha3_256: String,
+    pub verified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RollbackEvidence {
+    pub rollback_plan_sha3_256: String,
+    pub last_drill_unix_ms: u128,
+    pub recovery_point_root: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeploymentAttestationReport {
+    pub public_launch_ready: bool,
+    pub level: &'static str,
+    pub evidence_root: String,
+    pub attestation_expires_at_unix_ms: u128,
+    pub verified_operator_count: usize,
+    pub verified_observer_count: usize,
+    pub verified_region_count: usize,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum FeeError {
     ZeroGas,
@@ -105,6 +289,12 @@ pub enum FeeError {
     MissingNXmrRate,
     ZeroNXmrRate,
     ArithmeticOverflow,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum AttestationError {
+    MalformedJson(String),
+    Invalid(Vec<String>),
 }
 
 pub fn hybrid_fee_policy() -> HybridFeePolicy {
@@ -290,6 +480,809 @@ pub fn readiness_summary() -> String {
     )
 }
 
+pub fn sample_deployment_attestation_json_pretty() -> String {
+    let now = unix_ms();
+    let package_identity = sample_package_identity();
+    let readiness = readiness_report();
+    let runtime_root = readiness.status_roots["runtime"]
+        .as_str()
+        .expect("runtime root is a string")
+        .to_string();
+    let economics_root = readiness.status_roots["economics"]
+        .as_str()
+        .expect("economics root is a string")
+        .to_string();
+    let launch_bundle =
+        sample_launch_bundle(&package_identity.root, &runtime_root, &economics_root);
+    let endpoint_url = "https://testnet.nebula.example/status".to_string();
+    let public_status_manifest = sample_public_status_manifest(&launch_bundle.root, &endpoint_url);
+    let policy_claim = sample_policy_claim(
+        &readiness.public_launch_readiness.remediation_root,
+        &economics_root,
+    );
+    let public_probe = sample_public_probe(&endpoint_url, &launch_bundle.root, &economics_root);
+    let preflight_receipt = sample_receipt("preflight-receipt", now);
+    let runbook_receipt = sample_receipt("runbook-receipt", now);
+    let public_status_manifest_root = public_status_manifest.root.clone();
+
+    let attestation = DeploymentAttestation {
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        generated_at_unix_ms: now,
+        expires_at_unix_ms: now + 86_400_000,
+        package_identity,
+        launch_bundle,
+        public_status_manifest,
+        public_endpoint: PublicEndpointEvidence {
+            url: endpoint_url.clone(),
+            public_status_manifest_root,
+            tls_pins: vec![
+                TlsEndpointPin {
+                    cert_sha256: hex_64("tls-cert-a"),
+                    public_key_sha256: hex_64("tls-key-a"),
+                    not_after_unix_ms: now + 2_592_000_000,
+                },
+                TlsEndpointPin {
+                    cert_sha256: hex_64("tls-cert-b"),
+                    public_key_sha256: hex_64("tls-key-b"),
+                    not_after_unix_ms: now + 2_592_000_000,
+                },
+            ],
+        },
+        policy_claim,
+        public_probe,
+        preflight_receipt,
+        runbook_receipt,
+        bootstrap_nodes: vec![
+            BootstrapNode {
+                node_id: "bootstrap-us-east-1".to_string(),
+                operator_id: "operator-a".to_string(),
+                region: "us-east".to_string(),
+                endpoint: "https://bootstrap-a.testnet.nebula.example".to_string(),
+                attestation_root: hex_64("bootstrap-a"),
+            },
+            BootstrapNode {
+                node_id: "bootstrap-eu-west-1".to_string(),
+                operator_id: "operator-b".to_string(),
+                region: "eu-west".to_string(),
+                endpoint: "https://bootstrap-b.testnet.nebula.example".to_string(),
+                attestation_root: hex_64("bootstrap-b"),
+            },
+        ],
+        operators: vec![
+            OperatorAttestation {
+                operator_id: "operator-a".to_string(),
+                region: "us-east".to_string(),
+                public_key: "nebula-operator-key-a".to_string(),
+                signed_evidence_root: hex_64("operator-a-root"),
+                signature_sha3_256: hex_64("operator-a-signature"),
+            },
+            OperatorAttestation {
+                operator_id: "operator-b".to_string(),
+                region: "eu-west".to_string(),
+                public_key: "nebula-operator-key-b".to_string(),
+                signed_evidence_root: hex_64("operator-b-root"),
+                signature_sha3_256: hex_64("operator-b-signature"),
+            },
+        ],
+        observers: vec![
+            ObserverAttestation {
+                observer_id: "observer-us-east-1".to_string(),
+                region: "us-east".to_string(),
+                observed_endpoint: endpoint_url.clone(),
+                observed_evidence_root: hex_64("observer-a-root"),
+                signature: SignatureVerification {
+                    algorithm: "ed25519-testnet-attestation".to_string(),
+                    public_key: "nebula-observer-key-a".to_string(),
+                    signature_sha3_256: hex_64("observer-a-signature"),
+                    verified: true,
+                },
+            },
+            ObserverAttestation {
+                observer_id: "observer-eu-west-1".to_string(),
+                region: "eu-west".to_string(),
+                observed_endpoint: endpoint_url,
+                observed_evidence_root: hex_64("observer-b-root"),
+                signature: SignatureVerification {
+                    algorithm: "ed25519-testnet-attestation".to_string(),
+                    public_key: "nebula-observer-key-b".to_string(),
+                    signature_sha3_256: hex_64("observer-b-signature"),
+                    verified: true,
+                },
+            },
+        ],
+        rollback_evidence: RollbackEvidence {
+            rollback_plan_sha3_256: hex_64("rollback-plan"),
+            last_drill_unix_ms: now,
+            recovery_point_root: hex_64("rollback-recovery-point"),
+        },
+    };
+
+    serde_json::to_string_pretty(&attestation).expect("sample attestation serializes")
+}
+
+pub fn verify_deployment_attestation_json(
+    input: &str,
+) -> Result<DeploymentAttestationReport, AttestationError> {
+    let input = input.trim_start_matches('\u{feff}');
+    let value = serde_json::from_str::<Value>(input)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    let attestation = serde_json::from_value::<DeploymentAttestation>(value.clone())
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    let mut errors = Vec::new();
+    let now = unix_ms();
+    let readiness = readiness_report();
+    let runtime_root = readiness.status_roots["runtime"]
+        .as_str()
+        .expect("runtime root is a string");
+    let economics_root = readiness.status_roots["economics"]
+        .as_str()
+        .expect("economics root is a string");
+
+    require_eq(&mut errors, "chain_id", &attestation.chain_id, CHAIN_ID);
+    require_eq(
+        &mut errors,
+        "runtime_version",
+        &attestation.runtime_version,
+        VERSION,
+    );
+    if attestation.generated_at_unix_ms > now + 300_000 {
+        errors.push("generated_at_unix_ms is more than five minutes in the future".to_string());
+    }
+    if attestation.expires_at_unix_ms <= now {
+        errors.push("expires_at_unix_ms is stale".to_string());
+    }
+
+    verify_package_identity(&mut errors, &attestation.package_identity);
+    verify_launch_bundle(
+        &mut errors,
+        &attestation.launch_bundle,
+        &attestation.package_identity.root,
+        runtime_root,
+        economics_root,
+    );
+    verify_public_status_manifest(
+        &mut errors,
+        &attestation.public_status_manifest,
+        &attestation.launch_bundle.root,
+    );
+    verify_public_endpoint(
+        &mut errors,
+        &attestation.public_endpoint,
+        &attestation.public_status_manifest,
+        now,
+    );
+    verify_policy_claim(
+        &mut errors,
+        &attestation.policy_claim,
+        &readiness.public_launch_readiness.remediation_root,
+        economics_root,
+    );
+    verify_public_probe(
+        &mut errors,
+        &attestation.public_probe,
+        &attestation.public_endpoint.url,
+        &attestation.launch_bundle.root,
+        economics_root,
+    );
+    verify_receipt(
+        &mut errors,
+        "preflight_receipt",
+        &attestation.preflight_receipt,
+        now,
+    );
+    verify_receipt(
+        &mut errors,
+        "runbook_receipt",
+        &attestation.runbook_receipt,
+        now,
+    );
+    verify_network_witnesses(&mut errors, &attestation);
+    verify_rollback_evidence(&mut errors, &attestation.rollback_evidence, now);
+
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    let regions = attestation
+        .operators
+        .iter()
+        .map(|operator| operator.region.as_str())
+        .chain(
+            attestation
+                .observers
+                .iter()
+                .map(|observer| observer.region.as_str()),
+        )
+        .collect::<BTreeSet<_>>();
+
+    Ok(DeploymentAttestationReport {
+        public_launch_ready: true,
+        level: "public-launch-attested",
+        evidence_root: stable_root(&value),
+        attestation_expires_at_unix_ms: attestation.expires_at_unix_ms,
+        verified_operator_count: attestation.operators.len(),
+        verified_observer_count: attestation.observers.len(),
+        verified_region_count: regions.len(),
+    })
+}
+
+fn sample_package_identity() -> PackageIdentity {
+    let mut package_identity = PackageIdentity {
+        package_name: "nebula-testnet".to_string(),
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        artifact_sha3_256: hex_64("nebula-testnet-artifact"),
+        cargo_lock_sha3_256: hex_64("nebula-testnet-cargo-lock"),
+        root: String::new(),
+    };
+    package_identity.root = package_identity_root(&package_identity);
+    package_identity
+}
+
+fn sample_launch_bundle(
+    package_root: &str,
+    runtime_root: &str,
+    economics_root: &str,
+) -> LaunchBundle {
+    let mut launch_bundle = LaunchBundle {
+        bundle_id: "nebula-public-testnet-bundle-1".to_string(),
+        chain_id: CHAIN_ID.to_string(),
+        package_root: package_root.to_string(),
+        runtime_root: runtime_root.to_string(),
+        economics_root: economics_root.to_string(),
+        root: String::new(),
+    };
+    launch_bundle.root = launch_bundle_root(&launch_bundle);
+    launch_bundle
+}
+
+fn sample_public_status_manifest(
+    launch_bundle_root: &str,
+    endpoint_url: &str,
+) -> PublicStatusManifest {
+    let mut public_status_manifest = PublicStatusManifest {
+        chain_id: CHAIN_ID.to_string(),
+        status: "deployment-attested".to_string(),
+        public_launch_ready: false,
+        launch_bundle_root: launch_bundle_root.to_string(),
+        endpoint_url: endpoint_url.to_string(),
+        root: String::new(),
+    };
+    public_status_manifest.root = public_status_manifest_root(&public_status_manifest);
+    public_status_manifest
+}
+
+fn sample_policy_claim(remediation_root: &str, economics_root: &str) -> PolicyClaim {
+    let mut policy_claim = PolicyClaim {
+        readiness_remediation_root: remediation_root.to_string(),
+        economics_root: economics_root.to_string(),
+        native_fee_token: NBLA_SYMBOL.to_string(),
+        bridged_fee_token: NXMR_SYMBOL.to_string(),
+        native_base_unit: NEBULAI_UNIT.to_string(),
+        root: String::new(),
+    };
+    policy_claim.root = policy_claim_root(&policy_claim);
+    policy_claim
+}
+
+fn sample_public_probe(url: &str, launch_bundle_root: &str, economics_root: &str) -> PublicProbe {
+    let mut public_probe = PublicProbe {
+        url: url.to_string(),
+        status_code: 200,
+        body: PublicProbeBody {
+            chain_id: CHAIN_ID.to_string(),
+            status: "deployment-attested".to_string(),
+            public_launch_ready: false,
+            launch_bundle_root: launch_bundle_root.to_string(),
+            fee_policy_root: economics_root.to_string(),
+        },
+        root: String::new(),
+    };
+    public_probe.root = public_probe_root(&public_probe);
+    public_probe
+}
+
+fn sample_receipt(receipt_id: &str, completed_at_unix_ms: u128) -> Receipt {
+    let mut receipt = Receipt {
+        receipt_id: receipt_id.to_string(),
+        completed_at_unix_ms,
+        phases: vec![ReceiptPhase {
+            name: "launch-gate".to_string(),
+            status: "passed".to_string(),
+            steps: vec![
+                ReceiptStep {
+                    name: "build".to_string(),
+                    status: "passed".to_string(),
+                    evidence_sha3_256: hex_64(&format!("{receipt_id}-build")),
+                },
+                ReceiptStep {
+                    name: "readiness".to_string(),
+                    status: "passed".to_string(),
+                    evidence_sha3_256: hex_64(&format!("{receipt_id}-readiness")),
+                },
+            ],
+        }],
+        root: String::new(),
+    };
+    receipt.root = receipt_root(&receipt);
+    receipt
+}
+
+fn verify_package_identity(errors: &mut Vec<String>, package_identity: &PackageIdentity) {
+    require_eq(
+        errors,
+        "package_identity.package_name",
+        &package_identity.package_name,
+        "nebula-testnet",
+    );
+    require_eq(
+        errors,
+        "package_identity.chain_id",
+        &package_identity.chain_id,
+        CHAIN_ID,
+    );
+    require_eq(
+        errors,
+        "package_identity.runtime_version",
+        &package_identity.runtime_version,
+        VERSION,
+    );
+    require_hex_root(
+        errors,
+        "package_identity.artifact_sha3_256",
+        &package_identity.artifact_sha3_256,
+    );
+    require_hex_root(
+        errors,
+        "package_identity.cargo_lock_sha3_256",
+        &package_identity.cargo_lock_sha3_256,
+    );
+    require_root(
+        errors,
+        "package_identity.root",
+        &package_identity.root,
+        &package_identity_root(package_identity),
+    );
+}
+
+fn verify_launch_bundle(
+    errors: &mut Vec<String>,
+    launch_bundle: &LaunchBundle,
+    package_root: &str,
+    runtime_root: &str,
+    economics_root: &str,
+) {
+    require_eq(
+        errors,
+        "launch_bundle.chain_id",
+        &launch_bundle.chain_id,
+        CHAIN_ID,
+    );
+    require_eq(
+        errors,
+        "launch_bundle.package_root",
+        &launch_bundle.package_root,
+        package_root,
+    );
+    require_eq(
+        errors,
+        "launch_bundle.runtime_root",
+        &launch_bundle.runtime_root,
+        runtime_root,
+    );
+    require_eq(
+        errors,
+        "launch_bundle.economics_root",
+        &launch_bundle.economics_root,
+        economics_root,
+    );
+    require_root(
+        errors,
+        "launch_bundle.root",
+        &launch_bundle.root,
+        &launch_bundle_root(launch_bundle),
+    );
+}
+
+fn verify_public_status_manifest(
+    errors: &mut Vec<String>,
+    public_status_manifest: &PublicStatusManifest,
+    launch_bundle_root: &str,
+) {
+    require_eq(
+        errors,
+        "public_status_manifest.chain_id",
+        &public_status_manifest.chain_id,
+        CHAIN_ID,
+    );
+    require_eq(
+        errors,
+        "public_status_manifest.status",
+        &public_status_manifest.status,
+        "deployment-attested",
+    );
+    if public_status_manifest.public_launch_ready {
+        errors.push(
+            "public_status_manifest.public_launch_ready must remain false before final launch"
+                .to_string(),
+        );
+    }
+    require_eq(
+        errors,
+        "public_status_manifest.launch_bundle_root",
+        &public_status_manifest.launch_bundle_root,
+        launch_bundle_root,
+    );
+    require_root(
+        errors,
+        "public_status_manifest.root",
+        &public_status_manifest.root,
+        &public_status_manifest_root(public_status_manifest),
+    );
+}
+
+fn verify_public_endpoint(
+    errors: &mut Vec<String>,
+    public_endpoint: &PublicEndpointEvidence,
+    public_status_manifest: &PublicStatusManifest,
+    now: u128,
+) {
+    require_eq(
+        errors,
+        "public_endpoint.url",
+        &public_endpoint.url,
+        &public_status_manifest.endpoint_url,
+    );
+    require_eq(
+        errors,
+        "public_endpoint.public_status_manifest_root",
+        &public_endpoint.public_status_manifest_root,
+        &public_status_manifest.root,
+    );
+    if public_endpoint.tls_pins.is_empty() {
+        errors.push("public_endpoint.tls_pins must not be empty".to_string());
+    }
+    for (index, pin) in public_endpoint.tls_pins.iter().enumerate() {
+        require_hex_root(
+            errors,
+            &format!("public_endpoint.tls_pins[{index}].cert_sha256"),
+            &pin.cert_sha256,
+        );
+        require_hex_root(
+            errors,
+            &format!("public_endpoint.tls_pins[{index}].public_key_sha256"),
+            &pin.public_key_sha256,
+        );
+        if pin.not_after_unix_ms <= now {
+            errors.push(format!(
+                "public_endpoint.tls_pins[{index}].not_after_unix_ms is stale"
+            ));
+        }
+    }
+}
+
+fn verify_policy_claim(
+    errors: &mut Vec<String>,
+    policy_claim: &PolicyClaim,
+    remediation_root: &str,
+    economics_root: &str,
+) {
+    require_eq(
+        errors,
+        "policy_claim.readiness_remediation_root",
+        &policy_claim.readiness_remediation_root,
+        remediation_root,
+    );
+    require_eq(
+        errors,
+        "policy_claim.economics_root",
+        &policy_claim.economics_root,
+        economics_root,
+    );
+    require_eq(
+        errors,
+        "policy_claim.native_fee_token",
+        &policy_claim.native_fee_token,
+        NBLA_SYMBOL,
+    );
+    require_eq(
+        errors,
+        "policy_claim.bridged_fee_token",
+        &policy_claim.bridged_fee_token,
+        NXMR_SYMBOL,
+    );
+    require_eq(
+        errors,
+        "policy_claim.native_base_unit",
+        &policy_claim.native_base_unit,
+        NEBULAI_UNIT,
+    );
+    require_root(
+        errors,
+        "policy_claim.root",
+        &policy_claim.root,
+        &policy_claim_root(policy_claim),
+    );
+}
+
+fn verify_public_probe(
+    errors: &mut Vec<String>,
+    public_probe: &PublicProbe,
+    endpoint_url: &str,
+    launch_bundle_root: &str,
+    economics_root: &str,
+) {
+    require_eq(errors, "public_probe.url", &public_probe.url, endpoint_url);
+    if public_probe.status_code != 200 {
+        errors.push(format!(
+            "public_probe.status_code expected 200 but got {}",
+            public_probe.status_code
+        ));
+    }
+    require_eq(
+        errors,
+        "public_probe.body.chain_id",
+        &public_probe.body.chain_id,
+        CHAIN_ID,
+    );
+    require_eq(
+        errors,
+        "public_probe.body.status",
+        &public_probe.body.status,
+        "deployment-attested",
+    );
+    if public_probe.body.public_launch_ready {
+        errors.push(
+            "public_probe.body.public_launch_ready must remain false before final launch"
+                .to_string(),
+        );
+    }
+    require_eq(
+        errors,
+        "public_probe.body.launch_bundle_root",
+        &public_probe.body.launch_bundle_root,
+        launch_bundle_root,
+    );
+    require_eq(
+        errors,
+        "public_probe.body.fee_policy_root",
+        &public_probe.body.fee_policy_root,
+        economics_root,
+    );
+    require_root(
+        errors,
+        "public_probe.root",
+        &public_probe.root,
+        &public_probe_root(public_probe),
+    );
+}
+
+fn verify_receipt(errors: &mut Vec<String>, label: &str, receipt: &Receipt, now: u128) {
+    if receipt.completed_at_unix_ms > now + 300_000 {
+        errors.push(format!(
+            "{label}.completed_at_unix_ms is more than five minutes in the future"
+        ));
+    }
+    if receipt.phases.is_empty() {
+        errors.push(format!("{label}.phases must not be empty"));
+    }
+    for (phase_index, phase) in receipt.phases.iter().enumerate() {
+        require_eq(
+            errors,
+            &format!("{label}.phases[{phase_index}].status"),
+            &phase.status,
+            "passed",
+        );
+        if phase.steps.is_empty() {
+            errors.push(format!(
+                "{label}.phases[{phase_index}].steps must not be empty"
+            ));
+        }
+        for (step_index, step) in phase.steps.iter().enumerate() {
+            require_eq(
+                errors,
+                &format!("{label}.phases[{phase_index}].steps[{step_index}].status"),
+                &step.status,
+                "passed",
+            );
+            require_hex_root(
+                errors,
+                &format!("{label}.phases[{phase_index}].steps[{step_index}].evidence_sha3_256"),
+                &step.evidence_sha3_256,
+            );
+        }
+    }
+    require_root(
+        errors,
+        &format!("{label}.root"),
+        &receipt.root,
+        &receipt_root(receipt),
+    );
+}
+
+fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAttestation) {
+    if attestation.bootstrap_nodes.len() < 2 {
+        errors.push("bootstrap_nodes must include at least two nodes".to_string());
+    }
+    if attestation.operators.len() < 2 {
+        errors.push("operators must include at least two operators".to_string());
+    }
+    if attestation.observers.len() < 2 {
+        errors.push("observers must include at least two observers".to_string());
+    }
+
+    let operator_ids = attestation
+        .operators
+        .iter()
+        .map(|operator| operator.operator_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let regions = attestation
+        .operators
+        .iter()
+        .map(|operator| operator.region.as_str())
+        .chain(
+            attestation
+                .observers
+                .iter()
+                .map(|observer| observer.region.as_str()),
+        )
+        .collect::<BTreeSet<_>>();
+    if regions.len() < 2 {
+        errors.push("operators and observers must cover at least two regions".to_string());
+    }
+
+    for (index, node) in attestation.bootstrap_nodes.iter().enumerate() {
+        if !operator_ids.contains(node.operator_id.as_str()) {
+            errors.push(format!(
+                "bootstrap_nodes[{index}].operator_id does not match an operator"
+            ));
+        }
+        require_hex_root(
+            errors,
+            &format!("bootstrap_nodes[{index}].attestation_root"),
+            &node.attestation_root,
+        );
+    }
+    for (index, operator) in attestation.operators.iter().enumerate() {
+        require_hex_root(
+            errors,
+            &format!("operators[{index}].signed_evidence_root"),
+            &operator.signed_evidence_root,
+        );
+        require_hex_root(
+            errors,
+            &format!("operators[{index}].signature_sha3_256"),
+            &operator.signature_sha3_256,
+        );
+    }
+    for (index, observer) in attestation.observers.iter().enumerate() {
+        require_eq(
+            errors,
+            &format!("observers[{index}].observed_endpoint"),
+            &observer.observed_endpoint,
+            &attestation.public_endpoint.url,
+        );
+        require_hex_root(
+            errors,
+            &format!("observers[{index}].observed_evidence_root"),
+            &observer.observed_evidence_root,
+        );
+        require_hex_root(
+            errors,
+            &format!("observers[{index}].signature.signature_sha3_256"),
+            &observer.signature.signature_sha3_256,
+        );
+        if !observer.signature.verified {
+            errors.push(format!(
+                "observers[{index}].signature.verified must be true"
+            ));
+        }
+    }
+}
+
+fn verify_rollback_evidence(
+    errors: &mut Vec<String>,
+    rollback_evidence: &RollbackEvidence,
+    now: u128,
+) {
+    require_hex_root(
+        errors,
+        "rollback_evidence.rollback_plan_sha3_256",
+        &rollback_evidence.rollback_plan_sha3_256,
+    );
+    if rollback_evidence.last_drill_unix_ms > now + 300_000 {
+        errors.push(
+            "rollback_evidence.last_drill_unix_ms is more than five minutes in the future"
+                .to_string(),
+        );
+    }
+    require_hex_root(
+        errors,
+        "rollback_evidence.recovery_point_root",
+        &rollback_evidence.recovery_point_root,
+    );
+}
+
+fn package_identity_root(package_identity: &PackageIdentity) -> String {
+    stable_root(&json!({
+        "package_name": package_identity.package_name,
+        "chain_id": package_identity.chain_id,
+        "runtime_version": package_identity.runtime_version,
+        "artifact_sha3_256": package_identity.artifact_sha3_256,
+        "cargo_lock_sha3_256": package_identity.cargo_lock_sha3_256,
+    }))
+}
+
+fn launch_bundle_root(launch_bundle: &LaunchBundle) -> String {
+    stable_root(&json!({
+        "bundle_id": launch_bundle.bundle_id,
+        "chain_id": launch_bundle.chain_id,
+        "package_root": launch_bundle.package_root,
+        "runtime_root": launch_bundle.runtime_root,
+        "economics_root": launch_bundle.economics_root,
+    }))
+}
+
+fn public_status_manifest_root(public_status_manifest: &PublicStatusManifest) -> String {
+    stable_root(&json!({
+        "chain_id": public_status_manifest.chain_id,
+        "status": public_status_manifest.status,
+        "public_launch_ready": public_status_manifest.public_launch_ready,
+        "launch_bundle_root": public_status_manifest.launch_bundle_root,
+        "endpoint_url": public_status_manifest.endpoint_url,
+    }))
+}
+
+fn policy_claim_root(policy_claim: &PolicyClaim) -> String {
+    stable_root(&json!({
+        "readiness_remediation_root": policy_claim.readiness_remediation_root,
+        "economics_root": policy_claim.economics_root,
+        "native_fee_token": policy_claim.native_fee_token,
+        "bridged_fee_token": policy_claim.bridged_fee_token,
+        "native_base_unit": policy_claim.native_base_unit,
+    }))
+}
+
+fn public_probe_root(public_probe: &PublicProbe) -> String {
+    stable_root(&json!({
+        "url": public_probe.url,
+        "status_code": public_probe.status_code,
+        "body": public_probe.body,
+    }))
+}
+
+fn receipt_root(receipt: &Receipt) -> String {
+    stable_root(&json!({
+        "receipt_id": receipt.receipt_id,
+        "completed_at_unix_ms": receipt.completed_at_unix_ms,
+        "phases": receipt.phases,
+    }))
+}
+
+fn require_eq(errors: &mut Vec<String>, label: &str, actual: &str, expected: &str) {
+    if actual != expected {
+        errors.push(format!("{label} expected {} but got {}", expected, actual));
+    }
+}
+
+fn require_root(errors: &mut Vec<String>, label: &str, actual: &str, expected: &str) {
+    require_hex_root(errors, label, actual);
+    if actual != expected {
+        errors.push(format!("{label} does not match expected root {expected}"));
+    }
+}
+
+fn require_hex_root(errors: &mut Vec<String>, label: &str, value: &str) {
+    if value.len() != 64 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
+        errors.push(format!("{label} must be a 64-character hex root"));
+    }
+}
+
+fn hex_64(label: &str) -> String {
+    stable_root(&json!({ "sample": label }))
+}
+
 fn stable_root(value: &Value) -> String {
     let bytes = serde_json::to_vec(value).expect("status root input serializes");
     let digest = Sha3_256::digest(bytes);
@@ -358,6 +1351,45 @@ mod public_launch {
         assert_eq!(report.economics.target_nxmr_per_nbla_denominator, 1_000);
         assert_eq!(report.economics.nxmr_reserve_backing_bps, 9_000);
         assert_eq!(report.economics.nxmr_validator_reward_bps, 1_000);
+    }
+
+    #[test]
+    fn sample_deployment_attestation_verifies_public_launch_gate() {
+        let report =
+            verify_deployment_attestation_json(&sample_deployment_attestation_json_pretty())
+                .unwrap();
+
+        assert!(report.public_launch_ready);
+        assert_eq!(report.level, "public-launch-attested");
+        assert_eq!(report.verified_operator_count, 2);
+        assert_eq!(report.verified_observer_count, 2);
+        assert_eq!(report.verified_region_count, 2);
+        assert_eq!(report.evidence_root.len(), 64);
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_unknown_fields() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["unexpected_field"] = json!(true);
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        assert!(matches!(error, AttestationError::MalformedJson(_)));
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_stale_evidence() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["expires_at_unix_ms"] = json!(0);
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        assert_eq!(
+            error,
+            AttestationError::Invalid(vec!["expires_at_unix_ms is stale".to_string()])
+        );
     }
 }
 

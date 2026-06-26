@@ -64,5 +64,25 @@ jobs:
           assert economics["nxmr_validator_reward_bps"] == 1000
           PY
 
+      - name: Verify deployment attestation gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sample="$(mktemp)"
+          cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-deployment-attestation > "$sample"
+          output="$(cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-deployment-attestation "$sample" --json)"
+          NEBULA_ATTESTATION_JSON="$output" python3 - <<'PY'
+          import json
+          import os
+
+          payload = json.loads(os.environ["NEBULA_ATTESTATION_JSON"])
+          assert payload["public_launch_ready"] is True
+          assert payload["level"] == "public-launch-attested"
+          assert len(payload["evidence_root"]) == 64
+          assert payload["verified_operator_count"] >= 2
+          assert payload["verified_observer_count"] >= 2
+          assert payload["verified_region_count"] >= 2
+          PY
+
       - name: Verify Nebula guide mirror
         run: cmp docs/NEBULA_LAYER2.md README.md
