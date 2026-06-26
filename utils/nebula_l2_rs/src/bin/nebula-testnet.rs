@@ -8492,7 +8492,15 @@ fn public_launch_remediation_for_check(
         BTreeMap::new()
     };
     let expected_values = if check.id == "public-launch-deployment-attestation" {
-        public_deployment_expected_values(&summary.public_deployment, &failed_subchecks)
+        let mut expected_values =
+            public_deployment_expected_values(&summary.public_deployment, &failed_subchecks);
+        if summary.public_deployment.evidence_root.is_none() {
+            expected_values.extend(public_deployment_missing_evidence_expected_values(
+                summary,
+                &failed_subchecks,
+            ));
+        }
+        expected_values
     } else {
         BTreeMap::new()
     };
@@ -9082,7 +9090,246 @@ fn public_deployment_expected_values(
         expected_public_alpha_only.to_string(),
         expected_custody_mode,
     ];
-    public_deployment_identity_expected_values(failed_subchecks, &expected_identity)
+    let mut expected_values =
+        public_deployment_identity_expected_values(failed_subchecks, &expected_identity);
+    let failed = failed_subcheck_set(failed_subchecks);
+    insert_expected_value(
+        &mut expected_values,
+        &failed,
+        "public_launch_package_identity_bound",
+        format!(
+            "schema_version={};chain_id={};version={};manifest_id={};testnet_id={}",
+            report
+                .expected_public_launch_package_schema_version
+                .unwrap_or(1),
+            report
+                .expected_public_launch_package_chain_id
+                .as_deref()
+                .unwrap_or(CHAIN_ID),
+            report
+                .expected_public_launch_package_version
+                .as_deref()
+                .unwrap_or(VERSION),
+            report
+                .expected_public_launch_package_manifest_id
+                .as_deref()
+                .unwrap_or("missing-manifest-id"),
+            report
+                .expected_public_launch_package_testnet_id
+                .as_deref()
+                .unwrap_or("missing-testnet-id")
+        ),
+    );
+    let report_expected_values = [
+        (
+            "public_launch_package_schema_version_bound",
+            report
+                .expected_public_launch_package_schema_version
+                .unwrap_or(1)
+                .to_string(),
+        ),
+        (
+            "public_launch_package_chain_id_bound",
+            report
+                .expected_public_launch_package_chain_id
+                .clone()
+                .unwrap_or_else(|| CHAIN_ID.to_string()),
+        ),
+        (
+            "public_launch_package_version_bound",
+            report
+                .expected_public_launch_package_version
+                .clone()
+                .unwrap_or_else(|| VERSION.to_string()),
+        ),
+        (
+            "public_launch_package_testnet_id_bound",
+            report
+                .expected_public_launch_package_testnet_id
+                .clone()
+                .unwrap_or_else(|| "missing-testnet-id".to_string()),
+        ),
+        (
+            "deployment_preflight_phase_count_bound",
+            report
+                .expected_deployment_preflight_phase_count
+                .unwrap_or(REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len() as u64)
+                .to_string(),
+        ),
+        (
+            "public_deployment_runbook_step_receipt_count_bound",
+            report
+                .expected_public_deployment_runbook_step_receipt_count
+                .unwrap_or(PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64)
+                .to_string(),
+        ),
+        (
+            "tls_endpoint_pin_count_sufficient",
+            report
+                .expected_tls_endpoint_pin_count
+                .unwrap_or(PUBLIC_TLS_ENDPOINT_PIN_ROLES.len() as u64)
+                .to_string(),
+        ),
+        (
+            "bootstrap_node_count_sufficient",
+            report
+                .expected_bootstrap_node_count
+                .unwrap_or(report.bootstrap_node_count)
+                .to_string(),
+        ),
+        (
+            "bootstrap_operator_count_bound",
+            report
+                .expected_bootstrap_operator_count
+                .unwrap_or(MIN_PUBLIC_DEPLOYMENT_OPERATOR_COUNT)
+                .to_string(),
+        ),
+        (
+            "bootstrap_operator_registry_count_bound",
+            report
+                .expected_bootstrap_operator_count
+                .unwrap_or(MIN_PUBLIC_DEPLOYMENT_OPERATOR_COUNT)
+                .to_string(),
+        ),
+        (
+            "bootstrap_public_endpoint_count_bound",
+            report
+                .expected_bootstrap_node_count
+                .unwrap_or(report.bootstrap_node_count)
+                .to_string(),
+        ),
+        (
+            "bootstrap_node_probe_count_bound",
+            report
+                .expected_bootstrap_node_count
+                .unwrap_or(report.bootstrap_node_count)
+                .to_string(),
+        ),
+        (
+            "public_surface_probe_count_bound",
+            REQUIRED_PUBLIC_SURFACE_PROBE_COUNT.to_string(),
+        ),
+        (
+            "public_probe_count_bound",
+            (REQUIRED_PUBLIC_DEPLOYMENT_PROBE_ROOT_FIELDS.len() as u64).to_string(),
+        ),
+        (
+            "observer_count_bound",
+            report
+                .expected_observer_count
+                .unwrap_or(MIN_PUBLIC_DEPLOYMENT_OBSERVER_COUNT)
+                .to_string(),
+        ),
+        (
+            "observed_region_count_bound",
+            report
+                .expected_observed_region_count
+                .unwrap_or(MIN_PUBLIC_DEPLOYMENT_REGION_COUNT)
+                .to_string(),
+        ),
+    ];
+    for (subcheck, expected_value) in report_expected_values {
+        insert_expected_value(&mut expected_values, &failed, subcheck, expected_value);
+    }
+    insert_boolean_expected_values(&mut expected_values, &failed);
+    expected_values
+}
+
+fn public_deployment_missing_evidence_expected_values(
+    summary: &TestnetSummary,
+    failed_subchecks: &[String],
+) -> BTreeMap<String, String> {
+    let mut expected_values = public_deployment_static_expected_values(failed_subchecks);
+    let failed = failed_subcheck_set(failed_subchecks);
+    insert_expected_value(
+        &mut expected_values,
+        &failed,
+        "public_launch_package_identity_bound",
+        format!(
+            "schema_version=1;chain_id={};version={};manifest_id={};testnet_id={}",
+            CHAIN_ID, VERSION, summary.manifest_id, summary.testnet_id
+        ),
+    );
+    let missing_expected_values = [
+        (
+            "public_launch_package_schema_version_bound",
+            "1".to_string(),
+        ),
+        ("public_launch_package_chain_id_bound", CHAIN_ID.to_string()),
+        ("public_launch_package_version_bound", VERSION.to_string()),
+        (
+            "public_launch_package_testnet_id_bound",
+            summary.testnet_id.clone(),
+        ),
+        (
+            "deployment_preflight_phase_count_bound",
+            (REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len() as u64).to_string(),
+        ),
+        (
+            "public_deployment_runbook_step_receipt_count_bound",
+            (PUBLIC_DEPLOYMENT_RUNBOOK_STEPS.len() as u64).to_string(),
+        ),
+        (
+            "tls_endpoint_pin_count_sufficient",
+            (PUBLIC_TLS_ENDPOINT_PIN_ROLES.len() as u64).to_string(),
+        ),
+        (
+            "bootstrap_node_count_sufficient",
+            summary
+                .public_bootstrap_profile
+                .bootstrap_node_count
+                .to_string(),
+        ),
+        (
+            "bootstrap_operator_count_bound",
+            summary
+                .public_bootstrap_profile
+                .bootstrap_operator_count
+                .to_string(),
+        ),
+        (
+            "bootstrap_operator_registry_count_bound",
+            summary
+                .public_bootstrap_profile
+                .bootstrap_operator_count
+                .to_string(),
+        ),
+        (
+            "bootstrap_public_endpoint_count_bound",
+            summary
+                .public_bootstrap_profile
+                .bootstrap_node_count
+                .to_string(),
+        ),
+        (
+            "bootstrap_node_probe_count_bound",
+            summary
+                .public_bootstrap_profile
+                .bootstrap_node_count
+                .to_string(),
+        ),
+        (
+            "public_surface_probe_count_bound",
+            REQUIRED_PUBLIC_SURFACE_PROBE_COUNT.to_string(),
+        ),
+        (
+            "public_probe_count_bound",
+            (REQUIRED_PUBLIC_DEPLOYMENT_PROBE_ROOT_FIELDS.len() as u64).to_string(),
+        ),
+        (
+            "observer_count_bound",
+            MIN_PUBLIC_DEPLOYMENT_OBSERVER_COUNT.to_string(),
+        ),
+        (
+            "observed_region_count_bound",
+            MIN_PUBLIC_DEPLOYMENT_REGION_COUNT.to_string(),
+        ),
+    ];
+    for (subcheck, expected_value) in missing_expected_values {
+        insert_expected_value(&mut expected_values, &failed, subcheck, expected_value);
+    }
+    insert_boolean_expected_values(&mut expected_values, &failed);
+    expected_values
 }
 
 fn public_deployment_static_expected_values(
@@ -9112,10 +9359,7 @@ fn public_deployment_identity_expected_values(
     failed_subchecks: &[String],
     expected_identity: &[String; 7],
 ) -> BTreeMap<String, String> {
-    let failed = failed_subchecks
-        .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
+    let failed = failed_subcheck_set(failed_subchecks);
     [
         ("evidence_identity_bound", expected_identity[0].clone()),
         ("evidence_kind_bound", expected_identity[1].clone()),
@@ -9129,6 +9373,60 @@ fn public_deployment_identity_expected_values(
     .filter(|(subcheck, _)| failed.contains(*subcheck))
     .map(|(subcheck, expected_value)| (subcheck.to_string(), expected_value))
     .collect()
+}
+
+fn failed_subcheck_set(failed_subchecks: &[String]) -> BTreeSet<&str> {
+    failed_subchecks.iter().map(String::as_str).collect()
+}
+
+fn insert_expected_value(
+    expected_values: &mut BTreeMap<String, String>,
+    failed_subchecks: &BTreeSet<&str>,
+    subcheck: &str,
+    expected_value: String,
+) {
+    if failed_subchecks.contains(subcheck) {
+        expected_values.insert(subcheck.to_string(), expected_value);
+    }
+}
+
+fn insert_boolean_expected_values(
+    expected_values: &mut BTreeMap<String, String>,
+    failed_subchecks: &BTreeSet<&str>,
+) {
+    for subcheck in [
+        "placeholders_absent",
+        "public_bootstrap_profile_passed",
+        "finality_latency_profile_passed",
+        "endpoint_set_public",
+        "public_rpc_url_public",
+        "public_p2p_endpoint_public",
+        "status_page_url_public",
+        "health_check_url_public",
+        "metrics_url_public",
+        "incident_contact_url_public",
+        "faucet_url_public",
+        "reset_runbook_url_public",
+        "tls_required",
+        "proxy_policy_verified",
+        "rate_limits_enforced",
+        "firewall_allows_public_only",
+        "public_status_manifest_redacted",
+        "bootstrap_nodes_bound",
+        "live_probe_roots_bound",
+        "observer_provenance_bound",
+        "no_private_summary_exposed",
+        "mainnet_custody_disabled",
+        "preflight_receipt_bound",
+        "runbook_receipt_bound",
+    ] {
+        insert_expected_value(
+            expected_values,
+            failed_subchecks,
+            subcheck,
+            bool_str(true).to_string(),
+        );
+    }
 }
 
 fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<String> {
@@ -39422,6 +39720,18 @@ mod tests {
                 "missing failed subcheck {failed_subcheck}"
             );
         }
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("public_launch_package_chain_id_bound")
+                .map(String::as_str),
+            Some(CHAIN_ID)
+        );
+        assert!(remediation
+            .expected_values
+            .get("public_launch_package_identity_bound")
+            .map(|value| value.contains(&format!("chain_id={CHAIN_ID}")))
+            .unwrap_or(false));
         let _ = fs::remove_file(path);
     }
 
@@ -45767,6 +46077,45 @@ mod tests {
                 .get("evidence_custody_mode_bound")
                 .map(String::as_str),
             Some("no-mainnet-custody")
+        );
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("public_launch_package_schema_version_bound")
+                .map(String::as_str),
+            Some("1")
+        );
+        let expected_preflight_phase_count =
+            (REQUIRED_PUBLIC_DEPLOYMENT_PREFLIGHT_PHASES.len() as u64).to_string();
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("deployment_preflight_phase_count_bound")
+                .map(String::as_str),
+            Some(expected_preflight_phase_count.as_str())
+        );
+        let expected_tls_pin_count = (PUBLIC_TLS_ENDPOINT_PIN_ROLES.len() as u64).to_string();
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("tls_endpoint_pin_count_sufficient")
+                .map(String::as_str),
+            Some(expected_tls_pin_count.as_str())
+        );
+        let expected_observer_count = MIN_PUBLIC_DEPLOYMENT_OBSERVER_COUNT.to_string();
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("observer_count_bound")
+                .map(String::as_str),
+            Some(expected_observer_count.as_str())
+        );
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("endpoint_set_public")
+                .map(String::as_str),
+            Some("true")
         );
         assert!(remediation
             .failed_subchecks

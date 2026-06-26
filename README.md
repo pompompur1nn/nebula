@@ -3332,7 +3332,7 @@ real XMR.
   deployment-attestation failed subchecks such as package file-set, package
   handoff, package manifest, readiness artifact binding mismatches, and
   attestation identity mismatches, expected package file-set repair root,
-  rooted expected-value targets for identity subchecks, deferred
+  rooted expected-value targets for identity, package-identity, count, and boolean safety subchecks, deferred
   self-referential package handoff/manifest/readiness root subchecks, and a report artifact
   root. It is marked unusable as public deployment evidence or mainnet custody
   approval. The paired `--verify-public-launch-readiness-report` command
