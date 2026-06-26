@@ -8876,10 +8876,6 @@ fn public_deployment_repair_roots(
                 .as_deref(),
         ),
         (
-            "public_launch_package_manifest_id_bound",
-            report.expected_public_launch_package_manifest_id.as_deref(),
-        ),
-        (
             "release_approval_template_root_bound",
             report.expected_release_approval_template_root.as_deref(),
         ),
@@ -9164,6 +9160,13 @@ fn public_deployment_expected_values(
                 .unwrap_or_else(|| "missing-testnet-id".to_string()),
         ),
         (
+            "public_launch_package_manifest_id_bound",
+            report
+                .expected_public_launch_package_manifest_id
+                .clone()
+                .unwrap_or_else(|| "missing-manifest-id".to_string()),
+        ),
+        (
             "deployment_preflight_phase_count_bound",
             report
                 .expected_deployment_preflight_phase_count
@@ -9274,6 +9277,10 @@ fn public_deployment_missing_evidence_expected_values(
         (
             "public_launch_package_testnet_id_bound",
             summary.testnet_id.clone(),
+        ),
+        (
+            "public_launch_package_manifest_id_bound",
+            summary.manifest_id.clone(),
         ),
         (
             "deployment_preflight_phase_count_bound",
@@ -22179,6 +22186,10 @@ fn public_launch_remediation_root_from_value(remediation: &Value) -> Result<Stri
             let expected_root = expected_root.as_str().ok_or_else(|| {
                 "public launch remediation repair root must be a string".to_string()
             })?;
+            ensure(
+                is_hex_root(expected_root),
+                &format!("public launch remediation repair root must be a hex root for {subcheck}"),
+            )?;
             Ok(root(&[
                 "public-launch-remediation-repair-root",
                 subcheck,
@@ -36187,6 +36198,23 @@ mod tests {
             .expect_err("tampered missing-evidence repair root should fail safety checks");
         assert!(error.contains(
             "public launch remediation repair root mismatch for public_launch_package_file_set_root_bound"
+        ));
+    }
+
+    #[test]
+    fn public_launch_readiness_report_rejects_non_root_repair_value() {
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        let mut value = public_launch_readiness_report_artifact(&summary);
+        value["public_launch_readiness"]["remediations"][0]["repair_roots"]
+            ["release_approval_template_root_bound"] = json!("not-a-root");
+        let error = ensure_public_launch_readiness_report_artifact_safe(&value)
+            .expect_err("non-root repair value should fail safety checks");
+        assert!(error.contains(
+            "public launch remediation repair root must be a hex root for release_approval_template_root_bound"
         ));
     }
 

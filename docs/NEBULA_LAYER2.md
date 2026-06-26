@@ -3344,11 +3344,12 @@ real XMR.
   external-capture flag to stay canonical, pins deterministic missing-evidence
   failed-subcheck list and repair roots to the package, status, bundle,
   capture-plan, capture-contract, evidence-template, and preflight roots in the
-  report, requires the blocker, ready flag, level, and remediation lists to
-  match the failed checks, and rejects stale package-root, readiness-root,
-  status, bundle, capture-plan, capture-contract, evidence-template, preflight,
-  artifact-root, or deployment-evidence bindings before deployment CI consumes
-  the report root.
+  report, requires all repair-root values to be hex roots while identity values
+  such as the package manifest id remain in expected values, requires the
+  blocker, ready flag, level, and remediation lists to match the failed checks,
+  and rejects stale package-root, readiness-root, status, bundle, capture-plan,
+  capture-contract, evidence-template, preflight, artifact-root, or
+  deployment-evidence bindings before deployment CI consumes the report root.
 - Public launch automation consumes a redacted
   `nebula-public-testnet-launch-bundle` that binds the status manifest,
   bootstrap profile, proxy policy, typed bootstrap-node commitment manifest,
