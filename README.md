@@ -3595,7 +3595,8 @@ real XMR.
   canonical `public_probe_set_root`. A typed bootstrap operator registry must cover every
   committed operator exactly once, require unique entity/control-plane/
   infrastructure/contact commitments, bind an independence proof root, assert
-  verified independence, and bind ML-DSA-65 signature verification transcripts.
+  verified independence, bind ML-DSA-65 signature verification transcripts, and
+  reject unexpected registry or nested signature-verification fields.
   Probe-observer records must have
   unique observer ids and keys,
   multiple regions, observation times inside the freshness window, attestations

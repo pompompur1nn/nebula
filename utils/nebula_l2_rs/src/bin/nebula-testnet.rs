@@ -462,6 +462,52 @@ const PUBLIC_PROBE_OBSERVER_SIGNATURE_VERIFICATION_FIELDS: &[&str] = &[
     "verified_at_unix_ms",
     "signature_verified",
 ];
+const PUBLIC_BOOTSTRAP_OPERATOR_REGISTRY_FIELDS: &[&str] = &[
+    "status",
+    "chain_id",
+    "public_launch_bundle_root",
+    "deployment_run_id",
+    "operator_commitment",
+    "operator_entity_commitment",
+    "control_plane_commitment",
+    "infrastructure_account_commitment",
+    "contact_commitment",
+    "independence_proof_root",
+    "independence_verified",
+    "operator_key_root",
+    "observed_at_unix_ms",
+    "signature_scheme",
+    "pq_signature_root",
+    "signature_verified",
+    "signature_verification",
+    "operator_attestation_root",
+    "signature_payload_root",
+    "signature_verification_root",
+    "operator_registry_record_root",
+];
+const PUBLIC_BOOTSTRAP_OPERATOR_SIGNATURE_VERIFICATION_FIELDS: &[&str] = &[
+    "status",
+    "verification_scope",
+    "chain_id",
+    "public_launch_bundle_root",
+    "deployment_run_id",
+    "operator_commitment",
+    "operator_entity_commitment",
+    "control_plane_commitment",
+    "infrastructure_account_commitment",
+    "contact_commitment",
+    "independence_proof_root",
+    "independence_verified",
+    "operator_key_root",
+    "operator_attestation_root",
+    "signature_payload_root",
+    "pq_signature_root",
+    "signature_scheme",
+    "verifier_id_root",
+    "verification_tool_root",
+    "verified_at_unix_ms",
+    "signature_verified",
+];
 const PICONERO_PER_XMR: u64 = 1_000_000_000_000;
 const ROOT_PLACEHOLDER: &str = "<64-hex-root>";
 const SENSITIVE_FIELD_MARKERS: [&str; 9] = [
@@ -31425,6 +31471,11 @@ fn validate_public_bootstrap_operator_registry(
     let mut record_roots = Vec::new();
     let mut signature_roots = Vec::new();
     for record in records {
+        ensure_allowed_object_fields(
+            record,
+            PUBLIC_BOOTSTRAP_OPERATOR_REGISTRY_FIELDS,
+            "public deployment bootstrap operator registry",
+        )?;
         ensure(
             required_str(record, "status")? == "ok",
             "public deployment bootstrap operator registry status must be ok",
@@ -31667,6 +31718,11 @@ fn validate_public_bootstrap_operator_signature_verification(
     expires_at_unix_ms: u64,
 ) -> Result<String, String> {
     let verification = required_section(record, "signature_verification")?;
+    ensure_allowed_object_fields(
+        verification,
+        PUBLIC_BOOTSTRAP_OPERATOR_SIGNATURE_VERIFICATION_FIELDS,
+        "public deployment bootstrap operator signature verification",
+    )?;
     ensure(
         required_str(verification, "status")? == "valid",
         "public deployment bootstrap operator signature verification status must be valid",
@@ -44002,6 +44058,52 @@ mod tests {
         let error = load_public_deployment_evidence(&bad_path)
             .expect_err("tampered bootstrap operator registry root should be rejected");
         assert!(error.contains("bootstrap operator registry roots mismatch"));
+        let _ = fs::remove_file(bad_path);
+    }
+
+    #[test]
+    fn public_deployment_evidence_rejects_extra_bootstrap_operator_registry_field() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let mut value: Value =
+            serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
+                .expect("deployment evidence json");
+        value["bootstrap_operator_registry"][0]["operator_note"] =
+            json!("uncommitted operator registry side-band claim");
+        let bad_path = write_public_deployment_evidence(
+            &serde_json::to_string_pretty(&value).expect("bad evidence json"),
+        );
+        let error = load_public_deployment_evidence(&bad_path)
+            .expect_err("extra bootstrap operator registry field should be rejected");
+        assert!(error.contains(
+            "public deployment bootstrap operator registry contains unexpected field 'operator_note'"
+        ));
+        let _ = fs::remove_file(bad_path);
+    }
+
+    #[test]
+    fn public_deployment_evidence_rejects_extra_bootstrap_operator_signature_field() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let mut value: Value =
+            serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
+                .expect("deployment evidence json");
+        value["bootstrap_operator_registry"][0]["signature_verification"]["operator_note"] =
+            json!("uncommitted operator signature side-band claim");
+        let bad_path = write_public_deployment_evidence(
+            &serde_json::to_string_pretty(&value).expect("bad evidence json"),
+        );
+        let error = load_public_deployment_evidence(&bad_path)
+            .expect_err("extra bootstrap operator signature field should be rejected");
+        assert!(error.contains(
+            "public deployment bootstrap operator signature verification contains unexpected field 'operator_note'"
+        ));
         let _ = fs::remove_file(bad_path);
     }
 
