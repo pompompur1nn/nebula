@@ -22418,9 +22418,19 @@ fn ensure_public_launch_readiness_roots_match_report(
     for check in checks {
         let id = required_nested_str(check, "id", "public launch readiness check")?;
         let status = required_nested_str(check, "status", "public launch readiness check")?;
+        let evidence_root =
+            required_nested_str(check, "evidence_root", "public launch readiness check")?;
         ensure(
             status == "pass" || status == "blocked",
             &format!("public launch readiness check status must be pass or blocked for {id}"),
+        )?;
+        ensure(
+            is_hex_root(evidence_root)
+                || (id == "public-launch-deployment-attestation"
+                    && evidence_root == "missing-public-deployment-evidence"),
+            &format!(
+                "public launch readiness check evidence root must be a hex root or missing deployment evidence placeholder for {id}"
+            ),
         )?;
     }
     let check_roots = checks
@@ -36134,6 +36144,23 @@ mod tests {
             .expect_err("unknown check status should fail safety checks");
         assert!(error.contains(
             "public launch readiness check status must be pass or blocked for public-launch-no-mainnet-custody"
+        ));
+    }
+
+    #[test]
+    fn public_launch_readiness_report_rejects_malformed_check_evidence_root() {
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        let mut value = public_launch_readiness_report_artifact(&summary);
+        value["public_launch_readiness"]["checks"][0]["evidence_root"] = json!("not-a-root");
+
+        let error = ensure_public_launch_readiness_report_artifact_safe(&value)
+            .expect_err("malformed check evidence root should fail safety checks");
+        assert!(error.contains(
+            "public launch readiness check evidence root must be a hex root or missing deployment evidence placeholder for public-launch-no-mainnet-custody"
         ));
     }
 
