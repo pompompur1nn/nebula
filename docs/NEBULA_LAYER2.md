@@ -3529,8 +3529,8 @@ real XMR.
   path and feed the resulting temporary attestation into
   `--fail-on-public-launch-gaps` before writing the final public deployment
   artifact.
-- Filled public deployment attestations bind the launch bundle to publicly
-  routable HTTPS endpoints, the exact capture plan root, capture contract root,
+- Filled public deployment attestations bind the launch bundle and runner
+  version to publicly routable HTTPS endpoints, the exact capture plan root, capture contract root,
   public deployment evidence-template root, deployment preflight checklist
   root, package file-set root, package schema/version/chain/run identity,
   release approval template root, release-authority registry template root, completed

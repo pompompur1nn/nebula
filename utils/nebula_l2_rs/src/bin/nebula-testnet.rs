@@ -24384,6 +24384,10 @@ fn load_public_deployment_evidence(path: &str) -> Result<PublicDeploymentEvidenc
         "public deployment evidence chain_id mismatch",
     )?;
     ensure(
+        required_str(&value, "version")? == VERSION,
+        "public deployment evidence version mismatch",
+    )?;
+    ensure(
         required_str(&value, "custody_mode")? == "no-mainnet-custody",
         "public deployment evidence custody_mode must be no-mainnet-custody",
     )?;
@@ -44676,6 +44680,26 @@ mod tests {
     }
 
     #[test]
+    fn public_deployment_evidence_rejects_wrong_top_level_version() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let mut value: Value =
+            serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
+                .expect("deployment evidence json");
+        value["version"] = json!("wrong-version");
+        let path = write_public_deployment_evidence(
+            &serde_json::to_string_pretty(&value).expect("deployment evidence string"),
+        );
+        let error = load_public_deployment_evidence(&path)
+            .expect_err("wrong-version deployment evidence should be rejected");
+        assert!(error.contains("version mismatch"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn public_deployment_evidence_requires_probe_provenance() {
         let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
             .expect("mainnet readiness should parse");
@@ -47981,6 +48005,7 @@ mod tests {
         );
         map.insert("template_only".to_string(), json!(false));
         map.insert("chain_id".to_string(), json!(CHAIN_ID));
+        map.insert("version".to_string(), json!(VERSION));
         map.insert("custody_mode".to_string(), json!("no-mainnet-custody"));
         serde_json::to_string_pretty(&value).expect("public deployment evidence json")
     }
