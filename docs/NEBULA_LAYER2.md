@@ -3401,8 +3401,9 @@ real XMR.
   plan publishes `capture_contract_root` and `capture_plan_root`; filled public
   deployment attestations must carry those roots so they prove they followed the
   exact rooted capture work order for the current run. The capture-plan guard
-  recomputes the preflight checklist, capture contract, and plan roots before
-  export or package verification. The capture contract also freezes the public
+  pins schema, chain, and version identity and recomputes the preflight
+  checklist, capture contract, and plan roots before export or package
+  verification. The capture contract also freezes the public
   launch artifact manifest root, artifact-set root, package file-set root,
   release approval template root, release-authority registry template root,
   typed public deployment runbook root, and step-set root, and includes a

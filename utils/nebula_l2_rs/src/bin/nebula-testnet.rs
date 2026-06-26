@@ -22923,6 +22923,18 @@ fn ensure_public_deployment_capture_plan_redacted(value: &Value) -> Result<(), S
         "public deployment capture plan kind mismatch",
     )?;
     ensure(
+        value.get("schema_version").and_then(Value::as_u64) == Some(1),
+        "public deployment capture plan schema_version mismatch",
+    )?;
+    ensure(
+        value.get("chain_id").and_then(Value::as_str) == Some(CHAIN_ID),
+        "public deployment capture plan chain_id mismatch",
+    )?;
+    ensure(
+        value.get("version").and_then(Value::as_str) == Some(VERSION),
+        "public deployment capture plan version mismatch",
+    )?;
+    ensure(
         value.get("operator_fill_required").and_then(Value::as_bool) == Some(true),
         "public deployment capture plan must require operator fill-in",
     )?;
@@ -39448,6 +39460,27 @@ mod tests {
         assert!(error.contains("capture plan root mismatch"));
         assert!(!value_contains_placeholder(&value));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_capture_plan_rejects_re_rooted_wrong_schema_version() {
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        let mut value = public_deployment_capture_plan(&summary);
+        value["schema_version"] = json!(2);
+        value
+            .as_object_mut()
+            .expect("capture plan object")
+            .remove("capture_plan_root");
+        let plan_root = value_root("public-deployment-capture-plan", &value);
+        value["capture_plan_root"] = json!(plan_root);
+
+        let error = ensure_public_deployment_capture_plan_redacted(&value)
+            .expect_err("re-rooted capture plan with wrong schema should fail safety checks");
+        assert!(error.contains("public deployment capture plan schema_version mismatch"));
     }
 
     #[test]
