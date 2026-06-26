@@ -3310,8 +3310,10 @@ real XMR.
   acyclic. The same rooted todo can be written standalone with
   `--write-public-capture-todo` and verified with
   `--verify-public-capture-todo` for deployment CI that does not need the full
-  package directory. The verifier recomputes the current run's todo and rejects
-  stale, tampered, or cross-run work orders.
+  package directory. The verifier pins the schema, chain, version, public-alpha
+  identity, non-evidence boundary, rooted command map, command sequence, and
+  todo root, then recomputes the current run's todo and rejects stale, tampered,
+  or cross-run work orders.
 - A local operator-only public launch readiness report export gives CI a
   standalone `nebula-public-launch-readiness-report` with the launch level,
   blocker ids, remediation commands, public status/bundle/capture-plan roots,

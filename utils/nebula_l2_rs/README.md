@@ -490,9 +490,11 @@ JSON artifact for deployment CI that wants the remaining external-capture
 contract without unpacking the full launch package. Its root guard recomputes
 `public_capture_todo_root` before writing.
 `--verify-public-capture-todo path\to\todo.json` also requires
-`--mainnet-readiness`, recomputes the expected todo for the current
-release-candidate summary, and fails on stale, tampered, or cross-run work
-orders before public evidence capture starts.
+`--mainnet-readiness`, pins the schema, chain, version, public-alpha identity,
+non-evidence boundary, rooted command map, command sequence, and todo root,
+recomputes the expected todo for the current release-candidate summary, and
+fails on stale, tampered, or cross-run work orders before public evidence
+capture starts.
 
 `--write-public-testnet-certification path\to\cert-dir` also requires
 `--mainnet-readiness` and writes a one-command public-testnet certification

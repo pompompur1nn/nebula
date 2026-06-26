@@ -9685,6 +9685,14 @@ fn ensure_public_capture_todo_artifact(value: &Value) -> Result<(), String> {
         "public capture todo chain_id mismatch",
     )?;
     ensure(
+        value.get("version").and_then(Value::as_str) == Some(VERSION),
+        "public capture todo version mismatch",
+    )?;
+    ensure(
+        value.get("public_alpha_only").and_then(Value::as_bool) == Some(true),
+        "public capture todo must remain public-alpha-only",
+    )?;
+    ensure(
         value.get("operator_fill_required").and_then(Value::as_bool) == Some(true),
         "public capture todo must require operator fill-in",
     )?;
@@ -33301,6 +33309,18 @@ mod tests {
         let error = ensure_public_capture_todo_artifact(&command_tampered)
             .expect_err("command-tampered capture todo should fail");
         assert!(error.contains("command map mismatch"));
+        let mut version_tampered = value.clone();
+        version_tampered["version"] = json!("wrong-version");
+        let mut rootless_version_tampered = version_tampered.clone();
+        rootless_version_tampered
+            .as_object_mut()
+            .expect("version-tampered todo object")
+            .remove("public_capture_todo_root");
+        version_tampered["public_capture_todo_root"] =
+            json!(value_root("public-capture-todo", &rootless_version_tampered));
+        let error = ensure_public_capture_todo_artifact(&version_tampered)
+            .expect_err("version-tampered capture todo should fail");
+        assert!(error.contains("version mismatch"));
         let _ = fs::remove_file(path);
     }
 
