@@ -1520,6 +1520,8 @@ struct PublicLaunchRemediation {
     deferred_repair_root_subchecks: Vec<String>,
     next_steps_root: String,
     next_steps: Value,
+    commands_root: String,
+    commands: Value,
     command_sequence_root: String,
     command_sequence: Value,
     privacy_classification: String,
@@ -7940,6 +7942,12 @@ fn public_launch_remediation_for_check(
         Value::Null
     };
     let next_steps_root = public_deployment_capture_next_steps_root(&next_steps);
+    let commands = if check.id == "public-launch-deployment-attestation" {
+        public_deployment_capture_commands()
+    } else {
+        Value::Null
+    };
+    let commands_root = public_deployment_capture_commands_root(&commands);
     let command_sequence = if check.id == "public-launch-deployment-attestation" {
         public_deployment_capture_command_sequence()
     } else {
@@ -7961,6 +7969,7 @@ fn public_launch_remediation_for_check(
         &repair_root,
         &deferred_repair_root,
         &next_steps_root,
+        &commands_root,
         &command_sequence_root,
         privacy_classification,
         bool_str(operator_private),
@@ -7979,6 +7988,8 @@ fn public_launch_remediation_for_check(
         deferred_repair_root_subchecks,
         next_steps_root,
         next_steps,
+        commands_root,
+        commands,
         command_sequence_root,
         command_sequence,
         privacy_classification: privacy_classification.to_string(),
@@ -41534,6 +41545,11 @@ mod tests {
             remediation.next_steps["verify_public_launch"],
             public_deployment_capture_commands()["verify_public_launch"]
         );
+        assert_eq!(remediation.commands, public_deployment_capture_commands());
+        assert_eq!(
+            remediation.commands_root,
+            public_deployment_capture_commands_root(&remediation.commands)
+        );
         assert!(remediation.next_steps["verify_public_launch"]
             .as_str()
             .expect("verify launch command")
@@ -41711,6 +41727,16 @@ mod tests {
         assert_eq!(
             summary_json["public_launch_readiness"]["remediations"][0]["remediation_kind"],
             "external-capture"
+        );
+        assert_eq!(
+            summary_json["public_launch_readiness"]["remediations"][0]["commands"],
+            public_deployment_capture_commands()
+        );
+        assert_eq!(
+            summary_json["public_launch_readiness"]["remediations"][0]["commands_root"],
+            json!(public_deployment_capture_commands_root(
+                &summary_json["public_launch_readiness"]["remediations"][0]["commands"]
+            ))
         );
         assert!(
             summary_json["public_launch_readiness"]["remediations"][0]["failed_subchecks"]

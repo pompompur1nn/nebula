@@ -884,9 +884,9 @@ the current capture-plan, package file-set, status, runbook, and bootstrap
 topology roots so deployment CI can begin external capture from deterministic expected
 bindings; package handoff/manifest/readiness roots are listed as deferred
 self-referential subchecks until the readiness report root is finalized. The same
-remediation also carries rooted next steps plus scaffold creation, audit,
-audit-verification, strict-verification, assembly, and final launch-gate commands
-for CI handoff. The redacted public status manifest does not include that local
+remediation also carries rooted next steps, a rooted command map, plus scaffold
+creation, audit, audit-verification, strict-verification, assembly, and final
+launch-gate commands for CI handoff. The redacted public status manifest does not include that local
 operator report.
 
 `--fail-on-readiness-gaps` also requires `--mainnet-readiness` and turns the
