@@ -391,6 +391,29 @@ const PUBLIC_SURFACE_PROBE_FIELDS: &[&str] = &[
     "endpoint_publicly_routable",
     "surface_probe_root",
 ];
+const PUBLIC_BOOTSTRAP_NODE_PROBE_FIELDS: &[&str] = &[
+    "status",
+    "chain_id",
+    "public_launch_bundle_root",
+    "public_status_manifest_root",
+    "bootstrap_node_set_root",
+    "deployment_run_id",
+    "node_index",
+    "node_slot_root",
+    "node_id_root",
+    "operator_commitment",
+    "region_commitment",
+    "public_p2p_endpoint",
+    "status_page_url",
+    "observed_at_unix_ms",
+    "p2p_handshake",
+    "p2p_handshake_verified",
+    "p2p_handshake_root",
+    "status_page_http_status",
+    "status_page_body_root",
+    "status_page_probe_root",
+    "node_probe_root",
+];
 const PICONERO_PER_XMR: u64 = 1_000_000_000_000;
 const ROOT_PLACEHOLDER: &str = "<64-hex-root>";
 const SENSITIVE_FIELD_MARKERS: [&str; 9] = [
@@ -31059,6 +31082,11 @@ fn validate_public_bootstrap_node_probes(
     let mut covered_slots = BTreeSet::new();
     let mut probe_roots = Vec::new();
     for probe in probes {
+        ensure_allowed_object_fields(
+            probe,
+            PUBLIC_BOOTSTRAP_NODE_PROBE_FIELDS,
+            "public deployment bootstrap node probe",
+        )?;
         ensure(
             required_str(probe, "status")? == "ok",
             "public deployment bootstrap node probe status must be ok",
@@ -46530,6 +46558,29 @@ mod tests {
         let error = load_public_deployment_evidence(&bad_path)
             .expect_err("tampered bootstrap node probe set should be rejected");
         assert!(error.contains("bootstrap node probe roots mismatch"));
+        let _ = fs::remove_file(bad_path);
+    }
+
+    #[test]
+    fn public_deployment_evidence_rejects_extra_bootstrap_node_probe_field() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let mut value: Value =
+            serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
+                .expect("deployment evidence json");
+        value["bootstrap_node_probes"][0]["operator_note"] =
+            json!("uncommitted bootstrap probe side-band claim");
+        let bad_path = write_public_deployment_evidence(
+            &serde_json::to_string_pretty(&value).expect("bad evidence json"),
+        );
+        let error = load_public_deployment_evidence(&bad_path)
+            .expect_err("extra bootstrap node probe field should be rejected");
+        assert!(error.contains(
+            "public deployment bootstrap node probe contains unexpected field 'operator_note'"
+        ));
         let _ = fs::remove_file(bad_path);
     }
 

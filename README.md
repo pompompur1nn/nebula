@@ -3580,7 +3580,8 @@ real XMR.
   committed node slot, bind the deployment run id, launch bundle root,
   status-manifest root, node slot, public P2P endpoint, canonical P2P
   handshake, verified handshake flag, HTTPS status-page endpoint, 200
-  status-page response root, and observation time. Their aggregate
+  status-page response root, and observation time, and unexpected record fields
+  are rejected before their aggregate
   `bootstrap_node_probe_set_root` is included in observer attestations and the
   canonical `public_probe_set_root`. Typed `public_surface_probes` must also
   cover the status manifest, aggregate P2P handshake, health, status-page,
