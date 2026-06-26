@@ -3317,8 +3317,10 @@ real XMR.
   `--verify-public-capture-todo` for deployment CI that does not need the full
   package directory. The verifier pins the schema, chain, version, public-alpha
   identity, non-evidence boundary, rooted `next_steps`, command map, command sequence, and
-  todo root, then recomputes the current run's todo and rejects stale, tampered,
-  or cross-run work orders.
+  todo root, then recomputes the current run's todo, checks the current status,
+  launch, artifact, package, readiness, capture-plan, preflight, runbook,
+  repair-root, and command roots, and rejects stale, tampered, or cross-run work
+  orders.
 - A local operator-only public launch readiness report export gives CI a
   standalone `nebula-public-launch-readiness-report` with the launch level,
   blocker ids, remediation commands, public status/bundle/capture-plan roots,

@@ -10343,6 +10343,60 @@ fn verify_public_capture_todo(path: &str, summary: &TestnetSummary) -> Result<()
     ensure_public_capture_todo_artifact(&todo)?;
     let expected = public_capture_todo_artifact(summary);
     ensure_public_capture_todo_artifact(&expected)?;
+    ensure_current_run_pointer_bindings(
+        &todo,
+        &expected,
+        "public capture todo",
+        &[
+            (
+                "public_status_manifest_root",
+                "/public_status_manifest_root",
+            ),
+            ("public_launch_bundle_root", "/public_launch_bundle_root"),
+            (
+                "public_launch_artifact_manifest_root",
+                "/public_launch_artifact_manifest_root",
+            ),
+            (
+                "public_launch_artifact_set_root",
+                "/public_launch_artifact_set_root",
+            ),
+            (
+                "public_launch_package_file_set_root",
+                "/public_launch_package_file_set_root",
+            ),
+            (
+                "public_launch_readiness_report_root",
+                "/public_launch_readiness_report_root",
+            ),
+            (
+                "public_launch_readiness_artifact_root",
+                "/public_launch_readiness_artifact_root",
+            ),
+            ("capture_plan_root", "/capture_plan_root"),
+            ("capture_contract_root", "/capture_contract_root"),
+            (
+                "deployment_preflight_checklist_root",
+                "/deployment_preflight_checklist_root",
+            ),
+            (
+                "public_deployment_runbook_root",
+                "/public_deployment_runbook_root",
+            ),
+            (
+                "public_deployment_runbook_step_set_root",
+                "/public_deployment_runbook_step_set_root",
+            ),
+            (
+                "deferred_repair_root_subcheck_root",
+                "/deferred_repair_root_subcheck_root",
+            ),
+            ("next_steps_root", "/next_steps_root"),
+            ("commands_root", "/commands_root"),
+            ("command_sequence_root", "/command_sequence_root"),
+            ("public_capture_todo_root", "/public_capture_todo_root"),
+        ],
+    )?;
     ensure(
         todo == expected,
         "public capture todo does not match this run",
@@ -34163,7 +34217,7 @@ mod tests {
         let other_summary = other_testnet.summary(Vec::new());
         let error = verify_public_capture_todo(&path_string, &other_summary)
             .expect_err("cross-run capture todo should fail");
-        assert!(error.contains("does not match this run"));
+        assert!(error.contains("public_status_manifest_root mismatch"));
         let _ = fs::remove_file(path);
     }
 
