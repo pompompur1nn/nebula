@@ -22332,6 +22332,30 @@ fn ensure_public_launch_missing_evidence_repair_roots(
     Ok(())
 }
 
+fn ensure_public_launch_missing_evidence_failed_subchecks(
+    report: &Value,
+    remediation: &Value,
+) -> Result<(), String> {
+    let label = "public launch remediation";
+    if required_nested_str(remediation, "blocker_id", label)?
+        != "public-launch-deployment-attestation"
+        || report
+            .get("public_deployment_evidence_root")
+            .and_then(Value::as_str)
+            != Some("missing-public-deployment-evidence")
+    {
+        return Ok(());
+    }
+    let manifest_id = required_nested_str(report, "manifest_id", "public launch readiness report")?;
+    let expected_failed_subchecks =
+        public_deployment_failed_subchecks(&missing_public_deployment_report(manifest_id));
+    let failed_subchecks = required_nested_string_list(remediation, "failed_subchecks", label)?;
+    ensure(
+        failed_subchecks == expected_failed_subchecks,
+        "public launch remediation failed subchecks mismatch for missing deployment evidence",
+    )
+}
+
 fn ensure_public_launch_readiness_roots_match_report(
     report: &Value,
     readiness: &Value,
@@ -22407,6 +22431,7 @@ fn ensure_public_launch_readiness_roots_match_report(
     let remediation_roots = remediations
         .iter()
         .map(|remediation| {
+            ensure_public_launch_missing_evidence_failed_subchecks(report, remediation)?;
             ensure_public_launch_missing_evidence_repair_roots(report, remediation)?;
             let expected_root = public_launch_remediation_root_from_value(remediation)?;
             ensure(
@@ -36162,6 +36187,46 @@ mod tests {
             .expect_err("tampered missing-evidence repair root should fail safety checks");
         assert!(error.contains(
             "public launch remediation repair root mismatch for public_launch_package_file_set_root_bound"
+        ));
+    }
+
+    #[test]
+    fn public_launch_readiness_report_rejects_missing_required_failed_subcheck() {
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        let mut value = public_launch_readiness_report_artifact(&summary);
+        value["public_launch_readiness"]["remediations"][0]["failed_subchecks"]
+            .as_array_mut()
+            .expect("failed subchecks")
+            .retain(|subcheck| {
+                subcheck.as_str() != Some("public_deployment_attestation_available")
+            });
+        let error = ensure_public_launch_readiness_report_artifact_safe(&value)
+            .expect_err("missing failed subcheck should fail safety checks");
+        assert!(error.contains(
+            "public launch remediation failed subchecks mismatch for missing deployment evidence"
+        ));
+    }
+
+    #[test]
+    fn public_launch_readiness_report_rejects_extra_failed_subcheck() {
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        let mut value = public_launch_readiness_report_artifact(&summary);
+        value["public_launch_readiness"]["remediations"][0]["failed_subchecks"]
+            .as_array_mut()
+            .expect("failed subchecks")
+            .push(json!("not_a_real_public_deployment_subcheck"));
+        let error = ensure_public_launch_readiness_report_artifact_safe(&value)
+            .expect_err("extra failed subcheck should fail safety checks");
+        assert!(error.contains(
+            "public launch remediation failed subchecks mismatch for missing deployment evidence"
         ));
     }
 

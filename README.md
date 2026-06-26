@@ -3342,12 +3342,13 @@ real XMR.
   report, and artifact roots against the current run, requires the deployment-
   attestation remediation artifact id/path, command, kind, privacy boundary, and
   external-capture flag to stay canonical, pins deterministic missing-evidence
-  repair roots to the package, status, bundle, capture-plan, capture-contract,
-  evidence-template, and preflight roots in the report, requires the blocker,
-  ready flag, level, and remediation lists to match the failed checks, and
-  rejects stale package-root, readiness-root, status, bundle, capture-plan,
-  capture-contract, evidence-template, preflight, artifact-root, or
-  deployment-evidence bindings before deployment CI consumes the report root.
+  failed-subcheck list and repair roots to the package, status, bundle,
+  capture-plan, capture-contract, evidence-template, and preflight roots in the
+  report, requires the blocker, ready flag, level, and remediation lists to
+  match the failed checks, and rejects stale package-root, readiness-root,
+  status, bundle, capture-plan, capture-contract, evidence-template, preflight,
+  artifact-root, or deployment-evidence bindings before deployment CI consumes
+  the report root.
 - Public launch automation consumes a redacted
   `nebula-public-testnet-launch-bundle` that binds the status manifest,
   bootstrap profile, proxy policy, typed bootstrap-node commitment manifest,
