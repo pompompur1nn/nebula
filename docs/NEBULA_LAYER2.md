@@ -3477,14 +3477,14 @@ real XMR.
   `bootstrap_operator_registry`, derives canonical observer attestation, signature-payload,
   and signature-verification roots, and rejects observer records that do not
   carry externally verified ML-DSA-65 signature roots plus typed verification
-  transcripts over those payloads. Proxy, firewall, and rate-limit policy
-  claims, TLS endpoint-pin records, bootstrap operator registry records,
-  observer records, and observer/operator signature verification transcripts
-  must all bind the same `deployment_run_id` where applicable and reject
-  unexpected fields before their collection roots are accepted, preventing a
-  public launch attestation from being assembled out of valid fragments or
-  uncommitted side-band claims from different deployment captures. It then
-  derives observer set, attestor
+  transcripts over those payloads. Public probe bodies, proxy, firewall, and
+  rate-limit policy claims, TLS endpoint-pin records, bootstrap operator
+  registry records, observer records, and observer/operator signature
+  verification transcripts must all bind the same `deployment_run_id` where
+  applicable and reject unexpected fields before their collection roots are
+  accepted, preventing a public launch attestation from being assembled out of
+  valid fragments or uncommitted side-band claims from different deployment
+  captures. It then derives observer set, attestor
   registry, region-count, observer-count, and PQ-signature collection roots
   from unique probe-observer records, derives the canonical public probe-set
   root from the required probe transcript roots, including the typed public

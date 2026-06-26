@@ -464,6 +464,101 @@ const PUBLIC_RATE_LIMIT_POLICY_CLAIMS_FIELDS: &[&str] = &[
     "p2p_peer_limit_observed",
     "faucet_cap_enforced",
 ];
+const PUBLIC_HEALTH_PROBE_FIELDS: &[&str] = &[
+    "status",
+    "chain_id",
+    "public_status_manifest_root",
+    "public_bootstrap_profile_root",
+    "public_launch_bundle_root",
+    "no_mainnet_custody",
+    "runner_public_listener_allowed",
+];
+const PUBLIC_STATUS_PAGE_PROBE_FIELDS: &[&str] = &[
+    "status",
+    "chain_id",
+    "public_status_manifest_root",
+    "public_launch_bundle_root",
+    "status_page_commitment_root",
+    "incident_response_contact_root",
+    "public_alpha_only",
+    "no_mainnet_custody",
+];
+const PUBLIC_METRICS_PROBE_FIELDS: &[&str] = &[
+    "status",
+    "chain_id",
+    "public_status_manifest_root",
+    "public_launch_bundle_root",
+    "target_finality_micros",
+    "p95_local_quorum_certificate_latency_micros",
+    "finality_target_met",
+    "reserve_covered",
+    "no_mainnet_custody",
+];
+const PUBLIC_DEPLOYED_FINALITY_PROBE_FIELDS: &[&str] = &[
+    "status",
+    "chain_id",
+    "public_status_manifest_root",
+    "public_launch_bundle_root",
+    "testnet_manifest_id",
+    "latest_block_height",
+    "sample_count",
+    "validator_count",
+    "validator_threshold",
+    "region_count",
+    "target_finality_micros",
+    "p95_quorum_certificate_micros",
+    "max_quorum_certificate_micros",
+    "all_samples_under_target",
+    "network_profile_root",
+    "clock_sync_root",
+    "sample_set_root",
+];
+const PUBLIC_INCIDENT_CONTACT_PROBE_FIELDS: &[&str] = &[
+    "status",
+    "chain_id",
+    "public_status_manifest_root",
+    "public_launch_bundle_root",
+    "incident_response_contact_root",
+    "incident_handoff_available",
+    "public_alpha_only",
+    "no_mainnet_custody",
+];
+const PUBLIC_FAUCET_PROBE_FIELDS: &[&str] = &[
+    "status",
+    "chain_id",
+    "public_launch_bundle_root",
+    "faucet_policy_root",
+    "daily_cap_piconero",
+    "per_account_cap_piconero",
+    "mainnet_faucet_disabled",
+    "public_alpha_only",
+];
+const PUBLIC_RESET_RUNBOOK_PROBE_FIELDS: &[&str] = &[
+    "status",
+    "chain_id",
+    "public_launch_bundle_root",
+    "reset_policy_root",
+    "deployment_runbook_root",
+    "reset_window_hours",
+    "state_reset_allowed_for_public_alpha",
+    "requires_status_page_notice",
+];
+const PUBLIC_PRIVATE_SUMMARY_PROBE_FIELDS: &[&str] = &[
+    "status",
+    "chain_id",
+    "public_launch_bundle_root",
+    "public_status_manifest_root",
+    "public_rpc_url",
+    "target_path",
+    "target_route_class",
+    "http_status",
+    "response_body_root",
+    "response_content_length",
+    "redirect_followed",
+    "response_contains_private_summary",
+    "full_operator_summary_publication_allowed",
+    "no_private_summary_exposed",
+];
 const PUBLIC_SURFACE_PROBE_FIELDS: &[&str] = &[
     "status",
     "chain_id",
@@ -29313,6 +29408,11 @@ fn validate_public_health_probe(
     public_bootstrap_profile_root: &str,
     public_launch_bundle_root: &str,
 ) -> Result<(), String> {
+    ensure_allowed_object_fields(
+        value,
+        PUBLIC_HEALTH_PROBE_FIELDS,
+        "public deployment health probe",
+    )?;
     ensure(
         required_str(value, "status")? == "ok",
         "public deployment health probe status must be ok",
@@ -29350,6 +29450,11 @@ fn validate_public_status_page_probe(
     public_launch_bundle_root: &str,
 ) -> Result<(), String> {
     let bootstrap = required_section(public_status_manifest, "public_bootstrap")?;
+    ensure_allowed_object_fields(
+        value,
+        PUBLIC_STATUS_PAGE_PROBE_FIELDS,
+        "public deployment status page probe",
+    )?;
     ensure(
         required_str(value, "status")? == "ok",
         "public deployment status page probe status must be ok",
@@ -29393,6 +29498,11 @@ fn validate_public_incident_contact_probe(
     public_launch_bundle_root: &str,
 ) -> Result<(), String> {
     let bootstrap = required_section(public_status_manifest, "public_bootstrap")?;
+    ensure_allowed_object_fields(
+        value,
+        PUBLIC_INCIDENT_CONTACT_PROBE_FIELDS,
+        "public deployment incident contact probe",
+    )?;
     ensure(
         required_str(value, "status")? == "ok",
         "public deployment incident contact probe status must be ok",
@@ -29435,6 +29545,11 @@ fn validate_public_metrics_probe(
     let target_finality_micros = required_u64(finality, "target_finality_micros")?;
     let p95_finality_micros =
         required_u64(finality, "p95_local_quorum_certificate_latency_micros")?;
+    ensure_allowed_object_fields(
+        value,
+        PUBLIC_METRICS_PROBE_FIELDS,
+        "public deployment metrics probe",
+    )?;
     ensure(
         required_str(value, "status")? == "ok",
         "public deployment metrics probe status must be ok",
@@ -29498,6 +29613,11 @@ fn validate_public_deployed_finality_probe(
     )?;
     let required_region_count =
         required_u64(finality, "loopback_distributed_finality_region_count")?;
+    ensure_allowed_object_fields(
+        value,
+        PUBLIC_DEPLOYED_FINALITY_PROBE_FIELDS,
+        "public deployment deployed finality probe",
+    )?;
     ensure(
         required_str(value, "status")? == "ok",
         "public deployment deployed finality probe status must be ok",
@@ -29570,6 +29690,11 @@ fn validate_public_faucet_probe(
     public_launch_bundle_root: &str,
 ) -> Result<(), String> {
     let bootstrap = required_section(public_status_manifest, "public_bootstrap")?;
+    ensure_allowed_object_fields(
+        value,
+        PUBLIC_FAUCET_PROBE_FIELDS,
+        "public deployment faucet probe",
+    )?;
     ensure(
         required_str(value, "status")? == "ok",
         "public deployment faucet probe status must be ok",
@@ -29613,6 +29738,11 @@ fn validate_public_reset_runbook_probe(
     public_launch_bundle_root: &str,
 ) -> Result<(), String> {
     let bootstrap = required_section(public_status_manifest, "public_bootstrap")?;
+    ensure_allowed_object_fields(
+        value,
+        PUBLIC_RESET_RUNBOOK_PROBE_FIELDS,
+        "public deployment reset runbook probe",
+    )?;
     ensure(
         required_str(value, "status")? == "ok",
         "public deployment reset runbook probe status must be ok",
@@ -30751,6 +30881,11 @@ fn validate_public_private_summary_probe(
     public_launch_bundle_root: &str,
     private_summary_probe_status: u64,
 ) -> Result<(), String> {
+    ensure_allowed_object_fields(
+        value,
+        PUBLIC_PRIVATE_SUMMARY_PROBE_FIELDS,
+        "public deployment private summary probe",
+    )?;
     ensure(
         required_str(value, "status")? == "blocked",
         "public deployment private summary probe status must be blocked",
@@ -47059,6 +47194,55 @@ mod tests {
             );
             let error = load_public_deployment_evidence(&bad_path)
                 .expect_err("extra policy claim field should be rejected");
+            assert!(
+                error.contains(&format!(
+                    "{description} contains unexpected field 'operator_note'"
+                )),
+                "unexpected error for {section}: {error}"
+            );
+            let _ = fs::remove_file(bad_path);
+        }
+    }
+
+    #[test]
+    fn public_deployment_evidence_rejects_extra_public_probe_body_fields() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let base_value: Value =
+            serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
+                .expect("deployment evidence json");
+        for (section, description) in [
+            ("health_probe", "public deployment health probe"),
+            ("status_page_probe", "public deployment status page probe"),
+            ("metrics_probe", "public deployment metrics probe"),
+            (
+                "deployed_finality_probe",
+                "public deployment deployed finality probe",
+            ),
+            (
+                "incident_contact_probe",
+                "public deployment incident contact probe",
+            ),
+            ("faucet_probe", "public deployment faucet probe"),
+            (
+                "reset_runbook_probe",
+                "public deployment reset runbook probe",
+            ),
+            (
+                "private_summary_probe",
+                "public deployment private summary probe",
+            ),
+        ] {
+            let mut value = base_value.clone();
+            value[section]["operator_note"] = json!("uncommitted probe side-band claim");
+            let bad_path = write_public_deployment_evidence(
+                &serde_json::to_string_pretty(&value).expect("bad evidence json"),
+            );
+            let error = load_public_deployment_evidence(&bad_path)
+                .expect_err("extra public probe body field should be rejected");
             assert!(
                 error.contains(&format!(
                     "{description} contains unexpected field 'operator_note'"
