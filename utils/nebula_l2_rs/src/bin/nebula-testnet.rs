@@ -22171,6 +22171,38 @@ fn ensure_unique_nested_string_list(
 fn public_launch_remediation_root_from_value(remediation: &Value) -> Result<String, String> {
     let label = "public launch remediation";
     let blocker_id = required_nested_str(remediation, "blocker_id", label)?;
+    let remediation_object = remediation
+        .as_object()
+        .ok_or_else(|| "public launch remediation must be an object".to_string())?;
+    for key in remediation_object.keys() {
+        ensure(
+            matches!(
+                key.as_str(),
+                "blocker_id"
+                    | "expected_artifact"
+                    | "expected_artifact_id"
+                    | "expected_artifact_path"
+                    | "command"
+                    | "remediation_kind"
+                    | "expected_evidence_root"
+                    | "failed_subchecks"
+                    | "repair_roots"
+                    | "expected_values"
+                    | "deferred_repair_root_subchecks"
+                    | "next_steps_root"
+                    | "next_steps"
+                    | "commands_root"
+                    | "commands"
+                    | "command_sequence_root"
+                    | "command_sequence"
+                    | "privacy_classification"
+                    | "operator_private"
+                    | "external_capture_required"
+                    | "remediation_root"
+            ),
+            &format!("public launch remediation contains unexpected field {key} for {blocker_id}"),
+        )?;
+    }
     let next_steps = remediation
         .get("next_steps")
         .ok_or_else(|| "public launch remediation missing next_steps".to_string())?;
@@ -36324,6 +36356,24 @@ mod tests {
         let error = ensure_public_launch_readiness_report_artifact_safe(&value)
             .expect_err("tampered remediation command map should fail safety checks");
         assert!(error.contains("command map mismatch"));
+    }
+
+    #[test]
+    fn public_launch_readiness_report_rejects_extra_remediation_field() {
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        let mut value = public_launch_readiness_report_artifact(&summary);
+        value["public_launch_readiness"]["remediations"][0]["operator_note"] =
+            json!("not part of the remediation contract");
+
+        let error = ensure_public_launch_readiness_report_artifact_safe(&value)
+            .expect_err("extra remediation field should fail safety checks");
+        assert!(error.contains(
+            "public launch remediation contains unexpected field operator_note for public-launch-deployment-attestation"
+        ));
     }
 
     #[test]

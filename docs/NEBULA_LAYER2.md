@@ -3350,8 +3350,8 @@ real XMR.
   blocker, ready flag, level, and remediation lists to match the failed checks,
   rejects non-canonical readiness check ordering/fields, unknown readiness check
   ids/statuses, tampered readiness check detail text, malformed readiness
-  evidence roots, duplicate readiness check ids, and duplicate remediation
-  subcheck/deferred-repair lists, and rejects
+  evidence roots, duplicate readiness check ids, non-canonical remediation
+  fields, and duplicate remediation subcheck/deferred-repair lists, and rejects
   stale package-root, readiness-root, status, bundle, capture-plan,
   capture-contract, evidence-template, preflight, artifact-root, or
   deployment-evidence bindings before deployment CI consumes the report root.
