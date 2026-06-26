@@ -9046,6 +9046,96 @@ fn verify_public_bootstrap_profile(path: &str, summary: &TestnetSummary) -> Resu
     ensure_public_bootstrap_profile_template_redacted(&actual)?;
     let expected = public_bootstrap_profile_template(summary);
     ensure_public_bootstrap_profile_template_redacted(&expected)?;
+    ensure_current_run_pointer_bindings(
+        &actual,
+        &expected,
+        "public bootstrap profile",
+        &[
+            (
+                "testnet_run_checkpoint_root",
+                "/testnet_run_checkpoint_root",
+            ),
+            ("latest_block_height", "/latest_block_height"),
+            ("latest_block_hash", "/latest_block_hash"),
+            (
+                "public_bootstrap_profile/report_root",
+                "/public_bootstrap_profile/report_root",
+            ),
+            (
+                "public_bootstrap_profile/profile_root",
+                "/public_bootstrap_profile/profile_root",
+            ),
+            (
+                "bootnodes/bootstrap_node_set_root",
+                "/bootnodes/bootstrap_node_set_root",
+            ),
+            (
+                "bootnodes/bootstrap_operator_set_root",
+                "/bootnodes/bootstrap_operator_set_root",
+            ),
+            (
+                "bootnodes/bootstrap_region_set_root",
+                "/bootnodes/bootstrap_region_set_root",
+            ),
+            (
+                "operator_registry/operator_set_root",
+                "/operator_registry/operator_set_root",
+            ),
+            (
+                "rate_limits/rate_limit_policy_root",
+                "/rate_limits/rate_limit_policy_root",
+            ),
+            (
+                "faucet_policy/faucet_policy_root",
+                "/faucet_policy/faucet_policy_root",
+            ),
+            (
+                "reset_policy/reset_policy_root",
+                "/reset_policy/reset_policy_root",
+            ),
+            (
+                "monitoring/monitoring_policy_root",
+                "/monitoring/monitoring_policy_root",
+            ),
+            (
+                "monitoring/health_check_root",
+                "/monitoring/health_check_root",
+            ),
+            (
+                "monitoring/status_page_commitment_root",
+                "/monitoring/status_page_commitment_root",
+            ),
+            (
+                "monitoring/reserve_monitoring_report_root",
+                "/monitoring/reserve_monitoring_report_root",
+            ),
+            (
+                "monitoring/operations_readiness_local_report_root",
+                "/monitoring/operations_readiness_local_report_root",
+            ),
+            (
+                "monitoring/privacy_surface_report_root",
+                "/monitoring/privacy_surface_report_root",
+            ),
+            (
+                "operations/deployment_runbook_root",
+                "/operations/deployment_runbook_root",
+            ),
+            (
+                "operations/incident_response_contact_root",
+                "/operations/incident_response_contact_root",
+            ),
+            (
+                "operations/runbook_set_root",
+                "/operations/runbook_set_root",
+            ),
+            (
+                "operations/incident_handoff_root",
+                "/operations/incident_handoff_root",
+            ),
+            ("template_root", "/template_root"),
+        ],
+    )?;
     ensure(
         actual == expected,
         "public bootstrap profile does not match this run",
@@ -9085,6 +9175,94 @@ fn verify_public_status_manifest(path: &str, summary: &TestnetSummary) -> Result
     )?;
     let expected = public_status_manifest(summary);
     ensure_public_status_manifest_redacted(&expected)?;
+    ensure_current_run_pointer_bindings(
+        &actual,
+        &expected,
+        "public status manifest",
+        &[
+            ("produced_blocks", "/produced_blocks"),
+            ("latest_block_height", "/latest_block_height"),
+            ("latest_block_hash", "/latest_block_hash"),
+            ("anchor_root_height", "/anchor_root_height"),
+            ("acceptance/testnet_ready", "/acceptance/testnet_ready"),
+            (
+                "acceptance/mainnet_value_ready",
+                "/acceptance/mainnet_value_ready",
+            ),
+            (
+                "acceptance/no_mainnet_custody",
+                "/acceptance/no_mainnet_custody",
+            ),
+            (
+                "finality/local_finality_latency_report_root",
+                "/finality/local_finality_latency_report_root",
+            ),
+            (
+                "finality/loopback_distributed_finality_report_root",
+                "/finality/loopback_distributed_finality_report_root",
+            ),
+            (
+                "public_bootstrap/report_root",
+                "/public_bootstrap/report_root",
+            ),
+            (
+                "public_bootstrap/profile_root",
+                "/public_bootstrap/profile_root",
+            ),
+            (
+                "public_bootstrap/bootstrap_node_set_root",
+                "/public_bootstrap/bootstrap_node_set_root",
+            ),
+            (
+                "public_bootstrap/rate_limit_policy_root",
+                "/public_bootstrap/rate_limit_policy_root",
+            ),
+            (
+                "public_bootstrap/faucet_policy_root",
+                "/public_bootstrap/faucet_policy_root",
+            ),
+            (
+                "public_bootstrap/reset_policy_root",
+                "/public_bootstrap/reset_policy_root",
+            ),
+            (
+                "public_bootstrap/monitoring_policy_root",
+                "/public_bootstrap/monitoring_policy_root",
+            ),
+            (
+                "public_bootstrap/deployment_runbook_root",
+                "/public_bootstrap/deployment_runbook_root",
+            ),
+            (
+                "public_roots/run_profile_report_root",
+                "/public_roots/run_profile_report_root",
+            ),
+            (
+                "public_roots/reserve_monitoring_report_root",
+                "/public_roots/reserve_monitoring_report_root",
+            ),
+            (
+                "public_roots/operations_readiness_local_report_root",
+                "/public_roots/operations_readiness_local_report_root",
+            ),
+            (
+                "public_roots/privacy_surface_report_root",
+                "/public_roots/privacy_surface_report_root",
+            ),
+            (
+                "public_roots/da_proof_watchtower_coverage_report_root",
+                "/public_roots/da_proof_watchtower_coverage_report_root",
+            ),
+            (
+                "public_roots/wallet_recovery_audit_report_root",
+                "/public_roots/wallet_recovery_audit_report_root",
+            ),
+            (
+                "public_status_manifest_root",
+                "/public_status_manifest_root",
+            ),
+        ],
+    )?;
     ensure(
         actual == expected,
         "public status manifest does not match this run",
@@ -9125,6 +9303,119 @@ fn verify_public_deployment_runbook(path: &str, summary: &TestnetSummary) -> Res
     )?;
     let expected = public_deployment_runbook(summary);
     ensure_public_deployment_runbook_redacted(&expected)?;
+    ensure_current_run_pointer_bindings(
+        &actual,
+        &expected,
+        "public deployment runbook",
+        &[
+            (
+                "public_status_manifest_root",
+                "/public_status_manifest_root",
+            ),
+            (
+                "public_bootstrap_profile_root",
+                "/public_bootstrap_profile_root",
+            ),
+            ("deployment_runbook_root", "/deployment_runbook_root"),
+            (
+                "source_roots/public_status_manifest_root",
+                "/source_roots/public_status_manifest_root",
+            ),
+            (
+                "source_roots/public_bootstrap_profile_root",
+                "/source_roots/public_bootstrap_profile_root",
+            ),
+            (
+                "source_roots/public_bootstrap_profile_report_root",
+                "/source_roots/public_bootstrap_profile_report_root",
+            ),
+            (
+                "source_roots/deployment_runbook_root",
+                "/source_roots/deployment_runbook_root",
+            ),
+            (
+                "source_roots/incident_response_contact_root",
+                "/source_roots/incident_response_contact_root",
+            ),
+            (
+                "source_roots/status_page_commitment_root",
+                "/source_roots/status_page_commitment_root",
+            ),
+            (
+                "source_roots/monitoring_policy_root",
+                "/source_roots/monitoring_policy_root",
+            ),
+            (
+                "source_roots/health_check_root",
+                "/source_roots/health_check_root",
+            ),
+            (
+                "source_roots/faucet_policy_root",
+                "/source_roots/faucet_policy_root",
+            ),
+            (
+                "source_roots/reset_policy_root",
+                "/source_roots/reset_policy_root",
+            ),
+            (
+                "source_roots/rate_limit_policy_root",
+                "/source_roots/rate_limit_policy_root",
+            ),
+            (
+                "source_roots/bootstrap_node_set_root",
+                "/source_roots/bootstrap_node_set_root",
+            ),
+            (
+                "source_roots/bootstrap_operator_set_root",
+                "/source_roots/bootstrap_operator_set_root",
+            ),
+            (
+                "source_roots/bootstrap_region_set_root",
+                "/source_roots/bootstrap_region_set_root",
+            ),
+            (
+                "source_roots/operations_runbook_set_root",
+                "/source_roots/operations_runbook_set_root",
+            ),
+            (
+                "source_roots/operations_incident_handoff_root",
+                "/source_roots/operations_incident_handoff_root",
+            ),
+            (
+                "source_roots/operations_readiness_local_report_root",
+                "/source_roots/operations_readiness_local_report_root",
+            ),
+            (
+                "source_roots/reserve_monitoring_report_root",
+                "/source_roots/reserve_monitoring_report_root",
+            ),
+            (
+                "source_roots/privacy_surface_report_root",
+                "/source_roots/privacy_surface_report_root",
+            ),
+            (
+                "source_roots/run_checkpoint_root",
+                "/source_roots/run_checkpoint_root",
+            ),
+            (
+                "source_roots/dry_run_check_root",
+                "/source_roots/dry_run_check_root",
+            ),
+            (
+                "source_roots/mainnet_boundary_root",
+                "/source_roots/mainnet_boundary_root",
+            ),
+            (
+                "runbook_contract/runbook_contract_root",
+                "/runbook_contract/runbook_contract_root",
+            ),
+            ("step_set_root", "/step_set_root"),
+            (
+                "public_deployment_runbook_root",
+                "/public_deployment_runbook_root",
+            ),
+        ],
+    )?;
     ensure(
         actual == expected,
         "public deployment runbook does not match this run",
@@ -32680,7 +32971,7 @@ mod tests {
 
         let error = verify_public_bootstrap_profile(&path, &summary)
             .expect_err("re-rooted stale profile should fail exact verification");
-        assert!(error.contains("does not match this run"));
+        assert!(error.contains("testnet_run_checkpoint_root mismatch"));
         let _ = fs::remove_file(path);
     }
 
@@ -32770,7 +33061,7 @@ mod tests {
 
         let error = verify_public_status_manifest(&path, &summary)
             .expect_err("re-rooted stale status manifest should fail exact verification");
-        assert!(error.contains("does not match this run"));
+        assert!(error.contains("latest_block_height mismatch"));
         let _ = fs::remove_file(path);
     }
 
@@ -32948,7 +33239,7 @@ mod tests {
 
         let error = verify_public_deployment_runbook(&path, &summary)
             .expect_err("re-rooted stale runbook should fail exact verification");
-        assert!(error.contains("does not match this run"));
+        assert!(error.contains("source_roots/run_checkpoint_root mismatch"));
         let _ = fs::remove_file(path);
     }
 

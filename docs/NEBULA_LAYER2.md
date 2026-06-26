@@ -3233,8 +3233,8 @@ real XMR.
   rollback/reset communications, and no-mainnet-custody confirmation. The
   launch bundle and capture plan both freeze the runbook root and step-set
   root, while standalone bootstrap, status, runbook, and launch-bundle
-  verification recompute the public payloads, so deployment CI can detect stale
-  or mismatched operator handoffs.
+  verification recompute the public payloads and check current-run source
+  bindings, so deployment CI can detect stale or mismatched operator handoffs.
 - A public launch artifact manifest export gives operators a rooted
   `nebula-public-launch-artifact-manifest` before public probe capture starts.
   It freezes the pre-capture handoff set: redacted public status manifest,

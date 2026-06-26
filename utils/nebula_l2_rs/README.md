@@ -371,8 +371,9 @@ operator independence, exact committed-operator coverage, and ML-DSA-65
 signature-verification transcripts explicit before public deployment capture.
 It is not a mainnet custody approval and does not make the runner accept
 non-loopback binds. `--verify-public-bootstrap-profile path\to\bootstrap.json`
-recomputes the template root and rejects stale, cross-run, or unsafe public
-bind handoffs before deployment automation fills endpoints.
+recomputes the template root, checks current-run checkpoint, block, bootstrap,
+policy, monitoring, and operations roots, and rejects stale, cross-run, or
+unsafe public-bind handoffs before deployment automation fills endpoints.
 
 `--write-public-status-manifest path\to\status.json` also requires
 `--mainnet-readiness` and writes the same redacted
@@ -385,7 +386,8 @@ mainnet-readiness object. It also contains no generic `readiness` or
 `public_launch_readiness` object; that operator-only launch report appears only
 in the full local `--json` summary. `--verify-public-status-manifest
 path\to\status.json` recomputes the redaction/root guard and rejects stale or
-cross-run status payloads before deployment proxies publish them.
+cross-run status payloads, including stale block, finality, bootstrap, and
+public-root bindings, before deployment proxies publish them.
 
 `--write-public-deployment-runbook path\to\runbook.json` also requires
 `--mainnet-readiness` and writes a `kind:
@@ -402,7 +404,9 @@ caps and reset communications, handing off incidents, rolling out bootstrap
 nodes, verifying operator registry records, capturing deployment evidence,
 binding rollback/reset communications, and confirming no mainnet custody.
 `--verify-public-deployment-runbook path\to\runbook.json` recomputes the
-runbook root and rejects stale or cross-run procedural handoffs before capture.
+runbook root, checks current-run status, bootstrap, operations, reserve,
+privacy, checkpoint, contract, step-set, and runbook roots, and rejects stale
+or cross-run procedural handoffs before capture.
 
 `--write-public-launch-artifact-manifest path\to\artifacts.json` also requires
 `--mainnet-readiness` and writes a rooted
