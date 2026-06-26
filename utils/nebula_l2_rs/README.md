@@ -481,7 +481,8 @@ cross-run, extra, or metadata-tampered files before filling public probe evidenc
 the current release-candidate summary, so CI should combine it with the export
 step for the same runner invocation. It pins schema/version identity, recomputes every artifact and package
 root, verifies package-only/public-alpha boundaries and per-artifact
-capture/operator-fill flags, enforces the exact top-level package file set and
+capture/operator-fill flags, checks nested artifact current-run bindings before
+full artifact comparison, enforces the exact top-level package file set and
 package-level readiness summary, and fails if the directory contains stale,
 tampered, swapped, cross-run, or extra handoff files.
 The package also includes `nebula-public-capture-todo.json`, a rooted

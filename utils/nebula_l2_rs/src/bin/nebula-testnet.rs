@@ -10692,6 +10692,12 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
             .filter(|candidate| is_hex_root(candidate))
             .map(str::to_string)
             .unwrap_or_else(|| public_launch_package_value_root(artifact_id, &expected_artifact));
+        ensure_public_launch_package_artifact_current_bindings(
+            artifact_id,
+            file_name,
+            &artifact,
+            &expected_artifact,
+        )?;
         ensure(
             artifact == expected_artifact,
             &format!("public launch package artifact {file_name} does not match this run"),
@@ -10758,6 +10764,177 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
     ensure(
         required_root(&manifest, "package_manifest_root")? == expected_package_manifest_root,
         "public launch package manifest root mismatch",
+    )
+}
+
+fn ensure_public_launch_package_artifact_current_bindings(
+    artifact_id: &str,
+    file_name: &str,
+    actual: &Value,
+    expected: &Value,
+) -> Result<(), String> {
+    let bindings = match artifact_id {
+        "public-status-manifest" => vec![
+            ("latest_block_height", "/latest_block_height"),
+            ("latest_block_hash", "/latest_block_hash"),
+            (
+                "public_status_manifest_root",
+                "/public_status_manifest_root",
+            ),
+            (
+                "public_bootstrap/profile_root",
+                "/public_bootstrap/profile_root",
+            ),
+            (
+                "public_roots/reserve_monitoring_report_root",
+                "/public_roots/reserve_monitoring_report_root",
+            ),
+            (
+                "public_roots/operations_readiness_local_report_root",
+                "/public_roots/operations_readiness_local_report_root",
+            ),
+        ],
+        "public-bootstrap-profile-template" => vec![
+            (
+                "testnet_run_checkpoint_root",
+                "/testnet_run_checkpoint_root",
+            ),
+            ("latest_block_height", "/latest_block_height"),
+            (
+                "public_bootstrap_profile/profile_root",
+                "/public_bootstrap_profile/profile_root",
+            ),
+            (
+                "bootnodes/bootstrap_node_set_root",
+                "/bootnodes/bootstrap_node_set_root",
+            ),
+            (
+                "operator_registry/operator_set_root",
+                "/operator_registry/operator_set_root",
+            ),
+            ("template_root", "/template_root"),
+        ],
+        "public-deployment-runbook" => vec![
+            (
+                "public_status_manifest_root",
+                "/public_status_manifest_root",
+            ),
+            (
+                "public_bootstrap_profile_root",
+                "/public_bootstrap_profile_root",
+            ),
+            (
+                "source_roots/run_checkpoint_root",
+                "/source_roots/run_checkpoint_root",
+            ),
+            ("step_set_root", "/step_set_root"),
+            (
+                "public_deployment_runbook_root",
+                "/public_deployment_runbook_root",
+            ),
+        ],
+        "public-launch-artifact-manifest" => vec![
+            (
+                "source_roots/public_status_manifest_root",
+                "/source_roots/public_status_manifest_root",
+            ),
+            (
+                "source_roots/public_launch_bundle_root",
+                "/source_roots/public_launch_bundle_root",
+            ),
+            (
+                "source_roots/run_checkpoint_root",
+                "/source_roots/run_checkpoint_root",
+            ),
+            ("artifact_set_root", "/artifact_set_root"),
+            (
+                "public_launch_artifact_manifest_root",
+                "/public_launch_artifact_manifest_root",
+            ),
+        ],
+        "public-launch-bundle" => vec![
+            (
+                "source_roots/public_status_manifest_root",
+                "/source_roots/public_status_manifest_root",
+            ),
+            (
+                "source_roots/public_bootstrap_profile_root",
+                "/source_roots/public_bootstrap_profile_root",
+            ),
+            (
+                "source_roots/run_checkpoint_root",
+                "/source_roots/run_checkpoint_root",
+            ),
+            ("public_launch_bundle_root", "/public_launch_bundle_root"),
+        ],
+        "public-launch-readiness-report" => vec![
+            (
+                "public_status_manifest_root",
+                "/public_status_manifest_root",
+            ),
+            ("public_launch_bundle_root", "/public_launch_bundle_root"),
+            (
+                "public_launch_package_file_set_root",
+                "/public_launch_package_file_set_root",
+            ),
+            (
+                "public_launch_readiness_artifact_root",
+                "/public_launch_readiness_artifact_root",
+            ),
+        ],
+        "release-approval-template" => vec![
+            (
+                "testnet_run_checkpoint_root",
+                "/testnet_run_checkpoint_root",
+            ),
+            (
+                "release_authority_registry_root",
+                "/release_authority_registry_root",
+            ),
+        ],
+        "public-deployment-evidence-template" => vec![
+            (
+                "public_status_manifest_root",
+                "/public_status_manifest_root",
+            ),
+            ("public_launch_bundle_root", "/public_launch_bundle_root"),
+            (
+                "public_launch_package_file_set_root",
+                "/public_launch_package_file_set_root",
+            ),
+            ("template_root", "/template_root"),
+        ],
+        "public-deployment-capture-plan" => vec![
+            (
+                "public_status_manifest_root",
+                "/public_status_manifest_root",
+            ),
+            ("public_launch_bundle_root", "/public_launch_bundle_root"),
+            (
+                "public_launch_artifact_manifest_root",
+                "/public_launch_artifact_manifest_root",
+            ),
+            ("capture_plan_root", "/capture_plan_root"),
+        ],
+        "public-capture-todo" => vec![
+            (
+                "public_status_manifest_root",
+                "/public_status_manifest_root",
+            ),
+            ("public_launch_bundle_root", "/public_launch_bundle_root"),
+            (
+                "public_launch_package_file_set_root",
+                "/public_launch_package_file_set_root",
+            ),
+            ("public_capture_todo_root", "/public_capture_todo_root"),
+        ],
+        _ => Vec::new(),
+    };
+    ensure_current_run_pointer_bindings(
+        actual,
+        expected,
+        &format!("public launch package artifact {file_name}"),
+        &bindings,
     )
 }
 
@@ -35510,7 +35687,7 @@ mod tests {
         .expect("write tampered public status");
         let error = verify_public_testnet_certification(&cert_dir_string, &summary)
             .expect_err("tampered nested package should fail verification");
-        assert!(error.contains("does not match this run") || error.contains("root mismatch"));
+        assert!(error.contains("latest_block_height mismatch"));
 
         let _ = fs::remove_dir_all(cert_dir);
     }
@@ -35578,7 +35755,7 @@ mod tests {
 
         let error = verify_public_launch_package(&package_dir_string, &summary)
             .expect_err("tampered package should fail verification");
-        assert!(error.contains("does not match this run") || error.contains("root mismatch"));
+        assert!(error.contains("latest_block_height mismatch"));
         let _ = fs::remove_dir_all(package_dir);
     }
 

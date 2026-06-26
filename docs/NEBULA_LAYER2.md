@@ -3273,7 +3273,8 @@ real XMR.
   When combined with the export step in the same runner invocation,
   `--verify-public-launch-package` pins the package schema/version identity,
   recomputes each package artifact and the package manifest root against the
-  current release-candidate summary, enforces the exact top-level package file set and package-level readiness summary, and
+  current release-candidate summary, checks nested artifact current-run
+  bindings before full artifact comparison, enforces the exact top-level package file set and package-level readiness summary, and
   fails on stale, tampered, swapped, cross-run, shape-tampered, or extra-file
   package directories before public evidence capture begins.
 - A public testnet certification export writes and verifies the rooted launch
