@@ -1605,6 +1605,7 @@ struct PublicLaunchRemediation {
     expected_evidence_root: String,
     failed_subchecks: Vec<String>,
     repair_roots: BTreeMap<String, String>,
+    expected_values: BTreeMap<String, String>,
     deferred_repair_root_subchecks: Vec<String>,
     next_steps_root: String,
     next_steps: Value,
@@ -8490,6 +8491,11 @@ fn public_launch_remediation_for_check(
     } else {
         BTreeMap::new()
     };
+    let expected_values = if check.id == "public-launch-deployment-attestation" {
+        public_deployment_expected_values(&summary.public_deployment, &failed_subchecks)
+    } else {
+        BTreeMap::new()
+    };
     let failed_subcheck_root = collection_root(
         "public-launch-remediation-failed-subchecks",
         failed_subchecks.clone(),
@@ -8503,6 +8509,19 @@ fn public_launch_remediation_for_check(
                     "public-launch-remediation-repair-root",
                     subcheck,
                     expected_root,
+                ])
+            })
+            .collect::<Vec<_>>(),
+    );
+    let expected_value_root = collection_root(
+        "public-launch-remediation-expected-values",
+        expected_values
+            .iter()
+            .map(|(subcheck, expected_value)| {
+                root(&[
+                    "public-launch-remediation-expected-value",
+                    subcheck,
+                    expected_value,
                 ])
             })
             .collect::<Vec<_>>(),
@@ -8543,6 +8562,7 @@ fn public_launch_remediation_for_check(
         &check.evidence_root,
         &failed_subcheck_root,
         &repair_root,
+        &expected_value_root,
         &deferred_repair_root,
         &next_steps_root,
         &commands_root,
@@ -8561,6 +8581,7 @@ fn public_launch_remediation_for_check(
         expected_evidence_root: check.evidence_root.clone(),
         failed_subchecks,
         repair_roots,
+        expected_values,
         deferred_repair_root_subchecks,
         next_steps_root,
         next_steps,
@@ -9019,6 +9040,95 @@ fn public_deployment_repair_roots(
         }
     }
     repair_roots
+}
+
+fn public_deployment_expected_values(
+    report: &PublicDeploymentReport,
+    failed_subchecks: &[String],
+) -> BTreeMap<String, String> {
+    let expected_kind = report
+        .expected_evidence_kind
+        .clone()
+        .unwrap_or_else(|| "nebula-public-deployment-attestation".to_string());
+    let expected_template_only = bool_str(report.expected_evidence_template_only.unwrap_or(false));
+    let expected_chain_id = report
+        .expected_evidence_chain_id
+        .clone()
+        .unwrap_or_else(|| CHAIN_ID.to_string());
+    let expected_version = report
+        .expected_evidence_version
+        .clone()
+        .unwrap_or_else(|| VERSION.to_string());
+    let expected_public_alpha_only =
+        bool_str(report.expected_evidence_public_alpha_only.unwrap_or(true));
+    let expected_custody_mode = report
+        .expected_evidence_custody_mode
+        .clone()
+        .unwrap_or_else(|| "no-mainnet-custody".to_string());
+    let expected_identity = [
+        format!(
+            "kind={};template_only={};chain_id={};version={};public_alpha_only={};custody_mode={}",
+            expected_kind,
+            expected_template_only,
+            expected_chain_id,
+            expected_version,
+            expected_public_alpha_only,
+            expected_custody_mode
+        ),
+        expected_kind,
+        expected_template_only.to_string(),
+        expected_chain_id,
+        expected_version,
+        expected_public_alpha_only.to_string(),
+        expected_custody_mode,
+    ];
+    public_deployment_identity_expected_values(failed_subchecks, &expected_identity)
+}
+
+fn public_deployment_static_expected_values(
+    failed_subchecks: &[String],
+) -> BTreeMap<String, String> {
+    let expected_identity = [
+        format!(
+            "kind={};template_only={};chain_id={};version={};public_alpha_only={};custody_mode={}",
+            "nebula-public-deployment-attestation",
+            bool_str(false),
+            CHAIN_ID,
+            VERSION,
+            bool_str(true),
+            "no-mainnet-custody"
+        ),
+        "nebula-public-deployment-attestation".to_string(),
+        bool_str(false).to_string(),
+        CHAIN_ID.to_string(),
+        VERSION.to_string(),
+        bool_str(true).to_string(),
+        "no-mainnet-custody".to_string(),
+    ];
+    public_deployment_identity_expected_values(failed_subchecks, &expected_identity)
+}
+
+fn public_deployment_identity_expected_values(
+    failed_subchecks: &[String],
+    expected_identity: &[String; 7],
+) -> BTreeMap<String, String> {
+    let failed = failed_subchecks
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    [
+        ("evidence_identity_bound", expected_identity[0].clone()),
+        ("evidence_kind_bound", expected_identity[1].clone()),
+        ("evidence_template_filled", expected_identity[2].clone()),
+        ("evidence_chain_id_bound", expected_identity[3].clone()),
+        ("evidence_version_bound", expected_identity[4].clone()),
+        ("evidence_public_alpha_only", expected_identity[5].clone()),
+        ("evidence_custody_mode_bound", expected_identity[6].clone()),
+    ]
+    .into_iter()
+    .filter(|(subcheck, _)| failed.contains(*subcheck))
+    .map(|(subcheck, expected_value)| (subcheck.to_string(), expected_value))
+    .collect()
 }
 
 fn public_deployment_failed_subchecks(report: &PublicDeploymentReport) -> Vec<String> {
@@ -21666,7 +21776,7 @@ fn public_launch_remediation_root_from_value(remediation: &Value) -> Result<Stri
     let failed_subchecks = required_nested_string_list(remediation, "failed_subchecks", label)?;
     let failed_subcheck_root = collection_root(
         "public-launch-remediation-failed-subchecks",
-        failed_subchecks,
+        failed_subchecks.clone(),
     );
     let repair_roots = remediation
         .get("repair_roots")
@@ -21685,6 +21795,39 @@ fn public_launch_remediation_root_from_value(remediation: &Value) -> Result<Stri
         })
         .collect::<Result<Vec<_>, String>>()?;
     let repair_root = collection_root("public-launch-remediation-repair-roots", repair_roots);
+    let expected_value_map = remediation
+        .get("expected_values")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "public launch remediation missing expected_values".to_string())?
+        .iter()
+        .map(|(subcheck, expected_value)| {
+            let expected_value = expected_value.as_str().ok_or_else(|| {
+                "public launch remediation expected value must be a string".to_string()
+            })?;
+            Ok((subcheck.to_string(), expected_value.to_string()))
+        })
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
+    if blocker_id == "public-launch-deployment-attestation" {
+        let expected_static_values = public_deployment_static_expected_values(&failed_subchecks);
+        for (subcheck, expected_value) in expected_static_values {
+            ensure(
+                expected_value_map.get(&subcheck) == Some(&expected_value),
+                &format!("public launch remediation expected value mismatch for {subcheck}"),
+            )?;
+        }
+    }
+    let expected_values = expected_value_map
+        .iter()
+        .map(|(subcheck, expected_value)| {
+            root(&[
+                "public-launch-remediation-expected-value",
+                subcheck,
+                expected_value,
+            ])
+        })
+        .collect::<Vec<_>>();
+    let expected_value_root =
+        collection_root("public-launch-remediation-expected-values", expected_values);
     let deferred_repair_root_subchecks =
         required_nested_string_list(remediation, "deferred_repair_root_subchecks", label)?;
     let deferred_repair_root = collection_root(
@@ -21703,6 +21846,7 @@ fn public_launch_remediation_root_from_value(remediation: &Value) -> Result<Stri
         required_nested_str(remediation, "expected_evidence_root", label)?,
         &failed_subcheck_root,
         &repair_root,
+        &expected_value_root,
         &deferred_repair_root,
         required_nested_str(remediation, "next_steps_root", label)?,
         required_nested_str(remediation, "commands_root", label)?,
@@ -35386,6 +35530,23 @@ mod tests {
     }
 
     #[test]
+    fn public_launch_readiness_report_rejects_tampered_remediation_expected_values() {
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        let mut value = public_launch_readiness_report_artifact(&summary);
+        value["public_launch_readiness"]["remediations"][0]["expected_values"]
+            ["evidence_version_bound"] = json!("wrong-version");
+        let error = ensure_public_launch_readiness_report_artifact_safe(&value)
+            .expect_err("tampered remediation expected values should fail safety checks");
+        assert!(error.contains(
+            "public launch remediation expected value mismatch for evidence_version_bound"
+        ));
+    }
+
+    #[test]
     fn public_launch_readiness_report_rejects_re_rooted_wrong_chain() {
         let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
             .expect("mainnet readiness should parse");
@@ -39316,6 +39477,25 @@ mod tests {
                 "missing failed subcheck {failed_subcheck}"
             );
         }
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("evidence_version_bound")
+                .map(String::as_str),
+            Some(VERSION)
+        );
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("evidence_public_alpha_only")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert!(remediation
+            .expected_values
+            .get("evidence_identity_bound")
+            .map(|value| value.contains("public_alpha_only=true"))
+            .unwrap_or(false));
         let _ = fs::remove_file(path);
     }
 
@@ -45545,6 +45725,48 @@ mod tests {
         assert_eq!(
             remediation.expected_evidence_root,
             "missing-public-deployment-evidence"
+        );
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("evidence_kind_bound")
+                .map(String::as_str),
+            Some("nebula-public-deployment-attestation")
+        );
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("evidence_template_filled")
+                .map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("evidence_chain_id_bound")
+                .map(String::as_str),
+            Some(CHAIN_ID)
+        );
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("evidence_version_bound")
+                .map(String::as_str),
+            Some(VERSION)
+        );
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("evidence_public_alpha_only")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            remediation
+                .expected_values
+                .get("evidence_custody_mode_bound")
+                .map(String::as_str),
+            Some("no-mainnet-custody")
         );
         assert!(remediation
             .failed_subchecks
