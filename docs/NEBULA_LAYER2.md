@@ -3504,8 +3504,8 @@ real XMR.
   structural and full failed-check lists, strict verifier status, the first
   nested verifier error, rooted command map, rooted next steps, and the rooted
   capture command sequence. CI can verify the audit report itself, including its
-  schema, chain, public-alpha identity, non-evidence boundary, root, command map,
-  and command sequence, against the capture and current release-candidate summary
+  schema, chain, public-alpha identity, non-evidence boundary, root, next steps,
+  command map, and command sequence, against the capture and current release-candidate summary
   to reject stale, tampered, cross-run, or capture-mismatched diagnostics, then run
   `--verify-public-deployment-capture` to dry-run the same assembler/verifier
   path and feed the resulting temporary attestation into

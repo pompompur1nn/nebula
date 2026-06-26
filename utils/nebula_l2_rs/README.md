@@ -670,8 +670,8 @@ top-level-complete capture still fails nested policy/probe/receipt validation,
 `strict_verifier_error` records the first assembler/verifier failure.
 `--verify-public-deployment-capture-audit path\to\capture-audit.json` uses the
 same `--audit-public-deployment-capture path\to\capture.json` source, pins the
-schema, chain, public-alpha identity, non-evidence boundary, command map, and
-command sequence, recomputes the audit and `capture_audit_root` against the
+schema, chain, public-alpha identity, non-evidence boundary, next steps,
+command map, and command sequence, recomputes the audit and `capture_audit_root` against the
 current release-candidate summary, and rejects stale, tampered, cross-run, or
 capture-mismatched audit reports before deployment CI trusts the diagnostic result.
 

@@ -9345,6 +9345,13 @@ fn public_launch_deployment_attestation_next_steps() -> Value {
     )
 }
 
+fn public_deployment_capture_audit_next_steps() -> Value {
+    public_deployment_capture_next_steps(
+        "Repair or fill capture.json until assembler_ready is true, then verify, assemble, and run the public launch gate against the resulting deployment attestation.",
+        true,
+    )
+}
+
 fn public_deployment_capture_next_steps_root(next_steps: &Value) -> String {
     let step_roots = next_steps
         .as_object()
@@ -11235,6 +11242,11 @@ fn verify_public_deployment_capture_audit(
         "public deployment capture audit",
         true,
     )?;
+    ensure_public_deployment_capture_next_steps(
+        &actual,
+        "public deployment capture audit",
+        public_deployment_capture_audit_next_steps(),
+    )?;
     let expected = public_deployment_capture_audit(capture_path, summary)?;
     ensure(
         actual == expected,
@@ -12155,10 +12167,7 @@ fn public_deployment_capture_audit(
     if structural_ready && !strict_verifier_passed {
         failed_checks.push("strict_public_deployment_verifier_passed".to_string());
     }
-    let next_steps = public_deployment_capture_next_steps(
-        "Repair or fill capture.json until assembler_ready is true, then verify, assemble, and run the public launch gate against the resulting deployment attestation.",
-        true,
-    );
+    let next_steps = public_deployment_capture_audit_next_steps();
     let next_steps_root = public_deployment_capture_next_steps_root(&next_steps);
     let command_sequence = public_deployment_capture_command_sequence();
     let command_sequence_root = public_deployment_capture_command_sequence_root(&command_sequence);
@@ -36093,6 +36102,29 @@ mod tests {
         let error = verify_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
             .expect_err("command-sequence tampered capture audit should fail verification");
         assert!(error.contains("command sequence mismatch"));
+
+        write_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
+            .expect("rewrite public deployment capture audit");
+        let mut audit: Value =
+            serde_json::from_slice(&fs::read(&audit_path).expect("read capture audit"))
+                .expect("capture audit json");
+        audit["next_steps"]["verify_public_launch"] =
+            json!("cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --json");
+        let next_steps = audit["next_steps"].clone();
+        audit["next_steps_root"] = json!(public_deployment_capture_next_steps_root(&next_steps));
+        if let Some(object) = audit.as_object_mut() {
+            object.remove("capture_audit_root");
+        }
+        let audit_root = value_root("public-deployment-capture-audit", &audit);
+        audit["capture_audit_root"] = json!(audit_root);
+        fs::write(
+            &audit_path,
+            serde_json::to_string_pretty(&audit).expect("capture audit json"),
+        )
+        .expect("write next-steps tampered capture audit");
+        let error = verify_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
+            .expect_err("next-steps tampered capture audit should fail verification");
+        assert!(error.contains("next_steps root mismatch"));
 
         write_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
             .expect("rewrite public deployment capture audit");
