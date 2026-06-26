@@ -11815,6 +11815,12 @@ fn public_testnet_certification_artifact(
     package_manifest: &Value,
     launch_report: &Value,
 ) -> Result<Value, String> {
+    ensure_public_launch_readiness_report_artifact_safe(launch_report)?;
+    let expected_launch_report = public_launch_readiness_report_artifact(summary);
+    ensure(
+        launch_report == &expected_launch_report,
+        "public testnet certification launch report does not match this run",
+    )?;
     let package_file_set_root = required_root(package_manifest, "package_file_set_root")?;
     let package_manifest_root = required_root(package_manifest, "package_manifest_root")?;
     let package_release_approval_template_root =
@@ -36142,6 +36148,46 @@ mod tests {
             .join("nebula-release-authority-registry-template.json")
             .exists());
         let _ = fs::remove_dir_all(cert_dir);
+    }
+
+    #[test]
+    fn public_testnet_certification_artifact_rejects_stale_launch_report() {
+        let counter = TEST_FILE_COUNTER.fetch_add(1, AtomicOrdering::SeqCst);
+        let package_dir = env::temp_dir().join(format!(
+            "nebula-cert-stale-launch-report-{}",
+            root(&["test-cert-stale-launch-report", &counter.to_string()])
+        ));
+        let package_dir_string = package_dir.to_string_lossy().into_owned();
+        let cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness cli should parse");
+        let mut testnet = Testnet::new(cli);
+        testnet.run().expect("testnet run");
+        let summary = testnet.summary(Vec::new());
+        write_public_launch_package(&package_dir_string, &summary)
+            .expect("write public launch package");
+        let package_manifest: Value = serde_json::from_slice(
+            &fs::read(package_dir.join("nebula-public-launch-package.json"))
+                .expect("read package manifest"),
+        )
+        .expect("package manifest json");
+
+        let mut launch_report = public_launch_readiness_report_artifact(&summary);
+        launch_report["public_deployment_evidence_root"] =
+            json!(root(&["test-stale-launch-report", "evidence-root"]));
+        if let Some(object) = launch_report.as_object_mut() {
+            object.remove("public_launch_readiness_artifact_root");
+        }
+        let launch_report_root =
+            value_root("public-launch-readiness-report-artifact", &launch_report);
+        launch_report["public_launch_readiness_artifact_root"] = json!(launch_report_root);
+
+        let error =
+            public_testnet_certification_artifact(&summary, &package_manifest, &launch_report)
+                .expect_err("stale launch report should not mint certification");
+        assert!(
+            error.contains("public testnet certification launch report does not match this run")
+        );
+        let _ = fs::remove_dir_all(package_dir);
     }
 
     #[test]
