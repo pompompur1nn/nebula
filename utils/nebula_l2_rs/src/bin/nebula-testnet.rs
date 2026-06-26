@@ -9681,6 +9681,9 @@ fn public_capture_todo_artifact(summary: &TestnetSummary) -> Value {
     todo["required_public_surface_probe_roles"] = json!(REQUIRED_PUBLIC_SURFACE_PROBE_ROLES);
     todo["capture_contract"] = capture_plan["capture_contract"].clone();
     todo["deployment_preflight"] = capture_plan["deployment_preflight"].clone();
+    let next_steps = public_launch_deployment_attestation_next_steps();
+    todo["next_steps_root"] = json!(public_deployment_capture_next_steps_root(&next_steps));
+    todo["next_steps"] = next_steps;
     let commands = public_deployment_capture_commands();
     todo["commands_root"] = json!(public_deployment_capture_commands_root(&commands));
     todo["commands"] = commands;
@@ -9736,6 +9739,11 @@ fn ensure_public_capture_todo_artifact(value: &Value) -> Result<(), String> {
     ensure(
         value.get("custody_mode").and_then(Value::as_str) == Some("no-mainnet-custody"),
         "public capture todo custody_mode mismatch",
+    )?;
+    ensure_public_deployment_capture_next_steps(
+        value,
+        "public capture todo",
+        public_launch_deployment_attestation_next_steps(),
     )?;
     ensure_public_deployment_capture_command_sequence(value, "public capture todo", true)?;
     for (field, expected_len) in [
@@ -33571,6 +33579,11 @@ mod tests {
         let error = ensure_public_capture_todo_artifact(&command_tampered)
             .expect_err("command-tampered capture todo should fail");
         assert!(error.contains("command map mismatch"));
+        let mut next_steps_tampered = value.clone();
+        next_steps_tampered["next_steps"]["verify_public_launch"] = json!("tampered-command");
+        let error = ensure_public_capture_todo_artifact(&next_steps_tampered)
+            .expect_err("next-steps-tampered capture todo should fail");
+        assert!(error.contains("next_steps mismatch"));
         let mut version_tampered = value.clone();
         version_tampered["version"] = json!("wrong-version");
         let mut rootless_version_tampered = version_tampered.clone();
@@ -33629,6 +33642,34 @@ mod tests {
         assert!(
             error.contains("required_endpoint_fields") || error.contains("does not match this run")
         );
+
+        write_public_capture_todo(&path_string, &summary).expect("rewrite public capture todo");
+        let mut next_steps_tampered: Value =
+            serde_json::from_slice(&fs::read(&path).expect("read capture todo"))
+                .expect("capture todo json");
+        next_steps_tampered["next_steps"]["verify_public_launch"] =
+            json!("cargo run --manifest-path utils/nebula_l2_rs/testnet_runner/Cargo.toml -- --mainnet-readiness --json");
+        let next_steps = next_steps_tampered["next_steps"].clone();
+        next_steps_tampered["next_steps_root"] =
+            json!(public_deployment_capture_next_steps_root(&next_steps));
+        let mut rootless_next_steps_tampered = next_steps_tampered.clone();
+        rootless_next_steps_tampered
+            .as_object_mut()
+            .expect("next-steps-tampered todo object")
+            .remove("public_capture_todo_root");
+        next_steps_tampered["public_capture_todo_root"] = json!(value_root(
+            "public-capture-todo",
+            &rootless_next_steps_tampered
+        ));
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&next_steps_tampered)
+                .expect("next-steps tampered todo json"),
+        )
+        .expect("write next-steps tampered capture todo");
+        let error = verify_public_capture_todo(&path_string, &summary)
+            .expect_err("next-steps tampered capture todo should fail");
+        assert!(error.contains("next_steps root mismatch"));
 
         write_public_capture_todo(&path_string, &summary).expect("rewrite public capture todo");
         let other_cli = parse_cli(vec![
@@ -33878,6 +33919,18 @@ mod tests {
             .as_str()
             .expect("capture todo verify command")
             .contains("--fail-on-public-launch-gaps"));
+        assert_eq!(
+            capture_todo["next_steps"],
+            public_launch_deployment_attestation_next_steps()
+        );
+        assert!(capture_todo["next_steps"]["write_capture_scaffold"]
+            .as_str()
+            .expect("capture todo scaffold next step")
+            .contains("--public-deployment-capture-scaffold-package"));
+        assert_eq!(
+            capture_todo["next_steps_root"],
+            public_deployment_capture_next_steps_root(&capture_todo["next_steps"])
+        );
         assert_eq!(
             capture_todo["commands_root"],
             public_deployment_capture_commands_root(&capture_todo["commands"])

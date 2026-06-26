@@ -480,7 +480,8 @@ machine-readable work order for the exact endpoint, TLS, probe, observer,
 operator-registry, runbook, preflight, freshness, package, and
 no-mainnet-custody fields deployment CI must capture. It also carries a
 top-level deferred repair-root subcheck list/count/root for the self-referential
-package handoff, package manifest, and readiness artifact roots. The todo artifact is
+package handoff, package manifest, and readiness artifact roots, plus canonical
+rooted `next_steps`, command map, and command sequence. The todo artifact is
 operator-fill-required, not public deployment evidence, and not custody
 approval.
 
@@ -491,7 +492,7 @@ contract without unpacking the full launch package. Its root guard recomputes
 `public_capture_todo_root` before writing.
 `--verify-public-capture-todo path\to\todo.json` also requires
 `--mainnet-readiness`, pins the schema, chain, version, public-alpha identity,
-non-evidence boundary, rooted command map, command sequence, and todo root,
+non-evidence boundary, rooted `next_steps`, command map, command sequence, and todo root,
 recomputes the expected todo for the current release-candidate summary, and
 fails on stale, tampered, or cross-run work orders before public evidence
 capture starts.

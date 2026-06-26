@@ -3304,14 +3304,15 @@ real XMR.
   endpoint, TLS, probe, observer, operator-registry, runbook-step, freshness,
   no-mainnet-custody inputs, plus a top-level deferred repair-root subcheck
   list/count/root for self-referential package handoff, package manifest, and
-  readiness artifact roots. It is required before public capture,
+  readiness artifact roots, and canonical rooted `next_steps`, command map, and
+  command sequence. It is required before public capture,
   operator-fill-required, and explicitly not deployment evidence or custody
   approval; it avoids embedding the package manifest root to keep package roots
   acyclic. The same rooted todo can be written standalone with
   `--write-public-capture-todo` and verified with
   `--verify-public-capture-todo` for deployment CI that does not need the full
   package directory. The verifier pins the schema, chain, version, public-alpha
-  identity, non-evidence boundary, rooted command map, command sequence, and
+  identity, non-evidence boundary, rooted `next_steps`, command map, command sequence, and
   todo root, then recomputes the current run's todo and rejects stale, tampered,
   or cross-run work orders.
 - A local operator-only public launch readiness report export gives CI a
