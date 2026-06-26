@@ -1,0 +1,57 @@
+name: nebula-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  public-testnet:
+    name: Nebula public testnet checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            utils/nebula_l2_rs/target
+          key: nebula-cargo-${{ runner.os }}-${{ hashFiles('utils/nebula_l2_rs/Cargo.lock') }}
+          restore-keys: nebula-cargo-${{ runner.os }}-
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path utils/nebula_l2_rs/Cargo.toml -- --check
+
+      - name: Build Nebula testnet binary
+        run: cargo build --manifest-path utils/nebula_l2_rs/Cargo.toml --bin nebula-testnet
+
+      - name: Run public launch test suite
+        run: cargo test --manifest-path utils/nebula_l2_rs/Cargo.toml public_launch -- --test-threads=1
+
+      - name: Check public launch readiness contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(cargo run --manifest-path utils/nebula_l2_rs/Cargo.toml --bin nebula-testnet -- --mainnet-readiness --json)"
+          NEBULA_READINESS_JSON="$output" python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          payload = json.loads(os.environ["NEBULA_READINESS_JSON"])
+          acceptance = payload["acceptance"]
+          readiness = payload["public_launch_readiness"]
+          assert acceptance["testnet_ready"] is True
+          assert readiness["public_launch_ready"] is False
+          assert readiness["level"] == "public-launch-blocked"
+          assert readiness["blocking_gaps"] == ["public-launch-deployment-attestation"]
+          assert readiness["remediation_root"]
+          PY
+
+      - name: Verify Nebula guide mirror
+        run: cmp docs/NEBULA_LAYER2.md README.md

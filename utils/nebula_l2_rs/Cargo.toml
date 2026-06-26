@@ -2,7 +2,7 @@
 name = "nebula_l2_rs"
 version = "0.1.0"
 edition = "2021"
-license = "BSD-3-Clause"
+license-file = "../../LICENSE"
 publish = false
 
 [dependencies]
