@@ -374,6 +374,22 @@ const PUBLIC_DEPLOYMENT_EVIDENCE_TOP_LEVEL_FIELDS: &[&str] = &[
     "mainnet_custody_disabled",
     "placeholders_absent",
 ];
+const PUBLIC_TLS_ENDPOINT_PIN_FIELDS: &[&str] = &[
+    "endpoint_role",
+    "url",
+    "spki_pin_root",
+    "certificate_chain_root",
+    "issuer_root",
+    "tls_version",
+    "hostname_verified",
+    "spki_pin_matched",
+    "certificate_not_expired",
+    "observed_at_unix_ms",
+    "chain_id",
+    "public_launch_bundle_root",
+    "deployment_run_id",
+    "pin_record_root",
+];
 const PUBLIC_SURFACE_PROBE_FIELDS: &[&str] = &[
     "status",
     "chain_id",
@@ -29049,6 +29065,11 @@ fn validate_public_tls_endpoint_pins(
     let mut spki_pin_roots = Vec::new();
     let mut pin_record_roots = Vec::new();
     for pin in pins {
+        ensure_allowed_object_fields(
+            pin,
+            PUBLIC_TLS_ENDPOINT_PIN_FIELDS,
+            "public deployment TLS endpoint pin",
+        )?;
         ensure(
             required_str(pin, "chain_id")? == CHAIN_ID,
             "public deployment TLS pin chain_id mismatch",
@@ -44103,6 +44124,29 @@ mod tests {
             .expect_err("extra bootstrap operator signature field should be rejected");
         assert!(error.contains(
             "public deployment bootstrap operator signature verification contains unexpected field 'operator_note'"
+        ));
+        let _ = fs::remove_file(bad_path);
+    }
+
+    #[test]
+    fn public_deployment_evidence_rejects_extra_tls_endpoint_pin_field() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        let mut value: Value =
+            serde_json::from_str(&valid_public_deployment_evidence(&base_summary))
+                .expect("deployment evidence json");
+        value["tls_endpoint_pins"][0]["operator_note"] =
+            json!("uncommitted TLS pin side-band claim");
+        let bad_path = write_public_deployment_evidence(
+            &serde_json::to_string_pretty(&value).expect("bad evidence json"),
+        );
+        let error = load_public_deployment_evidence(&bad_path)
+            .expect_err("extra TLS endpoint pin field should be rejected");
+        assert!(error.contains(
+            "public deployment TLS endpoint pin contains unexpected field 'operator_note'"
         ));
         let _ = fs::remove_file(bad_path);
     }
