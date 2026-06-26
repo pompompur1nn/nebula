@@ -3263,8 +3263,8 @@ real XMR.
   non-evidence/non-custody flags, package `artifact_set_root`, package
   `package_file_set_root`, release-candidate manifest id, launch level,
   ready/blocker counts, readiness report/artifact roots, no-mainnet-custody
-  boundary, rooted `next_steps` that include package-bound capture scaffold
-  creation, and rooted capture command sequence so
+  boundary, rooted command map, rooted `next_steps` that include package-bound
+  capture scaffold creation, and rooted capture command sequence so
   deployment automation can reject stale, swapped, cross-run, extra, or
   metadata-tampered handoff files before public endpoint evidence is assembled.
   When combined with the export step in the same runner invocation,
@@ -3287,7 +3287,7 @@ real XMR.
   and its capture-todo root binding, blocking gaps, rooted remediation commands
   for capture scaffold creation, capture audit, audit verification, strict
   capture verification, assembly, and launch verification, a rooted command
-  sequence for that full scaffold-to-launch order, and whether
+  map plus rooted command sequence for that full scaffold-to-launch order, and whether
   external capture is still required in
   `nebula-public-testnet-certification.json`. It is deliberately
   operator-local and remains blocked until the filled schema v5 deployment
@@ -3494,8 +3494,8 @@ real XMR.
   keys, current capture-plan and package file-set root mismatches, structural
   readiness, machine-readable
   structural and full failed-check lists, strict verifier status, the first
-  nested verifier error, rooted next steps, and the rooted capture command
-  sequence. CI can verify the audit report itself against the capture and
+  nested verifier error, rooted command map, rooted next steps, and the rooted
+  capture command sequence. CI can verify the audit report itself against the capture and
   current release-candidate summary to reject stale, tampered, cross-run, or
   capture-mismatched diagnostics, then run
   `--verify-public-deployment-capture` to dry-run the same assembler/verifier

@@ -9279,6 +9279,25 @@ fn public_deployment_capture_commands() -> Value {
     })
 }
 
+fn public_deployment_capture_commands_root(commands: &Value) -> String {
+    let command_roots = commands
+        .as_object()
+        .map(|commands| {
+            commands
+                .iter()
+                .map(|(key, value)| {
+                    root(&[
+                        "public-deployment-capture-command",
+                        key,
+                        value.as_str().unwrap_or("missing-capture-command"),
+                    ])
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    collection_root("public-deployment-capture-commands", command_roots)
+}
+
 fn public_deployment_capture_next_steps(
     capture_instructions: &str,
     include_release_authority_handoff: bool,
@@ -9429,6 +9448,7 @@ fn public_launch_package_manifest_root(
     public_launch_readiness_report_root: &str,
     public_launch_readiness_artifact_root: &str,
     no_mainnet_custody: bool,
+    commands_root: &str,
     next_steps_root: &str,
     command_sequence_root: &str,
 ) -> String {
@@ -9452,6 +9472,7 @@ fn public_launch_package_manifest_root(
         public_launch_readiness_report_root,
         public_launch_readiness_artifact_root,
         bool_str(no_mainnet_custody),
+        commands_root,
         next_steps_root,
         command_sequence_root,
     ])
@@ -9482,9 +9503,18 @@ fn ensure_public_deployment_capture_command_sequence(
     require_command_map: bool,
 ) -> Result<(), String> {
     if require_command_map {
+        let expected_commands = public_deployment_capture_commands();
+        let expected_commands_root = public_deployment_capture_commands_root(&expected_commands);
         ensure(
-            value.get("commands") == Some(&public_deployment_capture_commands()),
+            value.get("commands") == Some(&expected_commands),
             &format!("{artifact_label} command map mismatch"),
+        )?;
+        ensure(
+            value
+                .get("commands_root")
+                .and_then(Value::as_str)
+                == Some(expected_commands_root.as_str()),
+            &format!("{artifact_label} commands root mismatch"),
         )?;
     }
     let expected_sequence = public_deployment_capture_command_sequence();
@@ -9617,7 +9647,9 @@ fn public_capture_todo_artifact(summary: &TestnetSummary) -> Value {
     todo["required_public_surface_probe_roles"] = json!(REQUIRED_PUBLIC_SURFACE_PROBE_ROLES);
     todo["capture_contract"] = capture_plan["capture_contract"].clone();
     todo["deployment_preflight"] = capture_plan["deployment_preflight"].clone();
-    todo["commands"] = public_deployment_capture_commands();
+    let commands = public_deployment_capture_commands();
+    todo["commands_root"] = json!(public_deployment_capture_commands_root(&commands));
+    todo["commands"] = commands;
     let command_sequence = public_deployment_capture_command_sequence();
     todo["command_sequence_root"] = json!(public_deployment_capture_command_sequence_root(
         &command_sequence
@@ -9866,6 +9898,8 @@ fn write_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<(
     let command_sequence = public_deployment_capture_command_sequence();
     let command_sequence_root =
         public_deployment_capture_command_sequence_root(&command_sequence);
+    let commands = public_deployment_capture_commands();
+    let commands_root = public_deployment_capture_commands_root(&commands);
     let package_manifest_root = public_launch_package_manifest_root(
         &summary.manifest_id,
         &summary.testnet_id,
@@ -9878,6 +9912,7 @@ fn write_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<(
         &summary.public_launch_readiness.report_root,
         &public_launch_readiness_artifact_root,
         summary.acceptance.no_mainnet_custody,
+        &commands_root,
         &next_steps_root,
         &command_sequence_root,
     );
@@ -9904,6 +9939,8 @@ fn write_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<(
         "artifact_set_root": artifact_set_root,
         "package_file_set_root": package_file_set_root,
         "package_manifest_root": package_manifest_root,
+        "commands_root": commands_root,
+        "commands": commands,
         "next_steps_root": next_steps_root,
         "next_steps": next_steps,
         "command_sequence_root": command_sequence_root,
@@ -9970,7 +10007,7 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
     ensure_public_deployment_capture_command_sequence(
         &manifest,
         "public launch package",
-        false,
+        true,
     )?;
     ensure_public_deployment_capture_next_steps(
         &manifest,
@@ -10120,6 +10157,8 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
     let expected_command_sequence = public_deployment_capture_command_sequence();
     let expected_command_sequence_root =
         public_deployment_capture_command_sequence_root(&expected_command_sequence);
+    let expected_commands = public_deployment_capture_commands();
+    let expected_commands_root = public_deployment_capture_commands_root(&expected_commands);
     let expected_package_manifest_root = public_launch_package_manifest_root(
         &summary.manifest_id,
         &summary.testnet_id,
@@ -10132,6 +10171,7 @@ fn verify_public_launch_package(path: &str, summary: &TestnetSummary) -> Result<
         &summary.public_launch_readiness.report_root,
         &expected_readiness_artifact_root,
         summary.acceptance.no_mainnet_custody,
+        &expected_commands_root,
         &expected_next_steps_root,
         &expected_command_sequence_root,
     );
@@ -10230,7 +10270,7 @@ fn verify_public_testnet_certification(path: &str, summary: &TestnetSummary) -> 
     ensure_public_deployment_capture_command_sequence(
         &actual_certification,
         "public testnet certification",
-        false,
+        true,
     )?;
     ensure_public_deployment_capture_next_steps(
         &actual_certification,
@@ -10361,6 +10401,8 @@ fn public_testnet_certification_artifact(
     let command_sequence = public_deployment_capture_command_sequence();
     let command_sequence_root =
         public_deployment_capture_command_sequence_root(&command_sequence);
+    let commands = public_deployment_capture_commands();
+    let commands_root = public_deployment_capture_commands_root(&commands);
     let certification_file_set_root =
         public_testnet_certification_file_set_root(&summary.manifest_id, &summary.testnet_id);
     let mut certification = json!({
@@ -10422,6 +10464,8 @@ fn public_testnet_certification_artifact(
         "public_capture_todo_root": public_capture_todo_root,
         "package_public_capture_todo_root": package_public_capture_todo_root,
         "public_capture_todo_root_bound_to_package": public_capture_todo_root_bound_to_package,
+        "commands_root": commands_root,
+        "commands": commands,
         "next_steps_root": next_steps_root,
         "next_steps": next_steps,
         "command_sequence_root": command_sequence_root,
@@ -10720,6 +10764,8 @@ fn public_launch_package_manifest_root_for_summary(summary: &TestnetSummary) -> 
     let command_sequence = public_deployment_capture_command_sequence();
     let command_sequence_root =
         public_deployment_capture_command_sequence_root(&command_sequence);
+    let commands = public_deployment_capture_commands();
+    let commands_root = public_deployment_capture_commands_root(&commands);
     public_launch_package_manifest_root(
         &handoff_summary.manifest_id,
         &handoff_summary.testnet_id,
@@ -10732,6 +10778,7 @@ fn public_launch_package_manifest_root_for_summary(summary: &TestnetSummary) -> 
         &handoff_summary.public_launch_readiness.report_root,
         &public_launch_readiness_artifact_root,
         handoff_summary.acceptance.no_mainnet_custody,
+        &commands_root,
         &next_steps_root,
         &command_sequence_root,
     )
@@ -11099,6 +11146,11 @@ fn verify_public_deployment_capture_audit(
     ensure(
         value_root("public-deployment-capture-audit", &rooted_actual) == actual_root,
         "public deployment capture audit root mismatch",
+    )?;
+    ensure_public_deployment_capture_command_sequence(
+        &actual,
+        "public deployment capture audit",
+        true,
     )?;
     let expected = public_deployment_capture_audit(capture_path, summary)?;
     ensure(
@@ -11981,6 +12033,8 @@ fn public_deployment_capture_audit(
     let next_steps_root = public_deployment_capture_next_steps_root(&next_steps);
     let command_sequence = public_deployment_capture_command_sequence();
     let command_sequence_root = public_deployment_capture_command_sequence_root(&command_sequence);
+    let commands = public_deployment_capture_commands();
+    let commands_root = public_deployment_capture_commands_root(&commands);
     let mut audit = json!({
         "kind": "nebula-public-deployment-capture-audit",
         "schema_version": 1,
@@ -12028,6 +12082,8 @@ fn public_deployment_capture_audit(
         "assembler_ready": assembler_ready,
         "failed_check_count": failed_checks.len(),
         "failed_checks": failed_checks,
+        "commands_root": commands_root,
+        "commands": commands,
         "next_steps_root": next_steps_root,
         "next_steps": next_steps,
         "command_sequence_root": command_sequence_root,
@@ -33256,6 +33312,10 @@ mod tests {
             .expect("capture todo verify command")
             .contains("--fail-on-public-launch-gaps"));
         assert_eq!(
+            capture_todo["commands_root"],
+            public_deployment_capture_commands_root(&capture_todo["commands"])
+        );
+        assert_eq!(
             capture_todo["command_sequence"],
             public_deployment_capture_command_sequence()
         );
@@ -33322,6 +33382,11 @@ mod tests {
             manifest["next_steps_root"],
             public_deployment_capture_next_steps_root(&manifest["next_steps"])
         );
+        assert_eq!(manifest["commands"], public_deployment_capture_commands());
+        assert_eq!(
+            manifest["commands_root"],
+            public_deployment_capture_commands_root(&manifest["commands"])
+        );
         assert_eq!(
             manifest["command_sequence"],
             public_deployment_capture_command_sequence()
@@ -33370,6 +33435,7 @@ mod tests {
                 .as_str()
                 .expect("readiness artifact root"),
             bool_str(summary.acceptance.no_mainnet_custody),
+            manifest["commands_root"].as_str().expect("commands root"),
             manifest["next_steps_root"].as_str().expect("next steps root"),
             manifest["command_sequence_root"]
                 .as_str()
@@ -33520,6 +33586,11 @@ mod tests {
                 "Run write_capture_scaffold from nebula-public-launch-package, then replace capture.json placeholders with captured public endpoint, TLS, probe, observer, operator-registry, freshness, preflight receipt, runbook receipt, and evidence-root evidence.",
                 true,
             )
+        );
+        assert_eq!(certification["commands"], public_deployment_capture_commands());
+        assert_eq!(
+            certification["commands_root"],
+            public_deployment_capture_commands_root(&certification["commands"])
         );
         assert_eq!(
             certification["next_steps_root"],
@@ -35332,7 +35403,7 @@ mod tests {
         .expect("write command-sequence tampered capture audit");
         let error = verify_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
             .expect_err("command-sequence tampered capture audit should fail verification");
-        assert!(error.contains("does not match this capture and run"));
+        assert!(error.contains("command sequence mismatch"));
 
         write_public_deployment_capture_audit(&scaffold_path, &audit_path, &summary)
             .expect("rewrite public deployment capture audit");
@@ -36972,6 +37043,11 @@ mod tests {
         assert_eq!(
             audit["next_steps_root"],
             public_deployment_capture_next_steps_root(&audit["next_steps"])
+        );
+        assert_eq!(audit["commands"], public_deployment_capture_commands());
+        assert_eq!(
+            audit["commands_root"],
+            public_deployment_capture_commands_root(&audit["commands"])
         );
         assert!(audit["next_steps"]["verify_capture"]
             .as_str()

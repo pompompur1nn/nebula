@@ -463,9 +463,9 @@ required-before-capture flag, operator-fill flag, and
 non-evidence/non-custody flags under an `artifact_set_root`, plus a
 `package_file_set_root` over the exact ordered top-level file list. It also
 binds the package-level launch status, blocker/remediation counts, readiness
-report/artifact roots, rooted `next_steps`, and the rooted capture command
-sequence so deployment automation can detect stale, swapped, cross-run, extra,
-or metadata-tampered files before filling public probe evidence.
+report/artifact roots, rooted command map, rooted `next_steps`, and the rooted
+capture command sequence so deployment automation can detect stale, swapped,
+cross-run, extra, or metadata-tampered files before filling public probe evidence.
 `--verify-public-launch-package path\to\package-dir` reruns those checks against
 the current release-candidate summary, so CI should combine it with the export
 step for the same runner invocation. It recomputes every artifact and package
@@ -508,8 +508,9 @@ capture-contract root, binding booleans for those capture handoff artifacts,
 the deferred repair-root subcheck list/count/root and its capture-todo root
 binding, remediations, whether external capture is still required, and the
 exact package-bound scaffold, capture-audit, audit-verification, strict
-capture-verification, assemble, and launch-gate commands plus rooted next steps
-and a rooted command sequence for that full scaffold-to-launch order.
+capture-verification, assemble, and launch-gate commands plus a rooted command
+map, rooted next steps, and a rooted command sequence for that full
+scaffold-to-launch order.
 The certification artifact is
 operator-local, not public deployment evidence and not mainnet custody approval;
 it truthfully remains `public-launch-blocked` until a filled schema v5
@@ -653,7 +654,7 @@ capture-plan, capture-contract, evidence-template, and preflight roots, the
 expected package file-set root, expected package handoff root, package
 file-set/handoff root matches, and
 `structural_failed_checks`/`failed_checks` arrays with counts for CI routing,
-rooted `next_steps`, the rooted capture command sequence, and an
+rooted command map, rooted `next_steps`, the rooted capture command sequence, and an
 `assembler_ready` boolean. It is diagnostic only:
 `usable_as_public_deployment_evidence` is false, so it helps deployment CI
 repair incomplete captures without clearing the public launch gate. The audit
