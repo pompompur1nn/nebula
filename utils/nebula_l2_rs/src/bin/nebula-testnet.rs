@@ -6142,6 +6142,7 @@ impl Testnet {
             &summary.public_bootstrap_profile.report_root,
             &evidence.rate_limit_policy_root,
             &summary.public_bootstrap_profile.rate_limit_policy_root,
+            &summary.finality_latency_profile.report_root,
             &evidence.tls_spki_pin_root,
             expected_tls_spki_pin_root
                 .as_deref()
@@ -38715,6 +38716,58 @@ mod tests {
         assert!(remediation
             .failed_subchecks
             .contains(&"public_bootstrap_profile_passed".to_string()));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn public_deployment_report_binds_failed_finality_latency_profile_root() {
+        let base_cli = parse_cli(vec!["--mainnet-readiness".to_string()])
+            .expect("mainnet readiness should parse");
+        let mut base_testnet = Testnet::new(base_cli);
+        base_testnet.run().expect("base testnet run");
+        let base_summary = base_testnet.summary(Vec::new());
+        assert!(base_summary.finality_latency_profile.passed);
+        let path =
+            write_public_deployment_evidence(&valid_public_deployment_evidence(&base_summary));
+        let evidence = load_public_deployment_evidence(&path).expect("public deployment evidence");
+        let target = u128::from(base_testnet.cli.target_finality_ms) * 1_000;
+
+        base_testnet.local_quorum_certificate_latency_micros[0] = target;
+        base_testnet.cli.public_deployment_evidence = Some(evidence.clone());
+        let slow_summary = base_testnet.summary(Vec::new());
+        assert!(!slow_summary.finality_latency_profile.passed);
+        assert!(!slow_summary.public_deployment.passed);
+        assert!(!slow_summary.public_deployment.finality_latency_profile_passed);
+        assert_eq!(
+            slow_summary
+                .public_deployment
+                .finality_latency_profile_report_root
+                .as_deref(),
+            Some(slow_summary.finality_latency_profile.report_root.as_str())
+        );
+
+        base_testnet.local_quorum_certificate_latency_micros[1] = target;
+        base_testnet.cli.public_deployment_evidence = Some(evidence);
+        let slower_summary = base_testnet.summary(Vec::new());
+        assert!(!slower_summary.finality_latency_profile.passed);
+        assert!(!slower_summary.public_deployment.finality_latency_profile_passed);
+        assert_ne!(
+            slow_summary.finality_latency_profile.report_root,
+            slower_summary.finality_latency_profile.report_root
+        );
+        assert_ne!(
+            slow_summary.public_deployment.report_root,
+            slower_summary.public_deployment.report_root
+        );
+        let remediation = slow_summary
+            .public_launch_readiness
+            .remediations
+            .iter()
+            .find(|remediation| remediation.blocker_id == "public-launch-deployment-attestation")
+            .expect("deployment remediation");
+        assert!(remediation
+            .failed_subchecks
+            .contains(&"finality_latency_profile_passed".to_string()));
         let _ = fs::remove_file(path);
     }
 

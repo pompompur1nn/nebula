@@ -737,8 +737,9 @@ handoff, require the embedded `release_approval_template_root` and
 `release_authority_registry_template_root` to match the release handoff
 templates in the verified package, seal the embedded public bootstrap profile
 root, profile report root, and rate-limit policy root against the current
-bootstrap profile in the report root, and require the embedded preflight receipt
-root, phase-set root, and phase count to match the completed receipt body. Schema v5 also requires the embedded
+bootstrap profile in the report root, seal the local finality latency profile
+report root, and require the embedded preflight receipt root, phase-set root,
+and phase count to match the completed receipt body. Schema v5 also requires the embedded
 public deployment runbook root, step-set root, runbook receipt root,
 step-receipt-set root, and step receipt count to match the completed runbook
 receipt body and the current generated runbook. A self-consistent attestation
