@@ -897,7 +897,7 @@ includes `public_launch_readiness` with check roots, blocker ids, machine-action
 `public-launch-blocked` level. Each remediation names the stable expected
 artifact id/path, expected artifact, remediation kind, relevant command,
 expected evidence root, granular failed subchecks, root-specific `repair_roots`
-for failed capture/preflight/package file-set/runbook receipt/status/bootstrap topology and policy bindings, deferred
+for failed capture/preflight/package file-set/runbook receipt/status/bootstrap topology and policy bindings, bootstrap operator-registry/signature, node-probe, P2P endpoint-set, and status-page endpoint-set repair roots, deferred
 self-referential package handoff/manifest/readiness root subchecks, privacy
 classification, and whether external deployment capture is required.
 Deployment-attestation remediations
