@@ -31,6 +31,7 @@ pub const VALIDATOR_REWARD_ACCOUNT_PREFIX: &str = "validator:";
 pub const RUNTIME_SNAPSHOT_FILE: &str = "nebula-runtime-snapshot.json";
 pub const RUNTIME_SNAPSHOT_VERSION: u32 = 9;
 pub const DEFAULT_PEER_SYNC_MS: u64 = 100;
+pub const DEFAULT_SYNC_PEER_QUORUM: usize = 1;
 pub const DEFAULT_MAX_REQUEST_BYTES: usize = 1_048_576;
 pub const DEFAULT_MAX_REQUESTS_PER_MINUTE: u32 = 600;
 const RPC_RATE_LIMIT_WINDOW_MS: u128 = 60_000;
@@ -43,6 +44,7 @@ pub struct RuntimeNodeOptions {
     pub bootstrap_rpc_url: Option<String>,
     pub sync_rpc_url: Option<String>,
     pub sync_rpc_urls: Vec<String>,
+    pub sync_peer_quorum: usize,
     pub sequencer_secret_key_hex: Option<String>,
     pub admin_token: Option<String>,
     pub max_request_bytes: usize,
@@ -56,6 +58,7 @@ impl Default for RuntimeNodeOptions {
             bootstrap_rpc_url: None,
             sync_rpc_url: None,
             sync_rpc_urls: Vec::new(),
+            sync_peer_quorum: DEFAULT_SYNC_PEER_QUORUM,
             sequencer_secret_key_hex: None,
             admin_token: None,
             max_request_bytes: DEFAULT_MAX_REQUEST_BYTES,
@@ -326,6 +329,10 @@ impl RuntimeSnapshot {
     pub fn latest_height(&self) -> u64 {
         self.blocks.last().map(|block| block.height).unwrap_or(0)
     }
+
+    pub fn latest_block_hash(&self) -> Option<&str> {
+        self.blocks.last().map(|block| block.block_hash.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -437,6 +444,12 @@ pub struct RuntimeOpsStatus {
     pub storage_snapshot_height: Option<u64>,
     pub storage_snapshot_matches_runtime: bool,
     pub sync_peer_count: usize,
+    pub sync_peer_quorum: usize,
+    pub sync_quorum_met: bool,
+    pub sync_quorum_peer_count: usize,
+    pub sync_quorum_height: Option<u64>,
+    pub sync_quorum_latest_hash: Option<String>,
+    pub sync_quorum_state_root: Option<String>,
     pub sync_successful_peer_count: usize,
     pub sync_failed_peer_count: usize,
     pub sync_attempt_count: u64,
@@ -444,6 +457,7 @@ pub struct RuntimeOpsStatus {
     pub sync_failure_count: u64,
     pub sync_stale_snapshot_count: u64,
     pub sync_fork_rejection_count: u64,
+    pub sync_quorum_rejection_count: u64,
     pub sync_import_count: u64,
     pub sync_last_success_unix_ms: Option<u128>,
     pub sync_last_import_height: Option<u64>,
@@ -506,6 +520,12 @@ pub struct RuntimeBackupManifest {
     pub sequencer_accountability_clean: bool,
     pub bridge_policy_root: String,
     pub sync_peer_count: usize,
+    pub sync_peer_quorum: usize,
+    pub sync_quorum_met: bool,
+    pub sync_quorum_peer_count: usize,
+    pub sync_quorum_height: Option<u64>,
+    pub sync_quorum_latest_hash: Option<String>,
+    pub sync_quorum_state_root: Option<String>,
     pub sync_successful_peer_count: usize,
     pub sync_failed_peer_count: usize,
     pub sync_attempt_count: u64,
@@ -513,6 +533,7 @@ pub struct RuntimeBackupManifest {
     pub sync_failure_count: u64,
     pub sync_stale_snapshot_count: u64,
     pub sync_fork_rejection_count: u64,
+    pub sync_quorum_rejection_count: u64,
     pub sync_import_count: u64,
     pub sync_last_success_unix_ms: Option<u128>,
     pub sync_last_import_height: Option<u64>,
@@ -632,10 +653,21 @@ struct RuntimeRpcLimits {
     max_requests_per_minute: u32,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct RuntimeSyncPeerSet {
     bootstrap_peer_urls: Vec<String>,
     sync_peer_urls: Vec<String>,
+    sync_peer_quorum: usize,
+}
+
+impl Default for RuntimeSyncPeerSet {
+    fn default() -> Self {
+        Self {
+            bootstrap_peer_urls: Vec::new(),
+            sync_peer_urls: Vec::new(),
+            sync_peer_quorum: DEFAULT_SYNC_PEER_QUORUM,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -647,6 +679,8 @@ pub struct RuntimeSyncPeerTelemetry {
     pub last_error_unix_ms: Option<u128>,
     pub last_latency_ms: Option<u128>,
     pub last_seen_height: Option<u64>,
+    pub last_seen_latest_hash: Option<String>,
+    pub last_seen_state_root: Option<String>,
     pub last_seen_snapshot_root: Option<String>,
     pub last_import_height: Option<u64>,
     pub last_import_snapshot_root: Option<String>,
@@ -656,12 +690,18 @@ pub struct RuntimeSyncPeerTelemetry {
     pub failure_count: u64,
     pub stale_snapshot_count: u64,
     pub fork_rejection_count: u64,
+    pub quorum_rejection_count: u64,
     pub import_count: u64,
 }
 
 #[derive(Debug, Clone, Default)]
 struct RuntimeSyncTelemetrySummary {
     peer_telemetry: Vec<RuntimeSyncPeerTelemetry>,
+    quorum_met: bool,
+    quorum_peer_count: usize,
+    quorum_height: Option<u64>,
+    quorum_latest_hash: Option<String>,
+    quorum_state_root: Option<String>,
     successful_peer_count: usize,
     failed_peer_count: usize,
     attempt_count: u64,
@@ -669,6 +709,7 @@ struct RuntimeSyncTelemetrySummary {
     failure_count: u64,
     stale_snapshot_count: u64,
     fork_rejection_count: u64,
+    quorum_rejection_count: u64,
     import_count: u64,
     last_success_unix_ms: Option<u128>,
     last_import_height: Option<u64>,
@@ -678,6 +719,70 @@ struct RuntimeSyncTelemetrySummary {
 struct RuntimeRateLimitBucket {
     window_start_unix_ms: u128,
     request_count: u32,
+}
+
+fn sync_quorum_summary(
+    peer_telemetry: &[RuntimeSyncPeerTelemetry],
+    required_quorum: usize,
+) -> (bool, usize, Option<u64>, Option<String>, Option<String>) {
+    let required_quorum = required_quorum.max(1);
+    let mut groups: BTreeMap<(u64, String, String), usize> = BTreeMap::new();
+    for peer in peer_telemetry {
+        let (Some(height), Some(latest_hash), Some(state_root)) = (
+            peer.last_seen_height,
+            peer.last_seen_latest_hash.as_ref(),
+            peer.last_seen_state_root.as_ref(),
+        ) else {
+            continue;
+        };
+        if peer.last_success_unix_ms.is_none() {
+            continue;
+        }
+        *groups
+            .entry((height, latest_hash.clone(), state_root.clone()))
+            .or_default() += 1;
+    }
+
+    let mut best_any: Option<(u64, usize, String, String)> = None;
+    let mut best_met: Option<(u64, usize, String, String)> = None;
+    for ((height, latest_hash, state_root), count) in groups {
+        let candidate = (height, count, latest_hash, state_root);
+        if best_any
+            .as_ref()
+            .map(|best| candidate > *best)
+            .unwrap_or(true)
+        {
+            best_any = Some(candidate.clone());
+        }
+        if count >= required_quorum
+            && best_met
+                .as_ref()
+                .map(|best| candidate > *best)
+                .unwrap_or(true)
+        {
+            best_met = Some(candidate);
+        }
+    }
+
+    if let Some((height, count, latest_hash, state_root)) = best_met {
+        return (
+            true,
+            count,
+            Some(height),
+            Some(latest_hash),
+            Some(state_root),
+        );
+    }
+    if let Some((height, count, latest_hash, state_root)) = best_any {
+        return (
+            false,
+            count,
+            Some(height),
+            Some(latest_hash),
+            Some(state_root),
+        );
+    }
+    (false, 0, None, None, None)
 }
 
 #[derive(Debug, Clone)]
@@ -773,7 +878,14 @@ impl RuntimeRpcState {
                 peer_telemetry.push(peer.clone());
             }
         }
+        let (quorum_met, quorum_peer_count, quorum_height, quorum_latest_hash, quorum_state_root) =
+            sync_quorum_summary(&peer_telemetry, self.sync_peers.sync_peer_quorum);
         Ok(RuntimeSyncTelemetrySummary {
+            quorum_met,
+            quorum_peer_count,
+            quorum_height,
+            quorum_latest_hash,
+            quorum_state_root,
             successful_peer_count: peer_telemetry
                 .iter()
                 .filter(|peer| peer.last_success_unix_ms.is_some())
@@ -792,6 +904,10 @@ impl RuntimeRpcState {
             fork_rejection_count: peer_telemetry
                 .iter()
                 .map(|peer| peer.fork_rejection_count)
+                .sum(),
+            quorum_rejection_count: peer_telemetry
+                .iter()
+                .map(|peer| peer.quorum_rejection_count)
                 .sum(),
             import_count: peer_telemetry.iter().map(|peer| peer.import_count).sum(),
             last_success_unix_ms: peer_telemetry
@@ -865,6 +981,8 @@ impl RuntimeRpcState {
         entry.last_success_unix_ms = Some(now);
         entry.last_latency_ms = Some(latency_ms);
         entry.last_seen_height = Some(snapshot.latest_height());
+        entry.last_seen_latest_hash = snapshot.latest_block_hash().map(str::to_string);
+        entry.last_seen_state_root = Some(snapshot.state_root.clone());
         entry.last_seen_snapshot_root = Some(snapshot.root.clone());
         entry.last_error = None;
         entry.last_error_unix_ms = None;
@@ -902,6 +1020,21 @@ impl RuntimeRpcState {
         entry.last_error_unix_ms = Some(unix_ms());
         entry.failure_count = entry.failure_count.saturating_add(1);
         entry.fork_rejection_count = entry.fork_rejection_count.saturating_add(1);
+        Ok(())
+    }
+
+    fn record_sync_peer_quorum_rejection(&self, url: &str) -> Result<(), String> {
+        let mut telemetry = self
+            .sync_telemetry
+            .lock()
+            .map_err(|_| "sync telemetry mutex poisoned".to_string())?;
+        let entry = telemetry
+            .entry(url.to_string())
+            .or_insert_with(|| RuntimeSyncPeerTelemetry {
+                url: url.to_string(),
+                ..RuntimeSyncPeerTelemetry::default()
+            });
+        entry.quorum_rejection_count = entry.quorum_rejection_count.saturating_add(1);
         Ok(())
     }
 
@@ -959,6 +1092,30 @@ impl RuntimeRpcState {
             json!(self.sync_peers.sync_peer_urls.len()),
         );
         fields.insert(
+            "sync_peer_quorum".to_string(),
+            json!(self.sync_peers.sync_peer_quorum),
+        );
+        fields.insert(
+            "sync_quorum_met".to_string(),
+            json!(sync_telemetry.quorum_met),
+        );
+        fields.insert(
+            "sync_quorum_peer_count".to_string(),
+            json!(sync_telemetry.quorum_peer_count),
+        );
+        fields.insert(
+            "sync_quorum_height".to_string(),
+            json!(sync_telemetry.quorum_height),
+        );
+        fields.insert(
+            "sync_quorum_latest_hash".to_string(),
+            json!(sync_telemetry.quorum_latest_hash),
+        );
+        fields.insert(
+            "sync_quorum_state_root".to_string(),
+            json!(sync_telemetry.quorum_state_root),
+        );
+        fields.insert(
             "sync_successful_peer_count".to_string(),
             json!(sync_telemetry.successful_peer_count),
         );
@@ -985,6 +1142,10 @@ impl RuntimeRpcState {
         fields.insert(
             "sync_fork_rejection_count".to_string(),
             json!(sync_telemetry.fork_rejection_count),
+        );
+        fields.insert(
+            "sync_quorum_rejection_count".to_string(),
+            json!(sync_telemetry.quorum_rejection_count),
         );
         fields.insert(
             "sync_import_count".to_string(),
@@ -1086,6 +1247,12 @@ impl RuntimeRpcState {
         {
             blocking_gaps.push("follower-no-successful-sync-peer".to_string());
         }
+        if status.node_role == "follower"
+            && !self.sync_peers.sync_peer_urls.is_empty()
+            && !sync_telemetry.quorum_met
+        {
+            blocking_gaps.push("follower-sync-quorum-not-met".to_string());
+        }
         if bridge_policy().live_value_enabled {
             blocking_gaps.push("bridge-live-value-enabled".to_string());
         }
@@ -1123,6 +1290,12 @@ impl RuntimeRpcState {
             storage_snapshot_height,
             storage_snapshot_matches_runtime,
             sync_peer_count: self.sync_peers.sync_peer_urls.len(),
+            sync_peer_quorum: self.sync_peers.sync_peer_quorum,
+            sync_quorum_met: sync_telemetry.quorum_met,
+            sync_quorum_peer_count: sync_telemetry.quorum_peer_count,
+            sync_quorum_height: sync_telemetry.quorum_height,
+            sync_quorum_latest_hash: sync_telemetry.quorum_latest_hash,
+            sync_quorum_state_root: sync_telemetry.quorum_state_root,
             sync_successful_peer_count: sync_telemetry.successful_peer_count,
             sync_failed_peer_count: sync_telemetry.failed_peer_count,
             sync_attempt_count: sync_telemetry.attempt_count,
@@ -1130,6 +1303,7 @@ impl RuntimeRpcState {
             sync_failure_count: sync_telemetry.failure_count,
             sync_stale_snapshot_count: sync_telemetry.stale_snapshot_count,
             sync_fork_rejection_count: sync_telemetry.fork_rejection_count,
+            sync_quorum_rejection_count: sync_telemetry.quorum_rejection_count,
             sync_import_count: sync_telemetry.import_count,
             sync_last_success_unix_ms: sync_telemetry.last_success_unix_ms,
             sync_last_import_height: sync_telemetry.last_import_height,
@@ -1198,6 +1372,12 @@ impl RuntimeRpcState {
             sequencer_accountability_clean: ops_status.sequencer_accountability_clean,
             bridge_policy_root: ops_status.bridge_policy_root,
             sync_peer_count: ops_status.sync_peer_count,
+            sync_peer_quorum: ops_status.sync_peer_quorum,
+            sync_quorum_met: ops_status.sync_quorum_met,
+            sync_quorum_peer_count: ops_status.sync_quorum_peer_count,
+            sync_quorum_height: ops_status.sync_quorum_height,
+            sync_quorum_latest_hash: ops_status.sync_quorum_latest_hash,
+            sync_quorum_state_root: ops_status.sync_quorum_state_root,
             sync_successful_peer_count: ops_status.sync_successful_peer_count,
             sync_failed_peer_count: ops_status.sync_failed_peer_count,
             sync_attempt_count: ops_status.sync_attempt_count,
@@ -1205,6 +1385,7 @@ impl RuntimeRpcState {
             sync_failure_count: ops_status.sync_failure_count,
             sync_stale_snapshot_count: ops_status.sync_stale_snapshot_count,
             sync_fork_rejection_count: ops_status.sync_fork_rejection_count,
+            sync_quorum_rejection_count: ops_status.sync_quorum_rejection_count,
             sync_import_count: ops_status.sync_import_count,
             sync_last_success_unix_ms: ops_status.sync_last_success_unix_ms,
             sync_last_import_height: ops_status.sync_last_import_height,
@@ -1270,6 +1451,12 @@ impl RuntimeRpcState {
             "bootstrap_peer_urls": self.sync_peers.bootstrap_peer_urls,
             "sync_peer_urls": self.sync_peers.sync_peer_urls,
             "sync_peer_count": self.sync_peers.sync_peer_urls.len(),
+            "sync_peer_quorum": status["sync_peer_quorum"],
+            "sync_quorum_met": status["sync_quorum_met"],
+            "sync_quorum_peer_count": status["sync_quorum_peer_count"],
+            "sync_quorum_height": status["sync_quorum_height"],
+            "sync_quorum_latest_hash": status["sync_quorum_latest_hash"],
+            "sync_quorum_state_root": status["sync_quorum_state_root"],
             "sync_successful_peer_count": status["sync_successful_peer_count"],
             "sync_failed_peer_count": status["sync_failed_peer_count"],
             "sync_attempt_count": status["sync_attempt_count"],
@@ -1277,6 +1464,7 @@ impl RuntimeRpcState {
             "sync_failure_count": status["sync_failure_count"],
             "sync_stale_snapshot_count": status["sync_stale_snapshot_count"],
             "sync_fork_rejection_count": status["sync_fork_rejection_count"],
+            "sync_quorum_rejection_count": status["sync_quorum_rejection_count"],
             "sync_import_count": status["sync_import_count"],
             "sync_last_success_unix_ms": status["sync_last_success_unix_ms"],
             "sync_last_import_height": status["sync_last_import_height"],
@@ -1401,6 +1589,24 @@ impl RuntimeRpcState {
         );
         push_metric(
             &mut output,
+            "nebula_sync_peer_quorum",
+            "Configured matching snapshot peer quorum required before follower import.",
+            self.sync_peers.sync_peer_quorum,
+        );
+        push_metric_bool(
+            &mut output,
+            "nebula_sync_quorum_met",
+            "Whether recent sync telemetry meets the configured snapshot quorum.",
+            ops_status.sync_quorum_met,
+        );
+        push_metric(
+            &mut output,
+            "nebula_sync_quorum_peer_count",
+            "Peers in the strongest observed matching snapshot quorum group.",
+            ops_status.sync_quorum_peer_count,
+        );
+        push_metric(
+            &mut output,
             "nebula_sync_successful_peer_count",
             "Configured sync peers with at least one successful valid snapshot response.",
             ops_status.sync_successful_peer_count,
@@ -1440,6 +1646,12 @@ impl RuntimeRpcState {
             "nebula_sync_fork_rejection_count",
             "Total ahead peer snapshots rejected because they did not extend local state.",
             ops_status.sync_fork_rejection_count,
+        );
+        push_metric(
+            &mut output,
+            "nebula_sync_quorum_rejection_count",
+            "Total valid ahead peer snapshots rejected because no matching quorum was available.",
+            ops_status.sync_quorum_rejection_count,
         );
         push_metric_bool(
             &mut output,
@@ -1598,17 +1810,27 @@ fn normalize_admin_token(admin_token: Option<String>) -> Result<Option<String>, 
 
 impl RuntimeSyncPeerSet {
     fn from_options(options: &RuntimeNodeOptions) -> Result<Self, String> {
+        if options.sync_peer_quorum == 0 {
+            return Err("--sync-peer-quorum must be greater than zero".to_string());
+        }
+        let bootstrap_peer_urls =
+            collect_peer_urls(options.bootstrap_rpc_url.as_deref(), &[], "--bootstrap-rpc")?;
+        let sync_peer_urls = collect_peer_urls(
+            options.sync_rpc_url.as_deref(),
+            &options.sync_rpc_urls,
+            "--sync-rpc",
+        )?;
+        if !sync_peer_urls.is_empty() && options.sync_peer_quorum > sync_peer_urls.len() {
+            return Err(format!(
+                "--sync-peer-quorum {} exceeds configured --sync-rpc peer count {}",
+                options.sync_peer_quorum,
+                sync_peer_urls.len()
+            ));
+        }
         Ok(Self {
-            bootstrap_peer_urls: collect_peer_urls(
-                options.bootstrap_rpc_url.as_deref(),
-                &[],
-                "--bootstrap-rpc",
-            )?,
-            sync_peer_urls: collect_peer_urls(
-                options.sync_rpc_url.as_deref(),
-                &options.sync_rpc_urls,
-                "--sync-rpc",
-            )?,
+            bootstrap_peer_urls,
+            sync_peer_urls,
+            sync_peer_quorum: options.sync_peer_quorum,
         })
     }
 }
@@ -2841,7 +3063,8 @@ fn select_best_extending_snapshot_with_telemetry(
     local: &RuntimeSnapshot,
     peer_snapshots: Vec<(String, RuntimeSnapshot)>,
 ) -> Result<Option<(String, RuntimeSnapshot)>, String> {
-    let mut selected: Option<(String, RuntimeSnapshot)> = None;
+    let mut candidate_groups: BTreeMap<(u64, String, String), Vec<(String, RuntimeSnapshot)>> =
+        BTreeMap::new();
     let mut rejected = Vec::new();
     for (url, snapshot) in peer_snapshots {
         if snapshot.latest_height() <= local.latest_height() {
@@ -2858,21 +3081,50 @@ fn select_best_extending_snapshot_with_telemetry(
             rejected.push(format!("{url}: {error}"));
             continue;
         }
-        if selected
-            .as_ref()
-            .map(|(_, best)| snapshot.latest_height() > best.latest_height())
-            .unwrap_or(true)
-        {
-            selected = Some((url, snapshot));
-        }
+        candidate_groups
+            .entry((
+                snapshot.latest_height(),
+                snapshot.latest_block_hash().unwrap_or_default().to_string(),
+                snapshot.state_root.clone(),
+            ))
+            .or_default()
+            .push((url, snapshot));
     }
-    if selected.is_none() && !rejected.is_empty() {
+    let selected_key = candidate_groups
+        .iter()
+        .filter(|(_, candidates)| candidates.len() >= state.sync_peers.sync_peer_quorum)
+        .max_by(
+            |(left_key, left_candidates), (right_key, right_candidates)| {
+                left_key
+                    .0
+                    .cmp(&right_key.0)
+                    .then(left_candidates.len().cmp(&right_candidates.len()))
+                    .then(left_key.1.cmp(&right_key.1))
+                    .then(left_key.2.cmp(&right_key.2))
+            },
+        )
+        .map(|(key, _)| key.clone());
+    if let Some(key) = selected_key {
+        return Ok(candidate_groups
+            .get(&key)
+            .and_then(|candidates| candidates.first())
+            .cloned());
+    }
+    if !candidate_groups.is_empty() {
+        for candidates in candidate_groups.values() {
+            for (url, _) in candidates {
+                state.record_sync_peer_quorum_rejection(url)?;
+            }
+        }
+        return Ok(None);
+    }
+    if !rejected.is_empty() {
         return Err(format!(
             "no sync peer returned an extending ahead snapshot: {}",
             rejected.join("; ")
         ));
     }
-    Ok(selected)
+    Ok(None)
 }
 
 fn sync_runtime_from_peers(
@@ -4326,6 +4578,12 @@ fn ops_status_root(report: &RuntimeOpsStatus) -> String {
         "storage_snapshot_height": report.storage_snapshot_height,
         "storage_snapshot_matches_runtime": report.storage_snapshot_matches_runtime,
         "sync_peer_count": report.sync_peer_count,
+        "sync_peer_quorum": report.sync_peer_quorum,
+        "sync_quorum_met": report.sync_quorum_met,
+        "sync_quorum_peer_count": report.sync_quorum_peer_count,
+        "sync_quorum_height": report.sync_quorum_height,
+        "sync_quorum_latest_hash": report.sync_quorum_latest_hash,
+        "sync_quorum_state_root": report.sync_quorum_state_root,
         "sync_successful_peer_count": report.sync_successful_peer_count,
         "sync_failed_peer_count": report.sync_failed_peer_count,
         "sync_attempt_count": report.sync_attempt_count,
@@ -4333,6 +4591,7 @@ fn ops_status_root(report: &RuntimeOpsStatus) -> String {
         "sync_failure_count": report.sync_failure_count,
         "sync_stale_snapshot_count": report.sync_stale_snapshot_count,
         "sync_fork_rejection_count": report.sync_fork_rejection_count,
+        "sync_quorum_rejection_count": report.sync_quorum_rejection_count,
         "sync_import_count": report.sync_import_count,
         "sync_last_success_unix_ms": report.sync_last_success_unix_ms,
         "sync_last_import_height": report.sync_last_import_height,
@@ -4396,6 +4655,12 @@ fn backup_manifest_root(manifest: &RuntimeBackupManifest) -> String {
         "sequencer_accountability_clean": manifest.sequencer_accountability_clean,
         "bridge_policy_root": manifest.bridge_policy_root,
         "sync_peer_count": manifest.sync_peer_count,
+        "sync_peer_quorum": manifest.sync_peer_quorum,
+        "sync_quorum_met": manifest.sync_quorum_met,
+        "sync_quorum_peer_count": manifest.sync_quorum_peer_count,
+        "sync_quorum_height": manifest.sync_quorum_height,
+        "sync_quorum_latest_hash": manifest.sync_quorum_latest_hash,
+        "sync_quorum_state_root": manifest.sync_quorum_state_root,
         "sync_successful_peer_count": manifest.sync_successful_peer_count,
         "sync_failed_peer_count": manifest.sync_failed_peer_count,
         "sync_attempt_count": manifest.sync_attempt_count,
@@ -4403,6 +4668,7 @@ fn backup_manifest_root(manifest: &RuntimeBackupManifest) -> String {
         "sync_failure_count": manifest.sync_failure_count,
         "sync_stale_snapshot_count": manifest.sync_stale_snapshot_count,
         "sync_fork_rejection_count": manifest.sync_fork_rejection_count,
+        "sync_quorum_rejection_count": manifest.sync_quorum_rejection_count,
         "sync_import_count": manifest.sync_import_count,
         "sync_last_success_unix_ms": manifest.sync_last_success_unix_ms,
         "sync_last_import_height": manifest.sync_last_import_height,
@@ -4864,6 +5130,7 @@ mod tests {
                 "http://127.0.0.1:9946/snapshot"
             ]
         );
+        assert_eq!(peers.sync_peer_quorum, DEFAULT_SYNC_PEER_QUORUM);
 
         let options = RuntimeNodeOptions {
             sync_rpc_url: Some("https://127.0.0.1:9945/snapshot".to_string()),
@@ -4872,6 +5139,24 @@ mod tests {
         assert!(RuntimeSyncPeerSet::from_options(&options)
             .unwrap_err()
             .contains("--sync-rpc"));
+
+        let options = RuntimeNodeOptions {
+            sync_rpc_urls: vec!["http://127.0.0.1:9945/snapshot".to_string()],
+            sync_peer_quorum: 0,
+            ..RuntimeNodeOptions::default()
+        };
+        assert!(RuntimeSyncPeerSet::from_options(&options)
+            .unwrap_err()
+            .contains("--sync-peer-quorum"));
+
+        let options = RuntimeNodeOptions {
+            sync_rpc_urls: vec!["http://127.0.0.1:9945/snapshot".to_string()],
+            sync_peer_quorum: 2,
+            ..RuntimeNodeOptions::default()
+        };
+        assert!(RuntimeSyncPeerSet::from_options(&options)
+            .unwrap_err()
+            .contains("exceeds configured --sync-rpc peer count"));
     }
 
     #[test]
@@ -4884,6 +5169,7 @@ mod tests {
                 "http://127.0.0.1:9945/snapshot".to_string(),
                 "http://127.0.0.1:9946/snapshot".to_string(),
             ],
+            sync_peer_quorum: DEFAULT_SYNC_PEER_QUORUM,
         };
         let status = state.status_json().unwrap();
 
@@ -4905,6 +5191,12 @@ mod tests {
         assert_eq!(status["bridge_custody_reconciled"], true);
         assert_eq!(status["nxmr_custody_deficit_units"], 0);
         assert_eq!(status["sync_peer_count"], 2);
+        assert_eq!(status["sync_peer_quorum"], DEFAULT_SYNC_PEER_QUORUM);
+        assert_eq!(status["sync_quorum_met"], false);
+        assert_eq!(status["sync_quorum_peer_count"], 0);
+        assert_eq!(status["sync_quorum_height"], Value::Null);
+        assert_eq!(status["sync_quorum_latest_hash"], Value::Null);
+        assert_eq!(status["sync_quorum_state_root"], Value::Null);
         assert_eq!(
             status["sync_peer_urls"],
             json!([
@@ -4914,6 +5206,7 @@ mod tests {
         );
         assert_eq!(status["sync_successful_peer_count"], 0);
         assert_eq!(status["sync_attempt_count"], 0);
+        assert_eq!(status["sync_quorum_rejection_count"], 0);
         assert_eq!(status["sync_peer_telemetry"].as_array().unwrap().len(), 2);
         assert_eq!(
             status["sync_peer_telemetry"][0]["url"],
@@ -4928,6 +5221,10 @@ mod tests {
             Value::Null
         );
         assert_eq!(status["sync_peer_telemetry"][0]["attempt_count"], 0);
+        assert_eq!(
+            status["sync_peer_telemetry"][0]["quorum_rejection_count"],
+            0
+        );
         assert_eq!(
             dispatch_json_rpc_method(&state, "nebula_status", json!({})).unwrap()
                 ["rpc_max_requests_per_minute"],
@@ -4982,6 +5279,7 @@ mod tests {
         state.sync_peers = RuntimeSyncPeerSet {
             bootstrap_peer_urls: Vec::new(),
             sync_peer_urls: vec!["http://127.0.0.1:9945/snapshot".to_string()],
+            sync_peer_quorum: DEFAULT_SYNC_PEER_QUORUM,
         };
 
         let ops = state.ops_status().unwrap();
@@ -4993,6 +5291,8 @@ mod tests {
             .blocking_gaps
             .contains(&"follower-no-successful-sync-peer".to_string()));
         assert_eq!(ops.sync_successful_peer_count, 0);
+        assert_eq!(ops.sync_peer_quorum, DEFAULT_SYNC_PEER_QUORUM);
+        assert!(!ops.sync_quorum_met);
 
         state
             .record_sync_peer_success("http://127.0.0.1:9945/snapshot", &snapshot, 1)
@@ -5000,7 +5300,74 @@ mod tests {
         let ops = state.ops_status().unwrap();
         assert!(ops.public_ops_ready, "{:?}", ops.blocking_gaps);
         assert_eq!(ops.sync_successful_peer_count, 1);
+        assert!(ops.sync_quorum_met);
+        assert_eq!(ops.sync_quorum_peer_count, 1);
+        assert_eq!(ops.sync_quorum_height, Some(snapshot.latest_height()));
+        assert_eq!(
+            ops.sync_quorum_latest_hash.as_deref(),
+            snapshot.latest_block_hash()
+        );
+        assert_eq!(
+            ops.sync_quorum_state_root,
+            Some(snapshot.state_root.clone())
+        );
         assert_eq!(ops.sync_peer_telemetry[0].success_count, 1);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn runtime_ops_status_follower_requires_sync_quorum_evidence() {
+        let mut sequencer = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        sequencer.produce_block();
+        let snapshot = sequencer.export_snapshot();
+        let mut follower_config = RuntimeConfig::public_testnet_default();
+        follower_config.produce_blocks = false;
+        let follower = NebulaRuntime::from_snapshot(follower_config, snapshot.clone()).unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("nebula-runtime-follower-quorum-{}", unix_ms()));
+        let storage = RuntimeStorage::from_data_dir(&dir);
+        storage.save_snapshot(&snapshot).unwrap();
+        let mut state = test_rpc_state_with_limits(
+            follower,
+            DEFAULT_MAX_REQUEST_BYTES,
+            DEFAULT_MAX_REQUESTS_PER_MINUTE,
+        );
+        state.storage = Some(storage);
+        state.sync_peers = RuntimeSyncPeerSet {
+            bootstrap_peer_urls: Vec::new(),
+            sync_peer_urls: vec![
+                "http://127.0.0.1:9945/snapshot".to_string(),
+                "http://127.0.0.1:9946/snapshot".to_string(),
+            ],
+            sync_peer_quorum: 2,
+        };
+
+        state
+            .record_sync_peer_success("http://127.0.0.1:9945/snapshot", &snapshot, 1)
+            .unwrap();
+        let ops = state.ops_status().unwrap();
+        assert!(!ops.public_ops_ready);
+        assert_eq!(ops.sync_peer_quorum, 2);
+        assert!(!ops.sync_quorum_met);
+        assert_eq!(ops.sync_quorum_peer_count, 1);
+        assert!(ops
+            .blocking_gaps
+            .contains(&"follower-sync-quorum-not-met".to_string()));
+
+        state
+            .record_sync_peer_success("http://127.0.0.1:9946/snapshot", &snapshot, 1)
+            .unwrap();
+        let ops = state.ops_status().unwrap();
+        assert!(ops.public_ops_ready, "{:?}", ops.blocking_gaps);
+        assert!(ops.sync_quorum_met);
+        assert_eq!(ops.sync_quorum_peer_count, 2);
+        assert_eq!(ops.sync_quorum_height, Some(snapshot.latest_height()));
+        assert_eq!(
+            ops.sync_quorum_latest_hash.as_deref(),
+            snapshot.latest_block_hash()
+        );
+        assert_eq!(ops.sync_quorum_state_root, Some(snapshot.state_root));
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -5125,6 +5492,21 @@ mod tests {
         assert_eq!(health["snapshot_persisted"], true);
         assert_eq!(health["storage_snapshot_matches_runtime"], true);
         assert_eq!(health["sync_peer_count"], status["sync_peer_count"]);
+        assert_eq!(health["sync_peer_quorum"], status["sync_peer_quorum"]);
+        assert_eq!(health["sync_quorum_met"], status["sync_quorum_met"]);
+        assert_eq!(
+            health["sync_quorum_peer_count"],
+            status["sync_quorum_peer_count"]
+        );
+        assert_eq!(health["sync_quorum_height"], status["sync_quorum_height"]);
+        assert_eq!(
+            health["sync_quorum_latest_hash"],
+            status["sync_quorum_latest_hash"]
+        );
+        assert_eq!(
+            health["sync_quorum_state_root"],
+            status["sync_quorum_state_root"]
+        );
         assert_eq!(health["bridge_policy_root"], status["bridge_policy_root"]);
         assert_eq!(
             health["sequencer_public_key_hex"],
@@ -5323,11 +5705,15 @@ mod tests {
         assert!(metrics.contains("nebula_rpc_max_request_bytes 2048"));
         assert!(metrics.contains("nebula_rpc_max_requests_per_minute 7"));
         assert!(metrics.contains("nebula_sync_peer_count 0"));
+        assert!(metrics.contains("nebula_sync_peer_quorum 1"));
+        assert!(metrics.contains("nebula_sync_quorum_met 0"));
+        assert!(metrics.contains("nebula_sync_quorum_peer_count 0"));
         assert!(metrics.contains("nebula_sync_successful_peer_count 0"));
         assert!(metrics.contains("nebula_sync_attempt_count 0"));
         assert!(metrics.contains("nebula_sync_success_count 0"));
         assert!(metrics.contains("nebula_sync_failure_count 0"));
         assert!(metrics.contains("nebula_sync_import_count 0"));
+        assert!(metrics.contains("nebula_sync_quorum_rejection_count 0"));
         assert!(metrics.contains("nebula_admin_rpc_enabled 0"));
         assert!(metrics.contains("nebula_mempool_admission_rejection_count 0"));
         assert!(metrics.contains("nebula_faucet_nxmr_units 0"));
@@ -6064,6 +6450,110 @@ mod tests {
     }
 
     #[test]
+    fn sync_peer_quorum_imports_matching_chain_state() {
+        let local_runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let local_snapshot = local_runtime.export_snapshot();
+        let mut peer_runtime =
+            NebulaRuntime::from_snapshot(RuntimeConfig::public_testnet_default(), local_snapshot)
+                .unwrap();
+        peer_runtime.produce_block();
+        let peer_snapshot = peer_runtime.export_snapshot();
+        let body = serde_json::to_string(&peer_snapshot).unwrap();
+        let (first_url, first_handle) = one_shot_http_response(body.clone(), "HTTP/1.1 200 OK");
+        let (second_url, second_handle) = one_shot_http_response(body, "HTTP/1.1 200 OK");
+        let mut state = test_rpc_state_with_limits(
+            local_runtime,
+            DEFAULT_MAX_REQUEST_BYTES,
+            DEFAULT_MAX_REQUESTS_PER_MINUTE,
+        );
+        state.sync_peers = RuntimeSyncPeerSet {
+            bootstrap_peer_urls: Vec::new(),
+            sync_peer_urls: vec![first_url.clone(), second_url.clone()],
+            sync_peer_quorum: 2,
+        };
+
+        let imported =
+            sync_runtime_from_peers(&state, &[first_url.clone(), second_url.clone()]).unwrap();
+        first_handle.join().unwrap();
+        second_handle.join().unwrap();
+
+        assert!(imported);
+        let status = state.status_json().unwrap();
+        assert_eq!(status["latest_height"], peer_snapshot.latest_height());
+        assert_eq!(status["sync_peer_quorum"], 2);
+        assert_eq!(status["sync_quorum_met"], true);
+        assert_eq!(status["sync_quorum_peer_count"], 2);
+        assert_eq!(status["sync_quorum_height"], peer_snapshot.latest_height());
+        assert_eq!(
+            status["sync_quorum_latest_hash"],
+            peer_snapshot.latest_block_hash().unwrap()
+        );
+        assert_eq!(status["sync_quorum_state_root"], peer_snapshot.state_root);
+        assert_eq!(status["sync_quorum_rejection_count"], 0);
+        assert_eq!(status["sync_import_count"], 1);
+    }
+
+    #[test]
+    fn sync_peer_quorum_rejects_divergent_chain_state() {
+        let local_runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let local_snapshot = local_runtime.export_snapshot();
+        let mut first_peer = NebulaRuntime::from_snapshot(
+            RuntimeConfig::public_testnet_default(),
+            local_snapshot.clone(),
+        )
+        .unwrap();
+        first_peer.faucet("alice").unwrap();
+        first_peer.produce_block();
+        let first_snapshot = first_peer.export_snapshot();
+        let mut second_peer =
+            NebulaRuntime::from_snapshot(RuntimeConfig::public_testnet_default(), local_snapshot)
+                .unwrap();
+        second_peer.faucet("bob").unwrap();
+        second_peer.produce_block();
+        let second_snapshot = second_peer.export_snapshot();
+        assert_ne!(
+            first_snapshot.latest_block_hash(),
+            second_snapshot.latest_block_hash()
+        );
+        let local_height = local_runtime.status().latest_height;
+        let (first_url, first_handle) = one_shot_http_response(
+            serde_json::to_string(&first_snapshot).unwrap(),
+            "HTTP/1.1 200 OK",
+        );
+        let (second_url, second_handle) = one_shot_http_response(
+            serde_json::to_string(&second_snapshot).unwrap(),
+            "HTTP/1.1 200 OK",
+        );
+        let mut state = test_rpc_state_with_limits(
+            local_runtime,
+            DEFAULT_MAX_REQUEST_BYTES,
+            DEFAULT_MAX_REQUESTS_PER_MINUTE,
+        );
+        state.sync_peers = RuntimeSyncPeerSet {
+            bootstrap_peer_urls: Vec::new(),
+            sync_peer_urls: vec![first_url.clone(), second_url.clone()],
+            sync_peer_quorum: 2,
+        };
+
+        let imported =
+            sync_runtime_from_peers(&state, &[first_url.clone(), second_url.clone()]).unwrap();
+        first_handle.join().unwrap();
+        second_handle.join().unwrap();
+
+        assert!(!imported);
+        let status = state.status_json().unwrap();
+        assert_eq!(status["latest_height"], local_height);
+        assert_eq!(status["sync_successful_peer_count"], 2);
+        assert_eq!(status["sync_quorum_met"], false);
+        assert_eq!(status["sync_quorum_peer_count"], 1);
+        assert_eq!(status["sync_quorum_rejection_count"], 2);
+        assert_eq!(status["sync_import_count"], 0);
+        let peers = status["sync_peer_telemetry"].as_array().unwrap();
+        assert_eq!(peers[0]["quorum_rejection_count"], 1);
+        assert_eq!(peers[1]["quorum_rejection_count"], 1);
+    }
+
+    #[test]
     fn runtime_sync_peer_telemetry_records_attempt_success_error_and_import() {
         let local_runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
         let local_snapshot = local_runtime.export_snapshot();
@@ -6088,6 +6578,7 @@ mod tests {
         state.sync_peers = RuntimeSyncPeerSet {
             bootstrap_peer_urls: Vec::new(),
             sync_peer_urls: vec![good_url.clone(), bad_url.clone()],
+            sync_peer_quorum: DEFAULT_SYNC_PEER_QUORUM,
         };
 
         let imported =

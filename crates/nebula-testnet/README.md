@@ -44,8 +44,9 @@ Operator ops, backup, and metrics evidence is also a launch gate. The runtime
 surfaces `/ops`, `/backup`, `/metrics`, `nebula_opsStatus`, and
 `nebula_backupManifest` are intended for public operators to verify block
 freshness, latest height/hash, state/snapshot roots, persisted snapshot path and
-presence, sync peer count, RPC limit policy, bridge policy root, backup manifest
-root, and scrapeable public ops readiness gauges before opening an endpoint.
+presence, sync peer count/quorum, sync quorum height/hash/state root, RPC limit
+policy, bridge policy root, backup manifest root, and scrapeable public ops
+readiness gauges before opening an endpoint.
 
 Sequencer key rotation and operator accountability are launch gates too. Public
 operators must be able to discover the active sequencer key, key-rotation
@@ -89,7 +90,8 @@ The public launch sequence for this crate is:
    `/snapshot`, and JSON-RPC `/rpc` views. Each snapshot block must commit to
    the expected sequencer public key and verify its Ed25519 signature before
    accepting the follower. `/health`, `/status`, and `nebula_status` must expose
-   configured sync peers so operators can confirm replica failover coverage.
+   configured sync peers and sync quorum evidence so operators can confirm
+   replica failover coverage.
    Public RPC nodes enforce bounded mempool admission, request-size limits, and
    per-client rate limits; tune them with `--max-mempool-transactions`,
    `--max-request-bytes`, and `--max-requests-per-minute`. Admission rejects
@@ -113,16 +115,18 @@ The public launch sequence for this crate is:
    `/backup`, `/metrics`, `nebula_opsStatus`, and `nebula_backupManifest` must
    agree with `/health`, `/status`, `/snapshot`, and `nebula_status` on block
    freshness, latest height/hash, state root, snapshot root, persisted snapshot
-   path and presence, sync peer count, mempool cap/remaining capacity/full
-   and admission rejection counts, RPC request-size and rate-limit policy,
-   bridge policy root, backup manifest root, and public ops readiness gauges.
+   path and presence, sync peer count/quorum, sync quorum height/hash/state
+   root, mempool cap/remaining capacity/full and admission rejection counts,
+   RPC request-size and rate-limit policy, bridge policy root, backup manifest
+   root, and public ops readiness gauges.
    Build and verify runtime-surface evidence from captured `/health`,
    `/status`, `/snapshot`, `/ops`, `/backup`, `nebula_status`,
    `nebula_opsStatus`, `nebula_backupManifest`, and `/metrics` files before
    observers accept the endpoint.
    Stale blocks, missing persisted snapshots, mismatched backup roots, missing
-   bridge policy roots, full mempools, unexpected admission-rejection spikes, or
-   unexpected sync/RPC limit values keep the public endpoint launch-blocked.
+   bridge policy roots, full mempools, missing sync quorum evidence, unexpected
+   admission-rejection spikes, or unexpected sync/RPC limit values keep the
+   public endpoint launch-blocked.
 11. Exercise sequencer key rotation and operator accountability. `/health`,
    `/status`, and `nebula_status` must expose the current sequencer public key,
    key-rotation history/root, accountability evidence root, equivocation
@@ -150,21 +154,28 @@ persisted followers:
 
 ```bash
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --sequencer --rpc-bind 127.0.0.1:9944 --block-ms 250 --validator-id validator-a --data-dir /tmp/nebula-validator-a --admin-token <operator-token> --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9945 --block-ms 250 --validator-id validator-b --data-dir /tmp/nebula-validator-b --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9946/snapshot --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9946 --block-ms 250 --validator-id validator-c --data-dir /tmp/nebula-validator-c --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9945/snapshot --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9945 --block-ms 250 --validator-id validator-b --data-dir /tmp/nebula-validator-b --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9946/snapshot --sync-peer-quorum 2 --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9946 --block-ms 250 --validator-id validator-c --data-dir /tmp/nebula-validator-c --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9945/snapshot --sync-peer-quorum 2 --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
 ```
 
 The sequencer produces sub-second blocks. Followers do not produce blocks; they
 persist `nebula-runtime-snapshot.json` under `--data-dir`. `--bootstrap-rpc`
 imports one verified snapshot at startup. Repeat
-`--sync-rpc <http://peer/snapshot>` for the sequencer and replica peers; the
-follower keeps fetching, verifying, importing, and persisting newer snapshots
-from the highest ahead peer whose snapshot extends local state. `/health`,
-`/status`, and `nebula_status` expose the configured `sync_peer_urls` list,
-per-peer `sync_peer_telemetry`, successful peer count, attempt/success/failure/import
-counts, stale snapshot count, and fork rejection count. Followers remain
-launch-blocked with `follower-no-successful-sync-peer` until at least one
-configured peer has returned a valid snapshot response.
+`--sync-rpc <http://peer/snapshot>` for the sequencer and replica peers. Set
+`--sync-peer-quorum <count>` to require matching height, latest block hash, and
+state root from that many peers before a follower imports; use quorum `1` for
+single-peer local rehearsals and quorum `2` or higher for public replica sets.
+The follower keeps fetching, verifying, importing, and persisting newer
+snapshots from the highest ahead chain-state group whose snapshots extend local
+state. `/health`, `/status`, and `nebula_status` expose the configured
+`sync_peer_urls` list, per-peer `sync_peer_telemetry`, `sync_peer_quorum`,
+`sync_quorum_met`, `sync_quorum_peer_count`, `sync_quorum_height`,
+`sync_quorum_latest_hash`, `sync_quorum_state_root`, successful peer count,
+attempt/success/failure/import counts, stale snapshot count, fork rejection
+count, and quorum rejection count. Followers remain launch-blocked with
+`follower-no-successful-sync-peer` until at least one configured peer has
+returned a valid snapshot response and with `follower-sync-quorum-not-met` until
+the configured peer quorum agrees on the same chain-state tip.
 
 Public RPC nodes enforce a bounded local mempool, maximum request body size, and
 per-client request rate limit before dispatching JSON-RPC work. Use
@@ -209,19 +220,20 @@ Operator ops, backup, and metrics evidence is exposed through `GET /ops`,
 compare those reports with `/health`, `/status`, `/snapshot`, and
 `nebula_status` and verify block
 freshness, latest height/hash, state root, snapshot root, persisted snapshot
-path and presence, configured sync peer count, mempool cap/remaining capacity,
-full/admission rejection counts, RPC max-request/rate-limit policy, admin RPC
+path and presence, configured sync peer count/quorum, sync quorum
+height/hash/state root, mempool cap/remaining capacity, full/admission rejection
+counts, RPC max-request/rate-limit policy, admin RPC
 state, bridge policy root, bridge custody reconciliation, and backup manifest
 root. `--build-runtime-surface-evidence` binds those captured files, JSON-RPC
 mirror responses, and `/metrics` text into one root; the verifier rejects stale
 captures, split `/status` versus JSON-RPC views, invalid snapshot roots,
 mismatched ops/backup roots, missing public ops readiness, and metrics drift.
 The metrics scrape must expose matching block freshness, mempool pressure, RPC
-limit, peer count, bridge counter, storage snapshot, accountability, bridge
+limit, peer count/quorum, sync quorum, bridge counter, storage snapshot, accountability, bridge
 custody, and public ops readiness gauges.
 Backup manifests must bind the node role, validator ID, latest chain head,
-state/snapshot roots, persisted snapshot location, sync peer coverage, mempool
-capacity policy, full/admission rejection counters, RPC limit policy, admin RPC
+state/snapshot roots, persisted snapshot location, sync peer coverage and
+quorum evidence, mempool capacity policy, full/admission rejection counters, RPC limit policy, admin RPC
 state, bridge policy root, and nXMR custody reconciliation without exporting
 sequencer secret key material. Snapshots imported by followers must have a state
 root that matches the latest signed block state root; wait for the next

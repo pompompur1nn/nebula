@@ -122,8 +122,12 @@ fn metrics_endpoint_exposes_public_rpc_operational_gauges() {
     assert!(body.contains("nebula_sub_second_blocks 1"));
     assert!(body.contains("nebula_rpc_max_request_bytes "));
     assert!(body.contains("nebula_rpc_max_requests_per_minute 10000"));
+    assert!(body.contains("nebula_sync_peer_quorum 1"));
+    assert!(body.contains("nebula_sync_quorum_met 0"));
+    assert!(body.contains("nebula_sync_quorum_peer_count 0"));
     assert!(body.contains("nebula_sync_successful_peer_count 0"));
     assert!(body.contains("nebula_sync_attempt_count 0"));
+    assert!(body.contains("nebula_sync_quorum_rejection_count 0"));
     assert!(body.contains("nebula_sync_import_count 0"));
     assert!(body.contains("nebula_mempool_admission_rejection_count 0"));
     assert!(body.contains("nebula_faucet_nxmr_units 0"));
@@ -155,6 +159,21 @@ fn health_endpoint_exposes_chain_root_ops_and_backup_evidence() {
         status["sequencer_public_key_hex"]
     );
     assert_eq!(health["bridge_policy_root"], status["bridge_policy_root"]);
+    assert_eq!(health["sync_peer_quorum"], status["sync_peer_quorum"]);
+    assert_eq!(health["sync_quorum_met"], status["sync_quorum_met"]);
+    assert_eq!(
+        health["sync_quorum_peer_count"],
+        status["sync_quorum_peer_count"]
+    );
+    assert_eq!(health["sync_quorum_height"], status["sync_quorum_height"]);
+    assert_eq!(
+        health["sync_quorum_latest_hash"],
+        status["sync_quorum_latest_hash"]
+    );
+    assert_eq!(
+        health["sync_quorum_state_root"],
+        status["sync_quorum_state_root"]
+    );
     assert_eq!(health["sync_successful_peer_count"], 0);
     assert_eq!(health["sync_attempt_count"], 0);
     assert_eq!(health["admin_rpc_enabled"], true);
