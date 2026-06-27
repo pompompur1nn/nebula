@@ -95,24 +95,26 @@ Validator admission reward accounts must use
 signed admission root must bind the validator identity, operator contact, keys,
 reward account, commission, genesis power, reward unit, and fee-policy root.
 Consensus and network public keys must be 64-character hex values, and
-consensus/network key domains must be disjoint.
+consensus/network key domains must be disjoint. The verifier reports a
+deterministic reward-ledger root and reward-account count derived from the
+admitted validator reward accounts.
 
 The genesis manifest builder binds verified deployment evidence and validator
 admission into the root artifact used to start a public testnet at activation
 height `1` with validator-set epoch `0`. Genesis deployment, validator-set,
-fee-policy, and validator-admission roots must be disjoint, and initial
-validator, operator, and region counts must match the verified validator set.
-Genesis manifests older than `24` hours are rejected. The final launch-package
-check requires the genesis timestamp to fall inside the deployment attestation
-validity window.
+reward-ledger, fee-policy, and validator-admission roots must be disjoint, and
+initial validator, operator, and region counts must match the verified
+validator set. Genesis manifests older than `24` hours are rejected. The final
+launch-package check requires the genesis timestamp to fall inside the
+deployment attestation validity window.
 
 The launch-package verifier checks that the deployment, public surface,
 validator set, and genesis artifacts all agree before operators advance to a
 live rollout, with deployment attestations expiring within `7` days of
 generation. It reports the verified deployment observer quorum count and
-deployment region count, plus the genesis fee token identities. It also rejects
-validator consensus/network keys that reuse deployment witness keys, admitted
-validators that do not map to attested deployment operators and bootstrap nodes,
-validator P2P hosts that do not match their attested bootstrap endpoint host,
-plus deployment operators or bootstrap nodes that are not represented by an
-admitted validator.
+deployment region count, matched reward-account count, reward-ledger root, and
+the genesis fee token identities. It also rejects validator consensus/network
+keys that reuse deployment witness keys, admitted validators that do not map to
+attested deployment operators and bootstrap nodes, validator P2P hosts that do
+not match their attested bootstrap endpoint host, plus deployment operators or
+bootstrap nodes that are not represented by an admitted validator.

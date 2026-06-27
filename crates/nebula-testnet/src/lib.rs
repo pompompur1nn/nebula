@@ -336,7 +336,9 @@ pub struct ValidatorSetReport {
     pub validator_set_ready: bool,
     pub level: &'static str,
     pub validator_set_root: String,
+    pub reward_ledger_root: String,
     pub validator_count: usize,
+    pub reward_account_count: usize,
     pub operator_count: usize,
     pub region_count: usize,
     pub total_genesis_power: u64,
@@ -355,6 +357,7 @@ pub struct GenesisManifest {
     pub validator_set_epoch: u64,
     pub fee_policy_root: String,
     pub validator_admission_root: String,
+    pub reward_ledger_root: String,
     pub initial_validator_count: usize,
     pub initial_operator_count: usize,
     pub initial_region_count: usize,
@@ -373,6 +376,7 @@ pub struct GenesisManifestReport {
     pub deployment_attestation_root: String,
     pub validator_set_root: String,
     pub validator_set_epoch: u64,
+    pub reward_ledger_root: String,
     pub initial_validator_count: usize,
     pub initial_operator_count: usize,
     pub initial_region_count: usize,
@@ -396,8 +400,10 @@ pub struct LaunchPackageReport {
     pub fee_policy_root: String,
     pub validator_set_root: String,
     pub validator_set_epoch: u64,
+    pub reward_ledger_root: String,
     pub genesis_root: String,
     pub matched_validator_count: usize,
+    pub matched_reward_account_count: usize,
     pub matched_operator_count: usize,
     pub matched_region_count: usize,
     pub deployment_operator_count: usize,
@@ -645,6 +651,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "unique_consensus_keys_required": true,
                 "unique_reward_accounts_required": true,
                 "reward_account_operator_binding_required": true,
+                "reward_ledger_root_reported": true,
                 "unique_p2p_endpoints_required": true,
                 "p2p_endpoint_host_port_required": true,
                 "p2p_endpoint_path_forbidden": true,
@@ -659,6 +666,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "validator_set_epoch": PUBLIC_TESTNET_GENESIS_EPOCH,
                 "fee_policy_root_required": true,
                 "validator_admission_root_required": true,
+                "reward_ledger_root_required": true,
                 "artifact_root_domains_disjoint": true,
                 "initial_operator_count_required": true,
                 "initial_region_count_required": true,
@@ -735,6 +743,8 @@ pub fn readiness_report() -> NebulaReadiness {
                 "genesis_binds_operator_count": true,
                 "genesis_binds_region_count": true,
                 "genesis_binds_validator_count": true,
+                "genesis_binds_reward_ledger_root": true,
+                "validator_reward_ledger_reported": true,
                 "genesis_binds_total_power": true,
                 "genesis_fee_token_identities_reported": true,
                 "genesis_time_within_deployment_window": true,
@@ -1210,8 +1220,10 @@ pub fn verify_validator_set_json(input: &str) -> Result<ValidatorSetReport, Atte
     Ok(ValidatorSetReport {
         validator_set_ready: true,
         level: "validator-set-attested",
+        reward_ledger_root: validator_reward_ledger_root(&manifest),
         validator_set_root: manifest.root,
         validator_count: manifest.validators.len(),
+        reward_account_count: reward_accounts.len(),
         operator_count: operator_ids.len(),
         region_count: regions.len(),
         total_genesis_power,
@@ -1253,6 +1265,7 @@ pub fn build_genesis_manifest_json_pretty(
         validator_set_epoch: PUBLIC_TESTNET_GENESIS_EPOCH,
         fee_policy_root,
         validator_admission_root,
+        reward_ledger_root: validator_set_report.reward_ledger_root,
         initial_validator_count: validator_set_report.validator_count,
         initial_operator_count: validator_set_report.operator_count,
         initial_region_count: validator_set_report.region_count,
@@ -1329,6 +1342,11 @@ pub fn verify_genesis_manifest_json(
         &manifest.validator_admission_root,
         validator_admission_root,
     );
+    require_hex_root(
+        &mut errors,
+        "reward_ledger_root",
+        &manifest.reward_ledger_root,
+    );
     verify_genesis_root_domains(&mut errors, &manifest);
     if manifest.initial_validator_count < MIN_PUBLIC_TESTNET_VALIDATORS {
         errors.push(format!(
@@ -1384,6 +1402,7 @@ pub fn verify_genesis_manifest_json(
         deployment_attestation_root: manifest.deployment_attestation_root,
         validator_set_root: manifest.validator_set_root,
         validator_set_epoch: manifest.validator_set_epoch,
+        reward_ledger_root: manifest.reward_ledger_root,
         initial_validator_count: manifest.initial_validator_count,
         initial_operator_count: manifest.initial_operator_count,
         initial_region_count: manifest.initial_region_count,
@@ -1408,6 +1427,7 @@ fn verify_genesis_root_domains(errors: &mut Vec<String>, manifest: &GenesisManif
             "validator_admission_root",
             manifest.validator_admission_root.as_str(),
         ),
+        ("reward_ledger_root", manifest.reward_ledger_root.as_str()),
     ] {
         if let Some(previous_label) = roots_by_value.insert(root, label) {
             errors.push(format!("{label} must differ from {previous_label}"));
@@ -1506,6 +1526,12 @@ pub fn verify_launch_package_jsons(
             validator_set_manifest.epoch, genesis_report.validator_set_epoch
         ));
     }
+    if genesis_report.reward_ledger_root != validator_set_report.reward_ledger_root {
+        errors.push(format!(
+            "genesis reward_ledger_root does not match validator reward ledger root {}",
+            validator_set_report.reward_ledger_root
+        ));
+    }
     if genesis_report.initial_validator_count != validator_set_report.validator_count {
         errors.push(format!(
             "genesis initial_validator_count expected {} but got {}",
@@ -1559,8 +1585,10 @@ pub fn verify_launch_package_jsons(
         fee_policy_root: economics_root.to_string(),
         validator_set_root: validator_set_report.validator_set_root,
         validator_set_epoch: genesis_report.validator_set_epoch,
+        reward_ledger_root: genesis_report.reward_ledger_root,
         genesis_root: genesis_report.genesis_root,
         matched_validator_count: validator_set_manifest.validators.len(),
+        matched_reward_account_count: validator_set_report.reward_account_count,
         matched_operator_count: validator_set_report.operator_count,
         matched_region_count: validator_set_report.region_count,
         deployment_operator_count: deployment_attestation.operators.len(),
@@ -3229,6 +3257,39 @@ fn validator_set_root(manifest: &ValidatorSetManifest) -> String {
     }))
 }
 
+fn validator_reward_ledger_root(manifest: &ValidatorSetManifest) -> String {
+    let mut accounts = manifest
+        .validators
+        .iter()
+        .map(|validator| {
+            (
+                validator.reward_account.as_str(),
+                validator.operator_id.as_str(),
+                validator.validator_id.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    accounts.sort_unstable();
+    let accounts = accounts
+        .into_iter()
+        .map(|(reward_account, operator_id, validator_id)| {
+            json!({
+                "reward_account": reward_account,
+                "operator_id": operator_id,
+                "validator_id": validator_id,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    stable_root(&json!({
+        "ledger_domain": "nebula-validator-reward-ledger-v1",
+        "chain_id": manifest.chain_id,
+        "epoch": manifest.epoch,
+        "reward_unit": manifest.reward_unit,
+        "accounts": accounts,
+    }))
+}
+
 fn genesis_manifest_root(manifest: &GenesisManifest) -> String {
     stable_root(&json!({
         "chain_id": manifest.chain_id,
@@ -3240,6 +3301,7 @@ fn genesis_manifest_root(manifest: &GenesisManifest) -> String {
         "validator_set_epoch": manifest.validator_set_epoch,
         "fee_policy_root": manifest.fee_policy_root,
         "validator_admission_root": manifest.validator_admission_root,
+        "reward_ledger_root": manifest.reward_ledger_root,
         "initial_validator_count": manifest.initial_validator_count,
         "initial_operator_count": manifest.initial_operator_count,
         "initial_region_count": manifest.initial_region_count,
@@ -4715,10 +4777,12 @@ mod public_launch {
         assert!(report.validator_set_ready);
         assert_eq!(report.level, "validator-set-attested");
         assert_eq!(report.validator_count, 2);
+        assert_eq!(report.reward_account_count, 2);
         assert_eq!(report.operator_count, 2);
         assert_eq!(report.region_count, 2);
         assert_eq!(report.reward_unit, NEBULAI_UNIT);
         assert_eq!(report.total_genesis_power, 2);
+        assert_eq!(report.reward_ledger_root.len(), 64);
     }
 
     #[test]
@@ -5183,6 +5247,7 @@ mod public_launch {
         assert_eq!(report.genesis_root.len(), 64);
         assert_eq!(report.deployment_attestation_root.len(), 64);
         assert_eq!(report.validator_set_root.len(), 64);
+        assert_eq!(report.reward_ledger_root.len(), 64);
     }
 
     #[test]
@@ -5200,6 +5265,7 @@ mod public_launch {
         assert_eq!(report.initial_operator_count, 2);
         assert_eq!(report.initial_region_count, 2);
         assert_eq!(report.validator_set_epoch, PUBLIC_TESTNET_GENESIS_EPOCH);
+        assert_eq!(report.reward_ledger_root.len(), 64);
     }
 
     #[test]
@@ -5372,8 +5438,10 @@ mod public_launch {
         assert_eq!(report.fee_policy_root.len(), 64);
         assert_eq!(report.validator_set_root.len(), 64);
         assert_eq!(report.validator_set_epoch, PUBLIC_TESTNET_GENESIS_EPOCH);
+        assert_eq!(report.reward_ledger_root.len(), 64);
         assert_eq!(report.genesis_root.len(), 64);
         assert_eq!(report.matched_validator_count, 2);
+        assert_eq!(report.matched_reward_account_count, 2);
         assert_eq!(report.matched_operator_count, 2);
         assert_eq!(report.matched_region_count, 2);
         assert_eq!(report.deployment_operator_count, 2);
@@ -5450,6 +5518,40 @@ mod public_launch {
                 assert!(errors
                     .iter()
                     .any(|error| error == "genesis initial_region_count expected 2 but got 3"));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn launch_package_rejects_mismatched_genesis_reward_ledger_root() {
+        let deployment = sample_deployment_attestation_json_pretty();
+        let public_status = sample_public_status_manifest_json_pretty();
+        let public_probe = sample_public_probe_json_pretty();
+        let validators = sample_validator_set_json_pretty();
+        let mut genesis = serde_json::from_str::<Value>(
+            &build_genesis_manifest_json_pretty(&deployment, &validators).unwrap(),
+        )
+        .unwrap();
+        genesis["reward_ledger_root"] = json!(hex_64("different-reward-ledger-root"));
+        genesis["root"] = json!(genesis_manifest_root(
+            &serde_json::from_value::<GenesisManifest>(genesis.clone()).unwrap()
+        ));
+
+        let error = verify_launch_package_jsons(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &genesis.to_string(),
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error.starts_with("genesis reward_ledger_root does not match")));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
