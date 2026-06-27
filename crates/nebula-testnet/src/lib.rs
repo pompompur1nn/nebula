@@ -638,6 +638,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "minimum_tls_pin_validity_ms": MIN_TLS_PIN_VALIDITY_MS,
                 "rollback_drill_max_age_ms": ROLLBACK_DRILL_MAX_AGE_MS,
                 "preflight_runbook_evidence_domains_disjoint": true,
+                "receipts_complete_before_deployment_generation": true,
                 "deployment_witness_root_verified": true,
                 "public_https_endpoint_required": true,
                 "public_endpoint_authority_required": true,
@@ -1518,6 +1519,12 @@ pub fn verify_deployment_attestation_json(
         &attestation.preflight_receipt,
         &attestation.runbook_receipt,
     );
+    verify_receipts_before_deployment_generation(
+        &mut errors,
+        &attestation.preflight_receipt,
+        &attestation.runbook_receipt,
+        attestation.generated_at_unix_ms,
+    );
     verify_network_witnesses(&mut errors, &attestation);
     verify_rollback_evidence(&mut errors, &attestation.rollback_evidence, now);
 
@@ -2110,6 +2117,26 @@ fn verify_receipt_evidence_separation(
                 ));
             }
         }
+    }
+}
+
+fn verify_receipts_before_deployment_generation(
+    errors: &mut Vec<String>,
+    preflight_receipt: &Receipt,
+    runbook_receipt: &Receipt,
+    generated_at_unix_ms: u128,
+) {
+    if preflight_receipt.completed_at_unix_ms > generated_at_unix_ms {
+        errors.push(
+            "preflight_receipt.completed_at_unix_ms must be at or before generated_at_unix_ms"
+                .to_string(),
+        );
+    }
+    if runbook_receipt.completed_at_unix_ms > generated_at_unix_ms {
+        errors.push(
+            "runbook_receipt.completed_at_unix_ms must be at or before generated_at_unix_ms"
+                .to_string(),
+        );
     }
 }
 
@@ -3395,6 +3422,31 @@ mod public_launch {
                 assert!(errors.iter().any(|error| {
                     error
                         == "runbook_receipt.phases[0].steps[0].evidence_sha3_256 must not reuse preflight_receipt evidence"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_preflight_after_generation_time() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        let generated_at = value["generated_at_unix_ms"]
+            .as_u64()
+            .expect("sample generated_at fits u64");
+        value["preflight_receipt"]["completed_at_unix_ms"] = json!(generated_at + 1);
+        value["preflight_receipt"]["root"] = json!(receipt_root(
+            &serde_json::from_value::<Receipt>(value["preflight_receipt"].clone()).unwrap()
+        ));
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error
+                        == "preflight_receipt.completed_at_unix_ms must be at or before generated_at_unix_ms"
                 }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
