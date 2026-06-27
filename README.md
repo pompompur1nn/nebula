@@ -83,7 +83,8 @@ The public launch suite covers:
 - unique TLS certificate and public-key pin validation
 - deployment freshness windows for generated attestations, expiry, TLS pins,
   and rollback drills
-- standalone preflight/runbook receipt exact-shape validation
+- standalone preflight/runbook receipt exact-shape and unique evidence
+  validation
 - policy claim and public probe body exact-shape validation
 - preflight and runbook receipt exact-shape validation
 - bootstrap node/operator and observer attestation exact-shape validation
@@ -151,6 +152,8 @@ Public launch requires a filled deployment attestation. The verifier rejects:
 - unexpected observer and signature verification fields
 - stale or mismatched roots, package identities, launch bundle identities, and
   public status manifest identities
+- duplicated preflight/runbook receipt phase names, step names, and step
+  evidence roots
 - public status/probe endpoints that do not use `https://`
 - operator and observer witness roots that do not match the deployment surface
 - bootstrap node attestation roots that do not bind the deployment witness root
@@ -181,7 +184,9 @@ cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet 
 ```
 
 Operators can also verify preflight and runbook receipts before wrapping them in
-deployment evidence:
+deployment evidence. Receipt phase names must be unique, step names must be
+unique within each phase, and step evidence roots must be unique across the
+receipt:
 
 ```bash
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-preflight-receipt > /tmp/nebula-preflight.json

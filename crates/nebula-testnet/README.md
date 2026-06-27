@@ -47,7 +47,9 @@ regions. Deployment evidence must be generated within `24` hours, expire within
 rollback drill from the last `7` days.
 
 Preflight and runbook receipt verifiers let operators prove launch steps before
-wrapping those receipts in deployment evidence.
+wrapping those receipts in deployment evidence. Receipt phase names must be
+unique, step names must be unique within each phase, and step evidence roots
+must be unique across the receipt.
 
 Gas can be paid in `NBLA` or `nXMR`. `NBLA` fees go directly to the validator
 reward ledger. `nXMR` fees are converted into NBLA accounting value and split

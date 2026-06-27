@@ -679,14 +679,24 @@ pub fn readiness_report() -> NebulaReadiness {
                 "receipt_id": "preflight-receipt",
                 "all_phases_passed": true,
                 "all_steps_passed": true,
+                "phase_names_required": true,
+                "step_names_required": true,
+                "unique_phase_names_required": true,
+                "unique_step_names_per_phase_required": true,
                 "step_evidence_roots_required": true,
+                "unique_step_evidence_roots_required": true,
                 "root_required": true,
             })),
             "runbook_receipt": stable_root(&json!({
                 "receipt_id": "runbook-receipt",
                 "all_phases_passed": true,
                 "all_steps_passed": true,
+                "phase_names_required": true,
+                "step_names_required": true,
+                "unique_phase_names_required": true,
+                "unique_step_names_per_phase_required": true,
                 "step_evidence_roots_required": true,
+                "unique_step_evidence_roots_required": true,
                 "root_required": true,
             })),
             "guide": stable_root(&json!({
@@ -1953,7 +1963,20 @@ fn verify_receipt(errors: &mut Vec<String>, label: &str, receipt: &Receipt, now:
     if receipt.phases.is_empty() {
         errors.push(format!("{label}.phases must not be empty"));
     }
+    let mut phase_names = BTreeSet::new();
+    let mut step_evidence_roots = BTreeSet::new();
     for (phase_index, phase) in receipt.phases.iter().enumerate() {
+        require_non_empty(
+            errors,
+            &format!("{label}.phases[{phase_index}].name"),
+            &phase.name,
+        );
+        insert_unique(
+            errors,
+            &mut phase_names,
+            &format!("{label}.phases[{phase_index}].name"),
+            &phase.name,
+        );
         require_eq(
             errors,
             &format!("{label}.phases[{phase_index}].status"),
@@ -1965,7 +1988,19 @@ fn verify_receipt(errors: &mut Vec<String>, label: &str, receipt: &Receipt, now:
                 "{label}.phases[{phase_index}].steps must not be empty"
             ));
         }
+        let mut step_names = BTreeSet::new();
         for (step_index, step) in phase.steps.iter().enumerate() {
+            require_non_empty(
+                errors,
+                &format!("{label}.phases[{phase_index}].steps[{step_index}].name"),
+                &step.name,
+            );
+            insert_unique(
+                errors,
+                &mut step_names,
+                &format!("{label}.phases[{phase_index}].steps[{step_index}].name"),
+                &step.name,
+            );
             require_eq(
                 errors,
                 &format!("{label}.phases[{phase_index}].steps[{step_index}].status"),
@@ -1974,6 +2009,12 @@ fn verify_receipt(errors: &mut Vec<String>, label: &str, receipt: &Receipt, now:
             );
             require_hex_root(
                 errors,
+                &format!("{label}.phases[{phase_index}].steps[{step_index}].evidence_sha3_256"),
+                &step.evidence_sha3_256,
+            );
+            insert_unique(
+                errors,
+                &mut step_evidence_roots,
                 &format!("{label}.phases[{phase_index}].steps[{step_index}].evidence_sha3_256"),
                 &step.evidence_sha3_256,
             );
@@ -2931,6 +2972,60 @@ mod public_launch {
             AttestationError::Invalid(errors) => {
                 assert!(errors.iter().any(|error| {
                     error == "receipt_id expected preflight-receipt but got runbook-receipt"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn preflight_receipt_rejects_duplicate_phase_names() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_preflight_receipt_json_pretty()).unwrap();
+        let duplicate_phase = value["phases"][0].clone();
+        value["phases"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate_phase);
+        value["root"] = json!(receipt_root(
+            &serde_json::from_value::<Receipt>(value.clone()).unwrap()
+        ));
+
+        let error = verify_preflight_receipt_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "preflight-receipt.phases[1].name must be unique"));
+                assert!(errors.iter().any(|error| {
+                    error == "preflight-receipt.phases[1].steps[0].evidence_sha3_256 must be unique"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn preflight_receipt_rejects_duplicate_step_names_and_evidence_roots() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_preflight_receipt_json_pretty()).unwrap();
+        value["phases"][0]["steps"][1]["name"] = value["phases"][0]["steps"][0]["name"].clone();
+        value["phases"][0]["steps"][1]["evidence_sha3_256"] =
+            value["phases"][0]["steps"][0]["evidence_sha3_256"].clone();
+        value["root"] = json!(receipt_root(
+            &serde_json::from_value::<Receipt>(value.clone()).unwrap()
+        ));
+
+        let error = verify_preflight_receipt_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error == "preflight-receipt.phases[0].steps[1].name must be unique"
+                }));
+                assert!(errors.iter().any(|error| {
+                    error == "preflight-receipt.phases[0].steps[1].evidence_sha3_256 must be unique"
                 }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
