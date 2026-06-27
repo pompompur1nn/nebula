@@ -657,6 +657,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "hex_operator_keys_required": true,
                 "unique_observer_ids_required": true,
                 "unique_observer_keys_required": true,
+                "operator_observer_id_domains_disjoint": true,
                 "hex_observer_keys_required": true,
                 "operator_observer_key_domains_disjoint": true,
                 "operator_region_spread_required": true,
@@ -2351,6 +2352,11 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &format!("observers[{index}].observer_id"),
             &observer.observer_id,
         );
+        if operator_ids.contains(&observer.observer_id) {
+            errors.push(format!(
+                "observers[{index}].observer_id must not reuse an operator_id"
+            ));
+        }
         observer_regions.insert(observer.region.clone());
         require_eq(
             errors,
@@ -3890,6 +3896,25 @@ mod public_launch {
                     .any(|error| error == "observers[1].observer_id must be unique"));
                 assert!(errors.iter().any(|error| {
                     error == "observers must include at least 2 unique observer_id values"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_observer_id_reused_as_operator_id() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["observers"][0]["observer_id"] = value["operators"][0]["operator_id"].clone();
+        refresh_observer_signature_root(&mut value, 0);
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error == "observers[0].observer_id must not reuse an operator_id"
                 }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
