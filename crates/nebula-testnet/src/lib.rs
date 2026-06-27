@@ -610,6 +610,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "fee_policy_root_required": true,
                 "signed_admission_root_binds_validator_payload": true,
                 "validator_identity_whitespace_free": true,
+                "validator_identity_domains_disjoint": true,
                 "operator_contact_required": true,
                 "operator_contact_address_required": true,
                 "hex_consensus_key_required": true,
@@ -2610,6 +2611,21 @@ fn verify_validator_admission(
         &format!("validators[{index}].node_id"),
         &validator.node_id,
     );
+    if validator.validator_id == validator.operator_id {
+        errors.push(format!(
+            "validators[{index}].validator_id must differ from operator_id"
+        ));
+    }
+    if validator.validator_id == validator.node_id {
+        errors.push(format!(
+            "validators[{index}].validator_id must differ from node_id"
+        ));
+    }
+    if validator.operator_id == validator.node_id {
+        errors.push(format!(
+            "validators[{index}].node_id must differ from operator_id"
+        ));
+    }
     require_non_empty(
         errors,
         &format!("validators[{index}].region"),
@@ -4127,6 +4143,24 @@ mod public_launch {
                         .any(|error| error
                             == "validators[0].validator_id must not contain whitespace")
                 );
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn validator_set_rejects_validator_id_reused_as_operator_id() {
+        let mut value = serde_json::from_str::<Value>(&sample_validator_set_json_pretty()).unwrap();
+        value["validators"][0]["validator_id"] = value["validators"][0]["operator_id"].clone();
+        refresh_validator_manifest_root(&mut value, 0);
+
+        let error = verify_validator_set_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(
+                    |error| error == "validators[0].validator_id must differ from operator_id"
+                ));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
