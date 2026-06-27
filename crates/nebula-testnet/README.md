@@ -43,7 +43,8 @@ operator IDs/keys, observer IDs/keys, and TLS certificate/public-key pins must
 be unique. TLS certificate pins and public-key pins must not reuse each other.
 Operator and observer public keys must be 64-character hex values, and observer
 keys must not reuse operator keys.
-Public status, probe, and bootstrap HTTPS endpoints must include a host. Bootstrap
+Public status, probe, and bootstrap HTTPS endpoints must include a host and no
+userinfo. Bootstrap
 nodes must match their attested operator region. Bootstrap
 nodes, operator quorums, and observer quorums must each cover at least two
 regions. Bootstrap, operator, observer, and deployment-region labels must not
@@ -75,12 +76,13 @@ whitespace. Validator IDs, node IDs, keys, reward accounts, and P2P endpoints
 must be unique. No single validator may hold more than `5000` basis points of
 total genesis power. Operator contacts must use `mailto:` or `https://`.
 `mailto:` contacts must include an email address, `https://` contacts must
-include a host, and P2P endpoints must use `tcp://host:port`. Validator
-admission reward accounts must use `nbla-reward-{operator_id}` and rewards are
-denominated in `nebulai`. Each signed admission root must bind the validator
-identity, operator contact, keys, reward account, commission, genesis power,
-reward unit, and fee-policy root. Consensus and network public keys must be
-64-character hex values, and consensus/network key domains must be disjoint.
+include a host and no userinfo, and P2P endpoints must use `tcp://host:port`
+with no userinfo. Validator admission reward accounts must use
+`nbla-reward-{operator_id}` and rewards are denominated in `nebulai`. Each
+signed admission root must bind the validator identity, operator contact, keys,
+reward account, commission, genesis power, reward unit, and fee-policy root.
+Consensus and network public keys must be 64-character hex values, and
+consensus/network key domains must be disjoint.
 
 The genesis manifest builder binds verified deployment evidence and validator
 admission into the root artifact used to start a public testnet. The final

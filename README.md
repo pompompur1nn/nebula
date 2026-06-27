@@ -71,7 +71,7 @@ The public launch suite covers:
 - deployment evidence root binding
 - public status manifest redaction
 - public endpoint and TLS pin evidence
-- HTTPS-only public status/probe endpoints with non-empty hosts
+- HTTPS-only public status/probe endpoints with non-empty hosts and no userinfo
 - standalone public status/probe surface exact-shape validation
 - final package binding for the public status/probe surface
 - shared deployment witness root binding for bootstrap nodes, operators, and
@@ -170,7 +170,8 @@ Public launch requires a filled deployment attestation. The verifier rejects:
 - duplicated preflight/runbook receipt phase names, step names, and step
   evidence roots
 - public status/probe endpoints that do not use `https://`
-- public status/probe and bootstrap endpoints that do not include a host
+- public status/probe and bootstrap endpoints that do not include a host or
+  include userinfo
 - operator and observer witness roots that do not match the deployment surface
 - operator and observer public keys that are not 64-character hex values
 - observer public keys that reuse an operator public key
@@ -238,13 +239,14 @@ consensus keys, network keys, reward accounts, and P2P endpoints must be unique.
 Genesis power must be positive, no single validator may hold more than `5000`
 basis points of total genesis power, commission must be at or below `10000`
 basis points, operator contacts must use `mailto:` or `https://`, `mailto:`
-contacts must include an email address, `https://` contacts must include a host,
-P2P endpoints must use `tcp://host:port`, reward accounts must use the
-`nbla-reward-{operator_id}` form, and rewards must be denominated in `nebulai`.
-Each validator admission signature root must bind the validator identity,
-operator contact, keys, reward account, commission, genesis power, reward unit,
-and fee-policy root. Consensus and network public keys must be 64-character hex
-values, and consensus/network key domains must be disjoint.
+contacts must include an email address, `https://` contacts must include a host
+and no userinfo, P2P endpoints must use `tcp://host:port` with no userinfo,
+reward accounts must use the `nbla-reward-{operator_id}` form, and rewards must
+be denominated in `nebulai`. Each validator admission signature root must bind
+the validator identity, operator contact, keys, reward account, commission,
+genesis power, reward unit, and fee-policy root. Consensus and network public
+keys must be 64-character hex values, and consensus/network key domains must be
+disjoint.
 
 Operators can generate the required shape and verify a filled validator set
 with:
