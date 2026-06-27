@@ -701,6 +701,7 @@ pub struct PublicTestnetLaunchCertificate {
     pub public_observer_confirmation_root: String,
     pub public_status_manifest_root: String,
     pub public_probe_root: String,
+    pub runtime_surface_root: String,
     pub validator_set_root: String,
     pub genesis_root: String,
     pub endpoint_url: String,
@@ -724,6 +725,7 @@ pub struct PublicTestnetLaunchCertificateReport {
     pub public_observer_confirmation_root: String,
     pub public_status_manifest_root: String,
     pub public_probe_root: String,
+    pub runtime_surface_root: String,
     pub endpoint_url: String,
     pub validator_count: usize,
     pub operator_count: usize,
@@ -942,6 +944,10 @@ pub struct RuntimeSurfaceEvidenceReport {
     pub endpoint_url: String,
     pub chain_id: String,
     pub runtime_version: String,
+    pub launch_package_bundle_root: String,
+    pub launch_package_root: String,
+    pub validator_set_root: String,
+    pub genesis_root: String,
     pub latest_height: u64,
     pub latest_hash: String,
     pub snapshot_root: String,
@@ -1024,6 +1030,7 @@ struct LaunchCertificateReports {
     validator_join: ValidatorJoinReport,
     operator_join_confirmation: OperatorJoinConfirmationReport,
     public_observer_confirmation: PublicObserverConfirmationReport,
+    runtime_surface: RuntimeSurfaceEvidenceReport,
     genesis: GenesisManifestReport,
     deployment: DeploymentAttestationReport,
 }
@@ -1657,6 +1664,33 @@ pub fn prove_local_public_testnet_rehearsal(
         &operator_acceptance_json,
         &genesis_manifest_json,
     )?;
+    let sequencer_binding = build_runtime_launch_binding_from_jsons(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+        &launch_package_bundle_json,
+        "validator-a",
+    )?;
+    let follower_binding = build_runtime_launch_binding_from_jsons(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+        &launch_package_bundle_json,
+        "validator-b",
+    )?;
+    let (_live_rpc_report, runtime_surface_evidence) =
+        prove_live_rpc_devnet_rehearsal_with_bindings(sequencer_binding, follower_binding)?;
+    let runtime_surface_evidence_json = runtime_surface_evidence.to_string();
+    let runtime_surface_report =
+        verify_runtime_surface_evidence_json(&runtime_surface_evidence_json)?;
     let validator_activation_json = build_validator_activation_json_pretty(
         &launch_package_bundle_json,
         &deployment_attestation_json,
@@ -1756,6 +1790,7 @@ pub fn prove_local_public_testnet_rehearsal(
     let public_testnet_launch_certificate_json =
         build_public_testnet_launch_certificate_json_pretty(
             &public_observer_confirmation_json,
+            &runtime_surface_evidence_json,
             &operator_join_confirmation_json,
             &validator_join_json,
             &validator_activation_json,
@@ -1771,6 +1806,7 @@ pub fn prove_local_public_testnet_rehearsal(
     let public_testnet_launch_certificate_report = verify_public_testnet_launch_certificate_jsons(
         &public_testnet_launch_certificate_json,
         &public_observer_confirmation_json,
+        &runtime_surface_evidence_json,
         &operator_join_confirmation_json,
         &validator_join_json,
         &validator_activation_json,
@@ -1869,6 +1905,11 @@ pub fn prove_local_public_testnet_rehearsal(
                 .clone(),
         ),
         local_rehearsal_artifact(
+            "runtime_surface_evidence",
+            runtime_surface_report.level,
+            runtime_surface_report.runtime_surface_root.clone(),
+        ),
+        local_rehearsal_artifact(
             "public_testnet_launch_certificate",
             public_testnet_launch_certificate_report.level,
             public_testnet_launch_certificate_report
@@ -1914,6 +1955,55 @@ pub fn prove_live_rpc_devnet_rehearsal_json_pretty() -> Result<String, Attestati
 }
 
 pub fn prove_live_rpc_devnet_rehearsal() -> Result<LiveRpcDevnetRehearsalReport, AttestationError> {
+    let (sequencer_binding, follower_binding) = live_runtime_launch_bindings()?;
+    let (report, _evidence) =
+        prove_live_rpc_devnet_rehearsal_with_bindings(sequencer_binding, follower_binding)?;
+    Ok(report)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_live_rpc_devnet_runtime_surface_evidence_json_pretty(
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<String, AttestationError> {
+    let sequencer_binding = build_runtime_launch_binding_from_jsons(
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+        launch_package_bundle_json,
+        "validator-a",
+    )?;
+    let follower_binding = build_runtime_launch_binding_from_jsons(
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+        launch_package_bundle_json,
+        "validator-b",
+    )?;
+    let (_report, evidence) =
+        prove_live_rpc_devnet_rehearsal_with_bindings(sequencer_binding, follower_binding)?;
+    serde_json::to_string_pretty(&evidence)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+fn prove_live_rpc_devnet_rehearsal_with_bindings(
+    sequencer_binding: runtime::RuntimeLaunchBinding,
+    follower_binding: runtime::RuntimeLaunchBinding,
+) -> Result<(LiveRpcDevnetRehearsalReport, Value), AttestationError> {
     const ADMIN_TOKEN: &str = "live-rpc-devnet-rehearsal-admin";
     let readiness = readiness_report();
     let public_launch_blocker = readiness
@@ -1922,7 +2012,6 @@ pub fn prove_live_rpc_devnet_rehearsal() -> Result<LiveRpcDevnetRehearsalReport,
         .first()
         .cloned()
         .unwrap_or_else(|| "none".to_string());
-    let (sequencer_binding, follower_binding) = live_runtime_launch_bindings()?;
     let endpoint_url = sequencer_binding.endpoint_url.clone();
     let block_millis = runtime::DEFAULT_SUBSECOND_BLOCK_MS;
 
@@ -2208,7 +2297,7 @@ pub fn prove_live_rpc_devnet_rehearsal() -> Result<LiveRpcDevnetRehearsalReport,
         ));
     }
     report.rehearsal_root = live_rpc_devnet_rehearsal_root(&report);
-    Ok(report)
+    Ok((report, evidence))
 }
 
 pub fn sample_deployment_attestation_json_pretty() -> String {
@@ -2782,6 +2871,29 @@ fn verify_runtime_surface_evidence(
         );
     }
 
+    let launch_package_bundle_root =
+        json_string_field(&evidence.status, "status.launch_package_bundle_root").ok();
+    let launch_package_root =
+        json_string_field(&evidence.status, "status.launch_package_root").ok();
+    let validator_set_root = json_string_field(&evidence.status, "status.validator_set_root").ok();
+    let genesis_root = json_string_field(&evidence.status, "status.genesis_root").ok();
+    match &launch_package_bundle_root {
+        Some(root) => require_hex_root(&mut errors, "status.launch_package_bundle_root", root),
+        None => errors.push("status.launch_package_bundle_root must be a string".to_string()),
+    }
+    match &launch_package_root {
+        Some(root) => require_hex_root(&mut errors, "status.launch_package_root", root),
+        None => errors.push("status.launch_package_root must be a string".to_string()),
+    }
+    match &validator_set_root {
+        Some(root) => require_hex_root(&mut errors, "status.validator_set_root", root),
+        None => errors.push("status.validator_set_root must be a string".to_string()),
+    }
+    match &genesis_root {
+        Some(root) => require_hex_root(&mut errors, "status.genesis_root", root),
+        None => errors.push("status.genesis_root must be a string".to_string()),
+    }
+
     let health_ready = json_bool(&evidence.health, "public_ops_ready").unwrap_or(false);
     let ops_ready = json_bool(&evidence.ops, "public_ops_ready").unwrap_or(false);
     if !health_ready {
@@ -2811,6 +2923,13 @@ fn verify_runtime_surface_evidence(
         endpoint_url: evidence.endpoint_url.clone(),
         chain_id: evidence.chain_id.clone(),
         runtime_version: evidence.runtime_version.clone(),
+        launch_package_bundle_root: launch_package_bundle_root
+            .expect("launch package bundle root was parsed when no errors were recorded"),
+        launch_package_root: launch_package_root
+            .expect("launch package root was parsed when no errors were recorded"),
+        validator_set_root: validator_set_root
+            .expect("validator set root was parsed when no errors were recorded"),
+        genesis_root: genesis_root.expect("genesis root was parsed when no errors were recorded"),
         latest_height: latest.height,
         latest_hash: latest.block_hash.clone(),
         snapshot_root: snapshot.root,
@@ -5173,6 +5292,7 @@ pub fn verify_public_observer_confirmation_jsons(
 #[allow(clippy::too_many_arguments)]
 pub fn build_public_testnet_launch_certificate_json_pretty(
     public_observer_confirmation_json: &str,
+    runtime_surface_evidence_json: &str,
     operator_join_confirmation_json: &str,
     validator_join_receipt_json: &str,
     validator_activation_json: &str,
@@ -5187,6 +5307,7 @@ pub fn build_public_testnet_launch_certificate_json_pretty(
 ) -> Result<String, AttestationError> {
     let reports = verified_launch_certificate_reports(
         public_observer_confirmation_json,
+        runtime_surface_evidence_json,
         operator_join_confirmation_json,
         validator_join_receipt_json,
         validator_activation_json,
@@ -5209,6 +5330,7 @@ pub fn build_public_testnet_launch_certificate_json_pretty(
 pub fn verify_public_testnet_launch_certificate_jsons(
     public_testnet_launch_certificate_json: &str,
     public_observer_confirmation_json: &str,
+    runtime_surface_evidence_json: &str,
     operator_join_confirmation_json: &str,
     validator_join_receipt_json: &str,
     validator_activation_json: &str,
@@ -5227,6 +5349,7 @@ pub fn verify_public_testnet_launch_certificate_jsons(
     .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
     let reports = verified_launch_certificate_reports(
         public_observer_confirmation_json,
+        runtime_surface_evidence_json,
         operator_join_confirmation_json,
         validator_join_receipt_json,
         validator_activation_json,
@@ -5311,6 +5434,12 @@ pub fn verify_public_testnet_launch_certificate_jsons(
     );
     require_root(
         &mut errors,
+        "runtime_surface_root",
+        &certificate.runtime_surface_root,
+        &expected.runtime_surface_root,
+    );
+    require_root(
+        &mut errors,
         "validator_set_root",
         &certificate.validator_set_root,
         &expected.validator_set_root,
@@ -5379,6 +5508,7 @@ pub fn verify_public_testnet_launch_certificate_jsons(
         public_observer_confirmation_root: certificate.public_observer_confirmation_root,
         public_status_manifest_root: certificate.public_status_manifest_root,
         public_probe_root: certificate.public_probe_root,
+        runtime_surface_root: certificate.runtime_surface_root,
         endpoint_url: certificate.endpoint_url,
         validator_count: certificate.validator_count,
         operator_count: certificate.operator_count,
@@ -9779,6 +9909,7 @@ fn public_observer_confirmation_manifest_root(
 #[allow(clippy::too_many_arguments)]
 fn verified_launch_certificate_reports(
     public_observer_confirmation_json: &str,
+    runtime_surface_evidence_json: &str,
     operator_join_confirmation_json: &str,
     validator_join_receipt_json: &str,
     validator_activation_json: &str,
@@ -9851,8 +9982,43 @@ fn verified_launch_certificate_reports(
         operator_acceptance_json,
         genesis_manifest_json,
     )?;
+    let runtime_surface = verify_runtime_surface_evidence_json(runtime_surface_evidence_json)?;
     let genesis = verify_genesis_manifest_json(genesis_manifest_json)?;
     let deployment = verify_deployment_attestation_json(deployment_attestation_json)?;
+    let mut errors = Vec::new();
+    require_eq(
+        &mut errors,
+        "runtime_surface.endpoint_url",
+        &runtime_surface.endpoint_url,
+        &public_observer_confirmation.endpoint_url,
+    );
+    require_root(
+        &mut errors,
+        "runtime_surface.launch_package_bundle_root",
+        &runtime_surface.launch_package_bundle_root,
+        &launch_package_bundle.launch_package_bundle_root,
+    );
+    require_root(
+        &mut errors,
+        "runtime_surface.launch_package_root",
+        &runtime_surface.launch_package_root,
+        &launch_package_bundle.launch_package_root,
+    );
+    require_root(
+        &mut errors,
+        "runtime_surface.validator_set_root",
+        &runtime_surface.validator_set_root,
+        &launch_package_bundle.validator_set_root,
+    );
+    require_root(
+        &mut errors,
+        "runtime_surface.genesis_root",
+        &runtime_surface.genesis_root,
+        &genesis.genesis_root,
+    );
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
 
     Ok(LaunchCertificateReports {
         launch_package_bundle,
@@ -9860,6 +10026,7 @@ fn verified_launch_certificate_reports(
         validator_join,
         operator_join_confirmation,
         public_observer_confirmation,
+        runtime_surface,
         genesis,
         deployment,
     })
@@ -9898,6 +10065,7 @@ fn public_testnet_launch_certificate(
             .public_observer_confirmation
             .public_probe_root
             .clone(),
+        runtime_surface_root: reports.runtime_surface.runtime_surface_root.clone(),
         validator_set_root: reports.launch_package_bundle.validator_set_root.clone(),
         genesis_root: reports.genesis.genesis_root.clone(),
         endpoint_url: reports.public_observer_confirmation.endpoint_url.clone(),
@@ -9927,6 +10095,7 @@ fn public_testnet_launch_certificate_root(certificate: &PublicTestnetLaunchCerti
         "public_observer_confirmation_root": certificate.public_observer_confirmation_root,
         "public_status_manifest_root": certificate.public_status_manifest_root,
         "public_probe_root": certificate.public_probe_root,
+        "runtime_surface_root": certificate.runtime_surface_root,
         "validator_set_root": certificate.validator_set_root,
         "genesis_root": certificate.genesis_root,
         "endpoint_url": certificate.endpoint_url,
@@ -13361,8 +13530,20 @@ mod public_launch {
             &genesis,
         )
         .unwrap();
+        let runtime_surface = build_live_rpc_devnet_runtime_surface_evidence_json_pretty(
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
         let certificate = build_public_testnet_launch_certificate_json_pretty(
             &observer_confirmation,
+            &runtime_surface,
             &join_confirmation,
             &join,
             &activation,
@@ -13380,6 +13561,7 @@ mod public_launch {
         let report = verify_public_testnet_launch_certificate_jsons(
             &certificate,
             &observer_confirmation,
+            &runtime_surface,
             &join_confirmation,
             &join,
             &activation,
@@ -13397,6 +13579,7 @@ mod public_launch {
         assert!(report.public_testnet_launch_certificate_ready);
         assert_eq!(report.level, "public-testnet-launch-candidate-certified");
         assert_eq!(report.public_testnet_launch_certificate_root.len(), 64);
+        assert_eq!(report.runtime_surface_root.len(), 64);
         assert_eq!(report.validator_count, 2);
         assert_eq!(report.operator_count, 2);
         assert_eq!(report.observer_count, 2);
@@ -13474,9 +13657,21 @@ mod public_launch {
             &genesis,
         )
         .unwrap();
-        let mut certificate = serde_json::from_str::<Value>(
+        let runtime_surface = build_live_rpc_devnet_runtime_surface_evidence_json_pretty(
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let certificate = serde_json::from_str::<Value>(
             &build_public_testnet_launch_certificate_json_pretty(
                 &observer_confirmation,
+                &runtime_surface,
                 &join_confirmation,
                 &join,
                 &activation,
@@ -13492,14 +13687,19 @@ mod public_launch {
             .unwrap(),
         )
         .unwrap();
-        certificate["validator_count"] = json!(1);
-        certificate["root"] = json!(public_testnet_launch_certificate_root(
-            &serde_json::from_value::<PublicTestnetLaunchCertificate>(certificate.clone()).unwrap()
+        let mut wrong_validator_count = certificate.clone();
+        wrong_validator_count["validator_count"] = json!(1);
+        wrong_validator_count["root"] = json!(public_testnet_launch_certificate_root(
+            &serde_json::from_value::<PublicTestnetLaunchCertificate>(
+                wrong_validator_count.clone()
+            )
+            .unwrap()
         ));
 
         let error = verify_public_testnet_launch_certificate_jsons(
-            &certificate.to_string(),
+            &wrong_validator_count.to_string(),
             &observer_confirmation,
+            &runtime_surface,
             &join_confirmation,
             &join,
             &activation,
@@ -13519,6 +13719,45 @@ mod public_launch {
                 assert!(errors
                     .iter()
                     .any(|error| error == "validator_count expected 2 but got 1"));
+                assert!(errors.iter().any(|error| {
+                    error.starts_with("public testnet launch certificate root does not match")
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let mut wrong_runtime_surface = certificate;
+        wrong_runtime_surface["runtime_surface_root"] = json!(hex_64("wrong-runtime-surface-root"));
+        wrong_runtime_surface["root"] = json!(public_testnet_launch_certificate_root(
+            &serde_json::from_value::<PublicTestnetLaunchCertificate>(
+                wrong_runtime_surface.clone()
+            )
+            .unwrap()
+        ));
+
+        let error = verify_public_testnet_launch_certificate_jsons(
+            &wrong_runtime_surface.to_string(),
+            &observer_confirmation,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error.starts_with("runtime_surface_root does not match")));
                 assert!(errors.iter().any(|error| {
                     error.starts_with("public testnet launch certificate root does not match")
                 }));
