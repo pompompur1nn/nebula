@@ -14,7 +14,7 @@ use nebula_testnet::{
     sample_deployment_attestation_json_pretty, sample_public_probe_json_pretty,
     sample_public_status_manifest_json_pretty, sample_validator_set_json_pretty,
     verify_runtime_surface_evidence_json, AttestationError, RuntimeSurfaceEvidenceBuildInput,
-    CHAIN_ID, NBLA_SYMBOL, NXMR_SYMBOL, RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET,
+    CHAIN_ID, NBLA_SYMBOL, RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET,
 };
 use serde_json::{json, Value};
 use std::{
@@ -156,6 +156,7 @@ fn metrics_endpoint_exposes_public_rpc_operational_gauges() {
     assert!(body.contains("nebula_launch_operator_count 0"));
     assert!(body.contains("nebula_launch_region_count 0"));
     assert!(body.contains("nebula_mempool_admission_rejection_count 0"));
+    assert!(body.contains("nebula_faucet_nbla_nebulai "));
     assert!(body.contains("nebula_faucet_nxmr_units 0"));
     assert!(body.contains("nebula_bridge_only_nxmr 1"));
     assert!(body.contains("nebula_bridge_custody_reconciled 1"));
@@ -246,6 +247,7 @@ fn launch_bound_follower_exports_verifiable_runtime_surface_evidence() {
     sequencer_config.block_target_ms = 999;
     sequencer_config.validator_id = "validator-a".to_string();
     sequencer_config.launch_binding = Some(sequencer_binding.clone());
+    sequencer_config.faucet_nbla_nebulai = 0;
     let initial_sequencer_secret_key_hex = "3c".repeat(32);
     sequencer_config.sequencer_public_key_hex =
         hex::encode(signing_key(0x3c).verifying_key().to_bytes());
@@ -305,12 +307,12 @@ fn launch_bound_follower_exports_verifiable_runtime_surface_evidence() {
     let bridge_account_seed = 0x46;
     let bridge_account = account_id(bridge_account_seed);
     let bridge_monero_tx_id = hex_64("m45");
-    let faucet = rpc_call(
+    let disabled_faucet = rpc_call(
         &sequencer_addr,
         "nebula_faucet",
         json!({ "account": bridge_account.clone() }),
     );
-    assert_eq!(rpc_result(&faucet)["credited_nxmr_units"], 0);
+    assert_rpc_error_contains(&disabled_faucet, "NBLA faucet is disabled");
 
     let bridge_deposit = rpc_call(
         &sequencer_admin_addr,
@@ -324,29 +326,6 @@ fn launch_bound_follower_exports_verifiable_runtime_surface_evidence() {
     assert_eq!(bridge_deposit["credited"], true);
     assert_eq!(bridge_deposit["account_state"]["nxmr_units"], 5_000);
 
-    let nxmr_gas_tx = rpc_call(
-        &sequencer_addr,
-        "nebula_sendTransaction",
-        json!({ "tx": signed_nxmr_fee_transaction(bridge_account_seed, 0, "live-nxmr-recipient") }),
-    );
-    assert_eq!(rpc_result(&nxmr_gas_tx)["accepted_to_mempool"], true);
-    let block_with_nxmr_fee = rpc_call(
-        &sequencer_admin_addr,
-        "nebula_produceBlock",
-        json!({ "admin_token": ADMIN_TOKEN }),
-    );
-    let block_with_nxmr_fee = rpc_result(&block_with_nxmr_fee);
-    assert!(
-        block_with_nxmr_fee["height"]
-            .as_u64()
-            .expect("produced block height is numeric")
-            > 0
-    );
-    assert_eq!(
-        block_with_nxmr_fee["producer_public_key"],
-        rotated_public_key
-    );
-
     let withdrawal = rpc_call(
         &sequencer_addr,
         "nebula_requestWithdrawal",
@@ -354,12 +333,12 @@ fn launch_bound_follower_exports_verifiable_runtime_surface_evidence() {
             "account": bridge_account.clone(),
             "monero_address": "9xTestnetMoneroAddressForNebulaWithdrawals",
             "amount_nxmr_units": 2_000,
-            "nonce": 1,
+            "nonce": 0,
             "signature": withdrawal_signature(
                 bridge_account_seed,
                 "9xTestnetMoneroAddressForNebulaWithdrawals",
                 2_000,
-                1
+                0
             ),
         }),
     );
@@ -410,9 +389,9 @@ fn launch_bound_follower_exports_verifiable_runtime_surface_evidence() {
                 && status["finalized_withdrawal_count"] == 1
                 && status["bridge_replay_cache_count"] == 2
                 && status["sequencer_public_key_hex"] == rotated_public_key
-                && status["total_nxmr_fees_units"] == 1_000
-                && status["buyback_pool_nebulai"] == 900
-                && status["validator_reward_nebulai"] == 100
+                && status["total_nxmr_fees_units"] == 0
+                && status["buyback_pool_nebulai"] == 0
+                && status["validator_reward_nebulai"] == 0
                 && status["latest_state_root"] == status["current_state_root"]
                 && status["bridge_custody_reconciled"] == true
         },
@@ -421,12 +400,12 @@ fn launch_bound_follower_exports_verifiable_runtime_surface_evidence() {
         sequencer_lifecycle_status["bridge_deposited_nxmr_units"],
         5_000
     );
-    assert_eq!(sequencer_lifecycle_status["account_nxmr_units"], 2_000);
+    assert_eq!(sequencer_lifecycle_status["account_nxmr_units"], 3_000);
     assert_eq!(
         sequencer_lifecycle_status["withdrawal_reserved_nxmr_units"],
         2_000
     );
-    assert_eq!(sequencer_lifecycle_status["nxmr_fee_units"], 1_000);
+    assert_eq!(sequencer_lifecycle_status["nxmr_fee_units"], 0);
     assert_eq!(
         sequencer_lifecycle_status["nxmr_custody_required_units"],
         5_000
@@ -492,13 +471,14 @@ fn launch_bound_follower_exports_verifiable_runtime_surface_evidence() {
     assert_eq!(evidence["status"]["withdrawal_request_count"], 1);
     assert_eq!(evidence["status"]["finalized_withdrawal_count"], 1);
     assert_eq!(evidence["status"]["bridge_replay_cache_count"], 2);
-    assert_eq!(evidence["status"]["total_nxmr_fees_units"], 1_000);
-    assert_eq!(evidence["status"]["buyback_pool_nebulai"], 900);
-    assert_eq!(evidence["status"]["validator_reward_nebulai"], 100);
+    assert_eq!(evidence["status"]["faucet_nbla_nebulai"], 0);
+    assert_eq!(evidence["status"]["total_nxmr_fees_units"], 0);
+    assert_eq!(evidence["status"]["buyback_pool_nebulai"], 0);
+    assert_eq!(evidence["status"]["validator_reward_nebulai"], 0);
     assert_eq!(evidence["status"]["bridge_deposited_nxmr_units"], 5_000);
-    assert_eq!(evidence["status"]["account_nxmr_units"], 2_000);
+    assert_eq!(evidence["status"]["account_nxmr_units"], 3_000);
     assert_eq!(evidence["status"]["withdrawal_reserved_nxmr_units"], 2_000);
-    assert_eq!(evidence["status"]["nxmr_fee_units"], 1_000);
+    assert_eq!(evidence["status"]["nxmr_fee_units"], 0);
     assert_eq!(evidence["status"]["nxmr_custody_required_units"], 5_000);
     assert_eq!(evidence["status"]["nxmr_custody_surplus_units"], 0);
     assert_eq!(evidence["status"]["nxmr_custody_deficit_units"], 0);
@@ -535,6 +515,7 @@ fn launch_bound_accountability_report_blocks_public_ops_and_mutations() {
     config.block_target_ms = 999;
     config.validator_id = "validator-a".to_string();
     config.launch_binding = Some(launch_binding);
+    config.faucet_nbla_nebulai = 0;
     let initial_sequencer_secret_key_hex = "3d".repeat(32);
     config.sequencer_public_key_hex = hex::encode(signing_key(0x3d).verifying_key().to_bytes());
     let (rpc_addr, admin_addr) = start_rpc_server_with_config_and_admin(
@@ -947,10 +928,6 @@ fn sign_root(seed: u8, root: &str) -> String {
 
 fn signed_transaction(seed: u8, nonce: u64, to: &str) -> RuntimeTransaction {
     signed_transaction_with_fee_asset(seed, nonce, to, NBLA_SYMBOL, 1)
-}
-
-fn signed_nxmr_fee_transaction(seed: u8, nonce: u64, to: &str) -> RuntimeTransaction {
-    signed_transaction_with_fee_asset(seed, nonce, to, NXMR_SYMBOL, 1_000)
 }
 
 fn signed_transaction_with_fee_asset(

@@ -105,6 +105,8 @@ The public launch sequence for this crate is:
    `--max-request-bytes`, and `--max-requests-per-minute`. Admission rejects
    missing senders, duplicate pending account nonces, nonce mismatches, and
    insufficient `NBLA`/`nXMR` balances before consuming bounded capacity.
+   Launch-bound public endpoints must set `--disable-nbla-faucet`; otherwise
+   ops readiness reports `public-nbla-faucet-enabled`.
 9. Exercise the bridge custody policy. `nebula_bridgePolicy` must expose the
    active bridge policy root and quorum constants. Deposits must prove the
    current `monero_tx_id`, `account`, `amount_nxmr_units`, `confirmations`,
@@ -158,8 +160,8 @@ The public launch sequence for this crate is:
 13. Open the public launch gate only after the signed launch package, verified
     bundle, sequencer/follower rehearsal evidence, verified snapshots, and
     launch certificate all agree. The sequencer/follower rehearsal must cover
-    sequencer key rotation, NBLA faucet credit, nXMR bridge deposit, nXMR gas
-    buyback/reward accounting, withdrawal finalization, follower sync, verified
+    sequencer key rotation, disabled public NBLA faucet state, nXMR bridge
+    deposit, nXMR custody and withdrawal finalization, follower sync, verified
     runtime-surface evidence from the live follower, and launch-bound
     accountability evidence fail-closed behavior. Run the `NBLA`/`nXMR`
     economics trial with live value disabled, and keep reporting any remaining blocking evidence
@@ -173,9 +175,9 @@ Run a local Base-style public-testnet rehearsal with one sequencer and
 persisted followers:
 
 ```bash
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --sequencer --rpc-bind 127.0.0.1:9944 --admin-rpc-bind 127.0.0.1:9947 --block-ms 250 --validator-id validator-a --sequencer-public-key <sequencer-public-key-hex> --sequencer-secret-key <sequencer-secret-key-hex> --data-dir /tmp/nebula-validator-a --admin-token <operator-token> --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9945 --block-ms 250 --validator-id validator-b --data-dir /tmp/nebula-validator-b --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9946/snapshot --sync-peer-quorum 2 --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9946 --block-ms 250 --validator-id validator-c --data-dir /tmp/nebula-validator-c --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9945/snapshot --sync-peer-quorum 2 --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --sequencer --rpc-bind 127.0.0.1:9944 --admin-rpc-bind 127.0.0.1:9947 --block-ms 250 --validator-id validator-a --sequencer-public-key <sequencer-public-key-hex> --sequencer-secret-key <sequencer-secret-key-hex> --data-dir /tmp/nebula-validator-a --admin-token <operator-token> --disable-nbla-faucet --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9945 --block-ms 250 --validator-id validator-b --data-dir /tmp/nebula-validator-b --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9946/snapshot --sync-peer-quorum 2 --disable-nbla-faucet --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9946 --block-ms 250 --validator-id validator-c --data-dir /tmp/nebula-validator-c --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9945/snapshot --sync-peer-quorum 2 --disable-nbla-faucet --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
 ```
 
 The sequencer produces sub-second blocks. Followers do not produce blocks; they
@@ -206,6 +208,9 @@ the validator set, binds the live status/ops/backup surfaces to their roots, and
 rejects imported snapshots whose embedded launch binding differs. Nodes without
 this binding can still serve local rehearsal RPC, but `/health` and `/ops`
 report `missing-launch-package-binding` and public ops readiness stays false.
+Launch-bound public candidates must also disable the public NBLA faucet with
+`--disable-nbla-faucet`; `/ops` reports `public-nbla-faucet-enabled` until
+`faucet_nbla_nebulai` is zero.
 
 Public RPC nodes enforce a bounded local mempool, maximum request body size, and
 per-client request rate limit before dispatching JSON-RPC work. Use
@@ -229,8 +234,9 @@ and user flow methods remain callable without that token.
 
 Bridge custody policy is rehearsed over the existing RPC names.
 `nebula_bridgePolicy` reports the active policy root and quorum constants.
-The faucet credits only `NBLA`; `faucet_nxmr_units` must remain `0`, and nXMR
-enters runtime state only through bridge deposit evidence.
+The faucet credits only `NBLA` for local unbound rehearsals. Launch-bound public
+endpoints must expose `faucet_nbla_nebulai: 0`; `faucet_nxmr_units` must remain
+`0`, and nXMR enters runtime state only through bridge deposit evidence.
 `nebula_observeBridgeDeposit` accepts a deposit with `monero_tx_id`, `account`,
 `amount_nxmr_units`, `confirmations`, `observer_id`, distinct `observer_ids`,
 `proof_root`, `custody_proof_root`, `relayer_set_root`,
@@ -342,8 +348,8 @@ cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet 
 cargo fmt --manifest-path crates/nebula-testnet/Cargo.toml -- --check
 cargo build --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet
 cargo test --manifest-path crates/nebula-testnet/Cargo.toml -- --test-threads=1
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --sequencer --rpc-bind 127.0.0.1:9944 --admin-rpc-bind 127.0.0.1:9947 --block-ms 250 --validator-id validator-a --sequencer-public-key <sequencer-public-key-hex> --sequencer-secret-key <sequencer-secret-key-hex> --data-dir /tmp/nebula-validator-a --admin-token <operator-token> --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9946 --block-ms 250 --validator-id validator-c --data-dir /tmp/nebula-validator-c --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9945/snapshot --sync-peer-quorum 2 --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --sequencer --rpc-bind 127.0.0.1:9944 --admin-rpc-bind 127.0.0.1:9947 --block-ms 250 --validator-id validator-a --sequencer-public-key <sequencer-public-key-hex> --sequencer-secret-key <sequencer-secret-key-hex> --data-dir /tmp/nebula-validator-a --admin-token <operator-token> --disable-nbla-faucet --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9946 --block-ms 250 --validator-id validator-c --data-dir /tmp/nebula-validator-c --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9945/snapshot --sync-peer-quorum 2 --disable-nbla-faucet --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --mainnet-readiness --json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-status > /tmp/nebula-public-status.json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-status /tmp/nebula-public-status.json --json
@@ -451,8 +457,9 @@ evidence roots. Receipts must complete before deployment evidence is generated,
 and receipts older than `24` hours are rejected.
 
 Gas can be paid in native `NBLA` or bridged Monero as `nXMR`. `NBLA` fees go
-directly to the validator reward ledger. The faucet credits only `NBLA`; `nXMR`
-must be credited by bridge deposits. `nXMR` fees are converted into NBLA
+directly to the validator reward ledger. The faucet credits only `NBLA` during
+local unbound rehearsals and must be disabled on launch-bound public endpoints;
+`nXMR` must be credited by bridge deposits. `nXMR` fees are converted into NBLA
 accounting value and are the funding source for NBLA buybacks, NBLA backing, and
 validator rewards. Converted `nXMR` value is split with `90%` reserved for NBLA
 buybacks and backing and `10%` credited to validator rewards. Fees and

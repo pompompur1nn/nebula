@@ -2058,6 +2058,7 @@ fn prove_live_rpc_devnet_rehearsal_with_bindings(
     sequencer_config.block_target_ms = block_millis;
     sequencer_config.validator_id = "validator-a".to_string();
     sequencer_config.launch_binding = Some(sequencer_binding);
+    sequencer_config.faucet_nbla_nebulai = 0;
     let initial_sequencer_secret_key_hex = "3c".repeat(32);
     sequencer_config.sequencer_public_key_hex = live_account_id(0x3c);
     let (sequencer_rpc_addr, sequencer_admin_addr) = live_rpc_start_server_with_admin(
@@ -2116,14 +2117,19 @@ fn prove_live_rpc_devnet_rehearsal_with_bindings(
 
     let bridge_account_seed = 0x46;
     let bridge_account = live_account_id(bridge_account_seed);
-    let faucet = live_rpc_call(
+    let disabled_faucet = live_rpc_call(
         &sequencer_rpc_addr,
         "nebula_faucet",
         json!({ "account": bridge_account.clone() }),
     )?;
-    if live_rpc_result(&faucet)?["credited_nxmr_units"] != 0 {
+    let faucet_error = disabled_faucet
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !faucet_error.contains("NBLA faucet is disabled") {
         return Err(live_rehearsal_invalid(
-            "faucet credited nXMR; nXMR must remain bridge-only",
+            "launch-bound public NBLA faucet was not disabled",
         ));
     }
 
@@ -2142,28 +2148,6 @@ fn prove_live_rpc_devnet_rehearsal_with_bindings(
         ));
     }
 
-    let nxmr_gas_tx = live_rpc_call(
-        &sequencer_rpc_addr,
-        "nebula_sendTransaction",
-        json!({ "tx": live_signed_nxmr_fee_transaction(bridge_account_seed, 0, "live-nxmr-recipient") }),
-    )?;
-    if live_rpc_result(&nxmr_gas_tx)?["accepted_to_mempool"] != true {
-        return Err(live_rehearsal_invalid(
-            "nXMR gas transaction was not accepted to mempool",
-        ));
-    }
-    let block_with_nxmr_fee = live_rpc_call(
-        &sequencer_admin_addr,
-        "nebula_produceBlock",
-        json!({ "admin_token": ADMIN_TOKEN }),
-    )?;
-    let block_with_nxmr_fee = live_rpc_result(&block_with_nxmr_fee)?;
-    if block_with_nxmr_fee["producer_public_key"] != rotated_public_key {
-        return Err(live_rehearsal_invalid(
-            "post-rotation block was not signed by the rotated sequencer key",
-        ));
-    }
-
     let withdrawal = live_rpc_call(
         &sequencer_rpc_addr,
         "nebula_requestWithdrawal",
@@ -2171,12 +2155,12 @@ fn prove_live_rpc_devnet_rehearsal_with_bindings(
             "account": bridge_account.clone(),
             "monero_address": "9xTestnetMoneroAddressForNebulaWithdrawals",
             "amount_nxmr_units": 2_000,
-            "nonce": 1,
+            "nonce": 0,
             "signature": live_withdrawal_signature(
                 bridge_account_seed,
                 "9xTestnetMoneroAddressForNebulaWithdrawals",
                 2_000,
-                1,
+                0,
             ),
         }),
     )?;
@@ -2230,9 +2214,10 @@ fn prove_live_rpc_devnet_rehearsal_with_bindings(
                 && status["bridge_deposit_count"] == 1
                 && status["withdrawal_request_count"] == 1
                 && status["finalized_withdrawal_count"] == 1
-                && status["total_nxmr_fees_units"] == 1_000
-                && status["buyback_pool_nebulai"] == 900
-                && status["validator_reward_nebulai"] == 100
+                && status["faucet_nbla_nebulai"] == 0
+                && status["total_nxmr_fees_units"] == 0
+                && status["buyback_pool_nebulai"] == 0
+                && status["validator_reward_nebulai"] == 0
                 && status["bridge_custody_reconciled"] == true
         },
     )?;
@@ -2244,6 +2229,7 @@ fn prove_live_rpc_devnet_rehearsal_with_bindings(
     follower_config.produce_blocks = false;
     follower_config.sequencer_public_key_hex = rotated_public_key;
     follower_config.launch_binding = Some(follower_binding.clone());
+    follower_config.faucet_nbla_nebulai = 0;
     let follower_rpc_addr = live_rpc_start_server(
         follower_config,
         runtime::RuntimeNodeOptions {
@@ -6184,33 +6170,6 @@ fn live_sign_root(seed: u8, root: &str) -> String {
     hex::encode(live_signing_key(seed).sign(root.as_bytes()).to_bytes())
 }
 
-fn live_signed_nxmr_fee_transaction(seed: u8, nonce: u64, to: &str) -> runtime::RuntimeTransaction {
-    live_signed_transaction_with_fee_asset(seed, nonce, to, NXMR_SYMBOL, 1, 1_000)
-}
-
-fn live_signed_transaction_with_fee_asset(
-    seed: u8,
-    nonce: u64,
-    to: &str,
-    fee_asset: &str,
-    amount_nebulai: u128,
-    gas_units: u128,
-) -> runtime::RuntimeTransaction {
-    let mut tx = runtime::RuntimeTransaction {
-        from: live_account_id(seed),
-        to: to.to_string(),
-        amount_nebulai,
-        gas_units,
-        gas_price_nebulai: runtime::DEFAULT_GAS_PRICE_NEBULAI,
-        fee_asset: fee_asset.to_string(),
-        nonce,
-        signature: String::new(),
-        memo: Some(format!("live-rpc-devnet-rehearsal-{fee_asset}-{nonce}")),
-    };
-    tx.signature = live_sign_root(seed, &tx.signing_root());
-    tx
-}
-
 fn live_withdrawal_signature(
     seed: u8,
     monero_address: &str,
@@ -6587,6 +6546,7 @@ const RUNTIME_STATUS_DURABLE_FIELDS: &[&str] = &[
     "total_nxmr_fees_units",
     "buyback_pool_nebulai",
     "validator_reward_nebulai",
+    "faucet_nbla_nebulai",
     "faucet_nxmr_units",
     "bridge_only_nxmr",
     "bridge_deposited_nxmr_units",
@@ -6887,6 +6847,7 @@ fn require_health_status_agreement(errors: &mut Vec<String>, health: &Value, sta
         "mempool_capacity_remaining",
         "mempool_full_rejection_count",
         "mempool_admission_rejection_count",
+        "faucet_nbla_nebulai",
         "faucet_nxmr_units",
         "bridge_only_nxmr",
         "bridge_custody_reconciled",

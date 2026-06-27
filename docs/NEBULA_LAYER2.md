@@ -37,8 +37,8 @@ observer-confirmation, and launch-certificate chain while keeping
 Operators can prove the stronger local live-RPC devnet path with
 `nebula-testnet --prove-live-rpc-devnet --json`. That command starts loopback
 sequencer and follower RPC nodes, produces sub-second blocks, rotates the
-sequencer key, exercises bridge-attested `nXMR`, `nXMR` gas buyback/reward
-accounting, withdrawal finalization, follower sync, and verified runtime-surface
+sequencer key, exercises disabled public NBLA faucet state, bridge-attested
+`nXMR` custody, withdrawal finalization, follower sync, and verified runtime-surface
 evidence while still reporting the live public deployment attestation blocker.
 
 ## Target Public Testnet Architecture
@@ -159,6 +159,8 @@ evidence is absent or stale.
     `--max-requests-per-minute`. Mempool admission is stateful: public nodes
     reject missing senders, duplicate pending account nonces, nonce mismatches,
     and insufficient `NBLA`/`nXMR` balances before consuming bounded capacity.
+    Launch-bound public endpoints must set `--disable-nbla-faucet`; otherwise
+    ops readiness reports `public-nbla-faucet-enabled`.
     Follower ops readiness must include at least one configured sync peer with a
     successful valid snapshot response and a configured `--sync-peer-quorum`
     agreeing on the same height, latest block hash, and state root. Attempts,
@@ -202,7 +204,7 @@ evidence is absent or stale.
     expose or agree with `bridge_policy_root`,
     `bridge_min_deposit_confirmations`, `bridge_deposit_observer_quorum`,
     `bridge_withdrawal_operator_quorum`, `bridge_live_value_enabled`,
-    `faucet_nxmr_units`, `bridge_only_nxmr`, `bridge_custody_reconciled`,
+    `faucet_nbla_nebulai`, `faucet_nxmr_units`, `bridge_only_nxmr`, `bridge_custody_reconciled`,
     `nxmr_custody_deficit_units`, `bridge_deposit_count`, and
     `withdrawal_request_count`.
 14. Gate operator ops, backup, and metrics evidence before public endpoint
@@ -310,7 +312,7 @@ and user flow methods remain callable without that token.
 Run a local persistent sequencer:
 
 ```bash
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --sequencer --rpc-bind 127.0.0.1:9944 --admin-rpc-bind 127.0.0.1:9947 --block-ms 250 --validator-id validator-a --sequencer-public-key <sequencer-public-key-hex> --sequencer-secret-key <sequencer-secret-key-hex> --data-dir /tmp/nebula-validator-a --admin-token <operator-token> --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --sequencer --rpc-bind 127.0.0.1:9944 --admin-rpc-bind 127.0.0.1:9947 --block-ms 250 --validator-id validator-a --sequencer-public-key <sequencer-public-key-hex> --sequencer-secret-key <sequencer-secret-key-hex> --data-dir /tmp/nebula-validator-a --admin-token <operator-token> --disable-nbla-faucet --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
 ```
 
 The default dev sequencer key is only for throwaway local rehearsals. Public
@@ -327,6 +329,9 @@ the validator set, binds the live status/ops/backup surfaces to their roots, and
 rejects imported snapshots whose embedded launch binding differs. Nodes without
 this binding can still serve local rehearsal RPC, but `/health` and `/ops`
 report `missing-launch-package-binding` and public ops readiness stays false.
+Launch-bound public candidates must also disable the public NBLA faucet with
+`--disable-nbla-faucet`; `/ops` reports `public-nbla-faucet-enabled` until
+`faucet_nbla_nebulai` is zero.
 
 Sequencer key rotation and accountability are public-testnet launch gates.
 `/health`, `/status`, and `nebula_status` must expose the current sequencer
@@ -356,8 +361,9 @@ nXMR into `operator_pending`.
 
 Bridge custody rehearsal uses the runtime RPC names that public operators will
 see. `nebula_bridgePolicy` reports the active policy root and quorum constants.
-The faucet credits only `NBLA`; `faucet_nxmr_units` must remain `0`, and nXMR
-enters runtime state only through bridge deposit evidence. Deposits enter through
+The faucet credits only `NBLA` for local unbound rehearsals. Launch-bound public
+endpoints must expose `faucet_nbla_nebulai: 0`; `faucet_nxmr_units` must remain
+`0`, and nXMR enters runtime state only through bridge deposit evidence. Deposits enter through
 `nebula_observeBridgeDeposit` with `monero_tx_id`,
 `account`, `amount_nxmr_units`, `confirmations`, `observer_id`, distinct
 `observer_ids`, `proof_root`, `custody_proof_root`, `relayer_set_root`,
@@ -385,7 +391,8 @@ public testnet endpoint, operators must compare those reports with `/health`,
 `/status`, `/snapshot`, and `nebula_status` and verify block freshness, latest
 height/hash, state root, snapshot root, persisted snapshot path and presence,
 configured sync peer count/quorum, sync quorum height/hash/state root,
-mempool cap/remaining capacity/full and admission rejection counts, RPC max-request/rate-limit policy, admin RPC private-listener state, public-admin isolation, non-dev sequencer-key status, bridge
+mempool cap/remaining capacity/full and admission rejection counts, public NBLA
+faucet disabled state, RPC max-request/rate-limit policy, admin RPC private-listener state, public-admin isolation, non-dev sequencer-key status, bridge
 policy root, bridge custody reconciliation, and backup manifest root. The
 runtime-surface evidence builder turns those captured files plus JSON-RPC mirror
 responses and `/metrics` text into a single root; the verifier rejects stale
@@ -414,7 +421,7 @@ snapshot as bootstrap evidence.
 A follower can import once from an ahead peer before it starts serving RPC:
 
 ```bash
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9945 --block-ms 250 --validator-id validator-b --data-dir /tmp/nebula-validator-b --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9946/snapshot --sync-peer-quorum 2 --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9945 --block-ms 250 --validator-id validator-b --data-dir /tmp/nebula-validator-b --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9946/snapshot --sync-peer-quorum 2 --disable-nbla-faucet --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
 ```
 
 `--bootstrap-rpc` performs that one-time startup import. To keep following a
@@ -427,7 +434,7 @@ and persists newer snapshots from the highest ahead chain-state group whose
 snapshots extend local state:
 
 ```bash
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9946 --block-ms 250 --validator-id validator-c --data-dir /tmp/nebula-validator-c --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9945/snapshot --sync-peer-quorum 2 --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9946 --block-ms 250 --validator-id validator-c --data-dir /tmp/nebula-validator-c --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9945/snapshot --sync-peer-quorum 2 --disable-nbla-faucet --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
 ```
 
 This gives public replicas a Base-style failover shape: each follower can sync
@@ -479,9 +486,8 @@ Example trial:
 ```bash
 curl -s http://127.0.0.1:9944/status
 curl -s http://127.0.0.1:9944/metrics
-curl -s -X POST http://127.0.0.1:9944/rpc -d '{"jsonrpc":"2.0","id":1,"method":"nebula_faucet","params":{"account":"alice"}}'
-curl -s -X POST http://127.0.0.1:9944/rpc -d '{"jsonrpc":"2.0","id":2,"method":"nebula_sendTransaction","params":{"tx":{"from":"alice","to":"bob","amount_nebulai":100,"gas_units":100,"gas_price_nebulai":10,"fee_asset":"NBLA","nonce":0,"memo":"first NBLA gas transfer"}}}'
-curl -s -X POST http://127.0.0.1:9944/rpc -d '{"jsonrpc":"2.0","id":3,"method":"nebula_getAccount","params":{"account":"bob"}}'
+curl -s -X POST http://127.0.0.1:9944/rpc -d '{"jsonrpc":"2.0","id":1,"method":"nebula_feeQuote","params":{"fee_asset":"NBLA","gas_units":100,"gas_price_nebulai":10}}'
+curl -s -X POST http://127.0.0.1:9944/rpc -d '{"jsonrpc":"2.0","id":2,"method":"nebula_getAccount","params":{"account":"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"}}'
 ```
 
 ## Repository Layout
@@ -642,7 +648,9 @@ Nebula testnet uses a hybrid fee policy:
 
 - Gas can be paid in native `NBLA`.
 - Gas can also be paid in bridged Monero as `nXMR`.
-- The faucet credits only `NBLA`; `nXMR` must be credited by bridge deposits.
+- The faucet credits only `NBLA` during local unbound rehearsals and must be
+  disabled on launch-bound public endpoints; `nXMR` must be credited by bridge
+  deposits.
 - `nebulai` is the base accounting unit for gas and validator rewards.
 - `1 NBLA = 1,000,000 nebulai`.
 - The target buyback and reserve reference is `1 NBLA = 0.001 XMR`; on Nebula
@@ -720,12 +728,12 @@ Public launch observers should treat the bridge as launch-blocked unless
 `/health`, `/status`, and `nebula_status` expose or agree with
 `bridge_policy_root`, `bridge_min_deposit_confirmations`,
 `bridge_deposit_observer_quorum`, `bridge_withdrawal_operator_quorum`,
-identity-quorum requirements, `bridge_live_value_enabled`, `faucet_nxmr_units`,
-`bridge_only_nxmr`, `bridge_custody_reconciled`,
+identity-quorum requirements, `bridge_live_value_enabled`, `faucet_nbla_nebulai`,
+`faucet_nxmr_units`, `bridge_only_nxmr`, `bridge_custody_reconciled`,
 `nxmr_custody_deficit_units`, `bridge_deposit_count`, and
 `withdrawal_request_count`, and
 `nebula_bridgePolicy` returns the same policy root. `bridge_live_value_enabled`
-must remain `false`, `faucet_nxmr_units` must remain `0`, and
+must remain `false`, `faucet_nbla_nebulai` and `faucet_nxmr_units` must remain `0`, and
 `nxmr_custody_deficit_units` must remain `0` for public testnet.
 
 ## Sequencer Key Rotation And Accountability
@@ -762,8 +770,8 @@ The active GitHub Actions workflow is Nebula-owned:
 2. Check Rust formatting.
 3. Build `nebula-testnet`.
 4. Smoke a launch-bound sequencer/follower RPC rehearsal that rotates the
-   sequencer key, exercises NBLA faucet credit, nXMR bridge deposit, nXMR gas
-   buyback/reward accounting, withdrawal finalization, follower sync, and
+   sequencer key, exercises disabled public NBLA faucet state, nXMR bridge
+   deposit, nXMR custody and withdrawal finalization, follower sync, and
    verified runtime-surface evidence from the live follower.
 5. Run the Nebula test suite.
 6. Assert the current readiness contract.

@@ -1474,6 +1474,9 @@ impl RuntimeRpcState {
         if status.launch_binding_present && default_dev_sequencer_key {
             blocking_gaps.push("default-dev-sequencer-key".to_string());
         }
+        if status.launch_binding_present && status.faucet_nbla_nebulai > 0 {
+            blocking_gaps.push("public-nbla-faucet-enabled".to_string());
+        }
         if status.launch_binding_present
             && status.node_role == "sequencer"
             && !self.admin_rpc_enabled()
@@ -2054,6 +2057,12 @@ impl RuntimeRpcState {
         );
         push_metric(
             &mut output,
+            "nebula_faucet_nbla_nebulai",
+            "Configured NBLA nebulai credited by the public faucet. Launch-bound public testnet requires zero.",
+            status.faucet_nbla_nebulai,
+        );
+        push_metric(
+            &mut output,
             "nebula_faucet_nxmr_units",
             "Configured nXMR units credited by the faucet. Public testnet requires zero.",
             status.faucet_nxmr_units,
@@ -2520,6 +2529,9 @@ impl NebulaRuntime {
 
     pub fn faucet(&mut self, account: &str) -> Result<FaucetReport, String> {
         self.ensure_accountability_clean()?;
+        if self.config.faucet_nbla_nebulai == 0 {
+            return Err("NBLA faucet is disabled".to_string());
+        }
         validate_account_id(account)?;
         let state = self
             .accounts
@@ -6056,6 +6068,16 @@ mod tests {
         config
     }
 
+    fn runtime_config_with_launch_binding_and_disabled_nbla_faucet() -> RuntimeConfig {
+        let mut config = runtime_config_with_launch_binding();
+        config.faucet_nbla_nebulai = 0;
+        config
+    }
+
+    fn disable_public_nbla_faucet(runtime: &mut NebulaRuntime) {
+        runtime.config.faucet_nbla_nebulai = 0;
+    }
+
     fn public_ops_test_sequencer_secret_key_hex() -> String {
         "3c".repeat(32)
     }
@@ -6330,6 +6352,20 @@ mod tests {
     }
 
     #[test]
+    fn disabled_runtime_faucet_rejects_public_account_credit() {
+        let mut config = RuntimeConfig::public_testnet_default();
+        config.faucet_nbla_nebulai = 0;
+        let mut runtime = NebulaRuntime::new(config).unwrap();
+
+        assert!(runtime
+            .faucet("alice")
+            .unwrap_err()
+            .contains("NBLA faucet is disabled"));
+        assert!(runtime.account("alice").is_none());
+        assert_eq!(runtime.status().faucet_nbla_nebulai, 0);
+    }
+
+    #[test]
     fn snapshot_rejects_unbacked_nxmr_balance() {
         let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
         runtime
@@ -6594,8 +6630,35 @@ mod tests {
     }
 
     #[test]
+    fn runtime_ops_status_fails_closed_when_launch_bound_nbla_faucet_enabled() {
+        let dir = std::env::temp_dir().join(format!("nebula-runtime-public-faucet-{}", unix_ms()));
+        let storage = RuntimeStorage::from_data_dir(&dir);
+        let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
+        rotate_runtime_off_default_dev_key(&mut runtime);
+        runtime.produce_block();
+        let snapshot = runtime.export_snapshot();
+        storage.save_snapshot(&snapshot).unwrap();
+        let mut state = test_rpc_state_with_limits(
+            runtime,
+            DEFAULT_MAX_REQUEST_BYTES,
+            DEFAULT_MAX_REQUESTS_PER_MINUTE,
+        );
+        state.storage = Some(storage);
+        enable_private_admin_control(&mut state);
+
+        let ops = state.ops_status().unwrap();
+        assert!(!ops.public_ops_ready);
+        assert_eq!(ops.faucet_nbla_nebulai, DEFAULT_FAUCET_NBLA);
+        assert!(ops
+            .blocking_gaps
+            .contains(&"public-nbla-faucet-enabled".to_string()));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn runtime_ops_status_follower_requires_successful_peer_sync_evidence() {
-        let sequencer_config = runtime_config_with_launch_binding();
+        let sequencer_config = runtime_config_with_launch_binding_and_disabled_nbla_faucet();
         let mut sequencer = NebulaRuntime::new(sequencer_config.clone()).unwrap();
         rotate_runtime_off_default_dev_key(&mut sequencer);
         sequencer.produce_block();
@@ -6655,7 +6718,7 @@ mod tests {
 
     #[test]
     fn runtime_ops_status_follower_requires_sync_quorum_evidence() {
-        let sequencer_config = runtime_config_with_launch_binding();
+        let sequencer_config = runtime_config_with_launch_binding_and_disabled_nbla_faucet();
         let mut sequencer = NebulaRuntime::new(sequencer_config.clone()).unwrap();
         rotate_runtime_off_default_dev_key(&mut sequencer);
         sequencer.produce_block();
@@ -6719,6 +6782,7 @@ mod tests {
         let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
         rotate_runtime_off_default_dev_key(&mut runtime);
         runtime.faucet("alice").unwrap();
+        disable_public_nbla_faucet(&mut runtime);
         runtime.produce_block();
         let snapshot = runtime.export_snapshot();
         storage.save_snapshot(&snapshot).unwrap();
@@ -6831,6 +6895,7 @@ mod tests {
         let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
         rotate_runtime_off_default_dev_key(&mut runtime);
         runtime.faucet("alice").unwrap();
+        disable_public_nbla_faucet(&mut runtime);
         runtime.produce_block();
         let snapshot = runtime.export_snapshot();
         storage.save_snapshot(&snapshot).unwrap();
@@ -6913,6 +6978,7 @@ mod tests {
         let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
         rotate_runtime_off_default_dev_key(&mut runtime);
         runtime.faucet("alice").unwrap();
+        disable_public_nbla_faucet(&mut runtime);
         runtime.produce_block();
         let snapshot = runtime.export_snapshot();
         storage.save_snapshot(&snapshot).unwrap();
@@ -7110,6 +7176,7 @@ mod tests {
         assert!(metrics.contains("nebula_launch_region_count 0"));
         assert!(metrics.contains("nebula_admin_rpc_enabled 0"));
         assert!(metrics.contains("nebula_mempool_admission_rejection_count 0"));
+        assert!(metrics.contains("nebula_faucet_nbla_nebulai "));
         assert!(metrics.contains("nebula_faucet_nxmr_units 0"));
         assert!(metrics.contains("nebula_bridge_only_nxmr 1"));
         assert!(metrics.contains("nebula_bridge_custody_reconciled 1"));

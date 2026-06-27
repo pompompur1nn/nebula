@@ -104,7 +104,11 @@ fn prove_live_rpc_devnet_json_reports_runtime_rehearsal_contract() {
         "block_millis should be sub-second, got {block_millis}"
     );
     assert_u64_at_least(&report, "produced_block_count", 2);
-    assert_u64_at_least(&report, "total_nxmr_fees_units", 1);
+    assert_eq!(report["total_nxmr_fees_units"], 0);
+    assert_eq!(report["buyback_pool_nebulai"], 0);
+    assert_eq!(report["validator_reward_nebulai"], 0);
+    assert_eq!(report["bridge_custody_reconciled"], true);
+    assert_eq!(report["nxmr_custody_deficit_units"], 0);
     assert_hex64(&report, "runtime_surface_root");
     assert_hex64(&report, "rehearsal_root");
 }
