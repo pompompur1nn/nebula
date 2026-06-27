@@ -46,12 +46,13 @@ keys must not reuse operator keys.
 Public status, probe, and bootstrap HTTPS endpoints must include a host. Bootstrap
 nodes must match their attested operator region. Bootstrap
 nodes, operator quorums, and observer quorums must each cover at least two
-regions. Bootstrap, operator, and observer IDs must not contain whitespace.
-Observer IDs must not reuse operator IDs. Deployment evidence must be generated
-within `24` hours, expire after its generation time and within `7` days, carry
-TLS pins with at least `7` days remaining, and include a rollback drill from the
-last `7` days that completed before deployment evidence was generated. Rollback
-recovery roots must differ from rollback plan roots.
+regions. Bootstrap, operator, observer, and deployment-region labels must not
+contain whitespace. Observer IDs must not reuse operator IDs. Deployment
+evidence must be generated within `24` hours, expire after its generation time
+and within `7` days, carry TLS pins with at least `7` days remaining, and
+include a rollback drill from the last `7` days that completed before deployment
+evidence was generated. Rollback recovery roots must differ from rollback plan
+roots.
 
 Preflight and runbook receipt verifiers let operators prove launch steps before
 wrapping those receipts in deployment evidence. Receipt phase names must be
@@ -69,16 +70,17 @@ Fees and validator points are denominated in `nebulai`, where
 
 The validator-set verifier requires at least two validators, two operators, and
 two regions. Validator IDs, operator IDs, and node IDs must not contain
-whitespace or reuse each other. Validator IDs, node IDs, keys, reward accounts,
-and P2P endpoints must be unique. No single validator may hold more than `5000`
-basis points of total genesis power. Operator contacts must use `mailto:` or
-`https://`. `mailto:` contacts must include an email address, `https://`
-contacts must include a host, and P2P endpoints must use `tcp://host:port`.
-Validator admission reward accounts must use `nbla-reward-{operator_id}` and
-rewards are denominated in `nebulai`. Each signed admission root must bind the
-validator identity, operator contact, keys, reward account, commission, genesis
-power, reward unit, and fee-policy root. Consensus and network public keys must
-be 64-character hex values, and consensus/network key domains must be disjoint.
+whitespace or reuse each other. Validator region labels must not contain
+whitespace. Validator IDs, node IDs, keys, reward accounts, and P2P endpoints
+must be unique. No single validator may hold more than `5000` basis points of
+total genesis power. Operator contacts must use `mailto:` or `https://`.
+`mailto:` contacts must include an email address, `https://` contacts must
+include a host, and P2P endpoints must use `tcp://host:port`. Validator
+admission reward accounts must use `nbla-reward-{operator_id}` and rewards are
+denominated in `nebulai`. Each signed admission root must bind the validator
+identity, operator contact, keys, reward account, commission, genesis power,
+reward unit, and fee-policy root. Consensus and network public keys must be
+64-character hex values, and consensus/network key domains must be disjoint.
 
 The genesis manifest builder binds verified deployment evidence and validator
 admission into the root artifact used to start a public testnet. The final

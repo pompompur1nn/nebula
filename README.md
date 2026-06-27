@@ -81,7 +81,7 @@ The public launch suite covers:
 - unique bootstrap node, operator, observer, endpoint, witness-key,
   bootstrap-region, operator-region, and observer-region validation
 - role-separated operator and observer identities
-- whitespace-free bootstrap, operator, and observer identities
+- whitespace-free bootstrap, operator, observer, and deployment-region labels
 - 64-character hex and role-separated witness/validator public-key material
   validation
 - unique and role-separated TLS certificate/public-key pin validation
@@ -98,7 +98,8 @@ The public launch suite covers:
 - preflight and runbook receipt exact-shape validation
 - bootstrap node/operator and observer attestation exact-shape validation
 - validator-set admission, whitespace-free and role-separated identity,
-  contact, reward-unit, uniqueness, and region-spread validation
+  whitespace-free region, contact, reward-unit, uniqueness, and region-spread
+  validation
 - genesis manifest root binding across deployment evidence, validator set, and
   fee policy
 - genesis timestamp binding to the deployment attestation validity window
@@ -180,7 +181,7 @@ Public launch requires a filled deployment attestation. The verifier rejects:
 - duplicate bootstrap node IDs, bootstrap endpoints, operator IDs, operator
   keys, observer IDs, and observer keys
 - observer IDs that reuse operator IDs
-- bootstrap, operator, and observer identities containing whitespace
+- bootstrap, operator, observer, and region labels containing whitespace
 - bootstrap node sets that do not cover at least two regions
 - bootstrap nodes whose region does not match the attested operator region
 - operator quorums that do not cover at least two regions
@@ -232,17 +233,18 @@ cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet 
 Public testnet admission also requires a validator-set manifest. The verifier
 requires at least two validators, two operators, and two regions. Validator IDs,
 operator IDs, and node IDs must not contain whitespace or reuse each other.
-Validator IDs, node IDs, consensus keys, network keys, reward accounts, and P2P
-endpoints must be unique. Genesis power must be positive, no single validator
-may hold more than `5000` basis points of total genesis power, commission must
-be at or below `10000` basis points, operator contacts must use `mailto:` or
-`https://`, `mailto:` contacts must include an email address, `https://`
-contacts must include a host, P2P endpoints must use `tcp://host:port`, reward
-accounts must use the `nbla-reward-{operator_id}` form, and rewards must be
-denominated in `nebulai`. Each validator admission signature root must bind the
-validator identity, operator contact, keys, reward account, commission, genesis
-power, reward unit, and fee-policy root. Consensus and network public keys must
-be 64-character hex values, and consensus/network key domains must be disjoint.
+Validator region labels must not contain whitespace. Validator IDs, node IDs,
+consensus keys, network keys, reward accounts, and P2P endpoints must be unique.
+Genesis power must be positive, no single validator may hold more than `5000`
+basis points of total genesis power, commission must be at or below `10000`
+basis points, operator contacts must use `mailto:` or `https://`, `mailto:`
+contacts must include an email address, `https://` contacts must include a host,
+P2P endpoints must use `tcp://host:port`, reward accounts must use the
+`nbla-reward-{operator_id}` form, and rewards must be denominated in `nebulai`.
+Each validator admission signature root must bind the validator identity,
+operator contact, keys, reward account, commission, genesis power, reward unit,
+and fee-policy root. Consensus and network public keys must be 64-character hex
+values, and consensus/network key domains must be disjoint.
 
 Operators can generate the required shape and verify a filled validator set
 with:

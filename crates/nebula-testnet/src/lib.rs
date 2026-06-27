@@ -611,6 +611,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "signed_admission_root_binds_validator_payload": true,
                 "validator_identity_whitespace_free": true,
                 "validator_identity_domains_disjoint": true,
+                "validator_region_whitespace_free": true,
                 "operator_contact_required": true,
                 "operator_contact_address_required": true,
                 "hex_consensus_key_required": true,
@@ -654,6 +655,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "bootstrap_endpoint_authority_required": true,
                 "bootstrap_region_spread_required": true,
                 "bootstrap_operator_region_binding_required": true,
+                "deployment_region_whitespace_free": true,
                 "unique_operator_ids_required": true,
                 "unique_operator_keys_required": true,
                 "hex_operator_keys_required": true,
@@ -2205,6 +2207,11 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &format!("operators[{index}].region"),
             &operator.region,
         );
+        require_no_whitespace(
+            errors,
+            &format!("operators[{index}].region"),
+            &operator.region,
+        );
         require_non_empty(
             errors,
             &format!("operators[{index}].public_key"),
@@ -2292,6 +2299,11 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &format!("bootstrap_nodes[{index}].region"),
             &node.region,
         );
+        require_no_whitespace(
+            errors,
+            &format!("bootstrap_nodes[{index}].region"),
+            &node.region,
+        );
         require_non_empty(
             errors,
             &format!("bootstrap_nodes[{index}].endpoint"),
@@ -2366,6 +2378,11 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &observer.observer_id,
         );
         require_non_empty(
+            errors,
+            &format!("observers[{index}].region"),
+            &observer.region,
+        );
+        require_no_whitespace(
             errors,
             &format!("observers[{index}].region"),
             &observer.region,
@@ -2627,6 +2644,11 @@ fn verify_validator_admission(
         ));
     }
     require_non_empty(
+        errors,
+        &format!("validators[{index}].region"),
+        &validator.region,
+    );
+    require_no_whitespace(
         errors,
         &format!("validators[{index}].region"),
         &validator.region,
@@ -3892,6 +3914,30 @@ mod public_launch {
     }
 
     #[test]
+    fn deployment_attestation_rejects_operator_region_with_whitespace() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["operators"][0]["region"] = json!("us east");
+        value["bootstrap_nodes"][0]["region"] = json!("us east");
+        refresh_operator_signature_root(&mut value, 0);
+        refresh_bootstrap_node_root(&mut value, 0);
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "operators[0].region must not contain whitespace"));
+                assert!(errors.iter().any(|error| {
+                    error == "bootstrap_nodes[0].region must not contain whitespace"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
     fn deployment_attestation_rejects_duplicate_bootstrap_node_id() {
         let mut value =
             serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
@@ -4161,6 +4207,24 @@ mod public_launch {
                 assert!(errors.iter().any(
                     |error| error == "validators[0].validator_id must differ from operator_id"
                 ));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn validator_set_rejects_region_with_whitespace() {
+        let mut value = serde_json::from_str::<Value>(&sample_validator_set_json_pretty()).unwrap();
+        value["validators"][0]["region"] = json!("us east");
+        refresh_validator_manifest_root(&mut value, 0);
+
+        let error = verify_validator_set_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "validators[0].region must not contain whitespace"));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
