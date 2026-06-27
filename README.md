@@ -85,6 +85,7 @@ The public launch suite covers:
 - unique and role-separated TLS certificate/public-key pin validation
 - deployment freshness windows for generated attestations, preflight/runbook
   receipts, expiry, TLS pins, and rollback drills
+- positive deployment attestation validity windows
 - standalone preflight/runbook receipt exact-shape and unique evidence
   validation
 - policy claim and public probe body exact-shape validation
@@ -174,9 +175,10 @@ Public launch requires a filled deployment attestation. The verifier rejects:
 - operator quorums that do not cover at least two regions
 - observer quorums that do not cover at least two regions
 - duplicate or cross-reused TLS certificate and public-key pins
-- deployment attestations older than `24` hours, expiry windows longer than
-  `7` days, preflight/runbook receipts older than `24` hours, TLS pins with
-  less than `7` days remaining, and rollback drills older than `7` days
+- deployment attestations older than `24` hours, expiry windows that do not end
+  after generation, expiry windows longer than `7` days, preflight/runbook
+  receipts older than `24` hours, TLS pins with less than `7` days remaining,
+  and rollback drills older than `7` days
 
 Until an operator provides fresh deployment evidence that satisfies those rules,
 `public_launch_ready` must remain `false`.
