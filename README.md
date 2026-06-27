@@ -82,6 +82,8 @@ The public launch suite covers:
   fee policy
 - launch package coherence across deployment attestation, public surface,
   validator set, and genesis manifest artifacts
+- launch package binding between admitted validators, deployment operators, and
+  bootstrap nodes
 
 ## Hybrid Fees And Validator Rewards
 
@@ -205,7 +207,9 @@ manifest, public probe, validator-set manifest, and genesis manifest together.
 It rejects a package when the public surface roots do not match the deployment
 attestation, or when the genesis manifest does not bind the exact deployment
 evidence root, validator-set root, validator count, and total genesis power
-produced by the other verified files.
+produced by the other verified files. It also rejects validator-set manifests
+whose admitted validators do not map to the attested deployment operators and
+bootstrap nodes.
 
 Operators can verify the full package with:
 

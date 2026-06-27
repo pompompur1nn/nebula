@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha3::{Digest, Sha3_256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const VERSION: &str = "nebula-testnet-runner/0.2.0";
@@ -372,6 +372,9 @@ pub struct LaunchPackageReport {
     pub fee_policy_root: String,
     pub validator_set_root: String,
     pub genesis_root: String,
+    pub matched_validator_count: usize,
+    pub deployment_operator_count: usize,
+    pub bootstrap_node_count: usize,
     pub validator_count: usize,
     pub total_genesis_power: u64,
     pub activation_height: u64,
@@ -614,6 +617,8 @@ pub fn readiness_report() -> NebulaReadiness {
                 "genesis_manifest_verified": true,
                 "public_status_binds_deployment_attestation": true,
                 "public_probe_binds_deployment_attestation": true,
+                "validator_set_binds_deployment_operators": true,
+                "validator_set_binds_bootstrap_nodes": true,
                 "genesis_binds_deployment_attestation_root": true,
                 "genesis_binds_validator_set_root": true,
                 "genesis_binds_validator_count": true,
@@ -1205,6 +1210,10 @@ pub fn verify_launch_package_jsons(
     let public_probe =
         serde_json::from_str::<PublicProbe>(public_probe_json.trim_start_matches('\u{feff}'))
             .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    let validator_set_manifest = serde_json::from_str::<ValidatorSetManifest>(
+        validator_set_json.trim_start_matches('\u{feff}'),
+    )
+    .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
     let validator_set_report = verify_validator_set_json(validator_set_json)?;
     let genesis_report = verify_genesis_manifest_json(genesis_manifest_json)?;
     let mut errors = Vec::new();
@@ -1244,6 +1253,11 @@ pub fn verify_launch_package_jsons(
             deployment_attestation.public_probe.root
         ));
     }
+    verify_validator_deployment_binding(
+        &mut errors,
+        &validator_set_manifest,
+        &deployment_attestation,
+    );
 
     if genesis_report.deployment_attestation_root != deployment_report.evidence_root {
         errors.push(format!(
@@ -1285,6 +1299,9 @@ pub fn verify_launch_package_jsons(
         fee_policy_root: economics_root.to_string(),
         validator_set_root: validator_set_report.validator_set_root,
         genesis_root: genesis_report.genesis_root,
+        matched_validator_count: validator_set_manifest.validators.len(),
+        deployment_operator_count: deployment_attestation.operators.len(),
+        bootstrap_node_count: deployment_attestation.bootstrap_nodes.len(),
         validator_count: validator_set_report.validator_count,
         total_genesis_power: validator_set_report.total_genesis_power,
         activation_height: genesis_report.activation_height,
@@ -1936,6 +1953,61 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
     }
 }
 
+fn verify_validator_deployment_binding(
+    errors: &mut Vec<String>,
+    validator_set: &ValidatorSetManifest,
+    attestation: &DeploymentAttestation,
+) {
+    let operators_by_id = attestation
+        .operators
+        .iter()
+        .map(|operator| (operator.operator_id.as_str(), operator))
+        .collect::<BTreeMap<_, _>>();
+    let bootstrap_nodes_by_id = attestation
+        .bootstrap_nodes
+        .iter()
+        .map(|node| (node.node_id.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+
+    for (index, validator) in validator_set.validators.iter().enumerate() {
+        match operators_by_id.get(validator.operator_id.as_str()) {
+            Some(operator) => {
+                require_eq(
+                    errors,
+                    &format!("validators[{index}].operator.region"),
+                    &operator.region,
+                    &validator.region,
+                );
+            }
+            None => errors.push(format!(
+                "validators[{index}].operator_id {} is not present in deployment operators",
+                validator.operator_id
+            )),
+        }
+
+        match bootstrap_nodes_by_id.get(validator.node_id.as_str()) {
+            Some(node) => {
+                require_eq(
+                    errors,
+                    &format!("validators[{index}].bootstrap_node.operator_id"),
+                    &node.operator_id,
+                    &validator.operator_id,
+                );
+                require_eq(
+                    errors,
+                    &format!("validators[{index}].bootstrap_node.region"),
+                    &node.region,
+                    &validator.region,
+                );
+            }
+            None => errors.push(format!(
+                "validators[{index}].node_id {} is not present in deployment bootstrap_nodes",
+                validator.node_id
+            )),
+        }
+    }
+}
+
 fn verify_validator_admission(
     errors: &mut Vec<String>,
     index: usize,
@@ -2541,6 +2613,9 @@ mod public_launch {
         assert_eq!(report.fee_policy_root.len(), 64);
         assert_eq!(report.validator_set_root.len(), 64);
         assert_eq!(report.genesis_root.len(), 64);
+        assert_eq!(report.matched_validator_count, 2);
+        assert_eq!(report.deployment_operator_count, 2);
+        assert_eq!(report.bootstrap_node_count, 2);
     }
 
     #[test]
@@ -2608,6 +2683,78 @@ mod public_launch {
                 }));
                 assert!(errors.iter().any(|error| {
                     error.starts_with("public probe root does not match deployment attestation")
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn launch_package_rejects_validator_without_attested_operator() {
+        let deployment = sample_deployment_attestation_json_pretty();
+        let public_status = sample_public_status_manifest_json_pretty();
+        let public_probe = sample_public_probe_json_pretty();
+        let mut validators =
+            serde_json::from_str::<Value>(&sample_validator_set_json_pretty()).unwrap();
+        validators["validators"][0]["operator_id"] = json!("operator-c");
+        validators["root"] = json!(validator_set_root(
+            &serde_json::from_value::<ValidatorSetManifest>(validators.clone()).unwrap()
+        ));
+        let genesis =
+            build_genesis_manifest_json_pretty(&deployment, &validators.to_string()).unwrap();
+
+        let error = verify_launch_package_jsons(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators.to_string(),
+            &genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error
+                        == "validators[0].operator_id operator-c is not present in deployment operators"
+                }));
+                assert!(errors.iter().any(|error| {
+                    error
+                        == "validators[0].bootstrap_node.operator_id expected operator-c but got operator-a"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn launch_package_rejects_validator_without_attested_bootstrap_node() {
+        let deployment = sample_deployment_attestation_json_pretty();
+        let public_status = sample_public_status_manifest_json_pretty();
+        let public_probe = sample_public_probe_json_pretty();
+        let mut validators =
+            serde_json::from_str::<Value>(&sample_validator_set_json_pretty()).unwrap();
+        validators["validators"][0]["node_id"] = json!("bootstrap-ap-south-1");
+        validators["root"] = json!(validator_set_root(
+            &serde_json::from_value::<ValidatorSetManifest>(validators.clone()).unwrap()
+        ));
+        let genesis =
+            build_genesis_manifest_json_pretty(&deployment, &validators.to_string()).unwrap();
+
+        let error = verify_launch_package_jsons(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators.to_string(),
+            &genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error
+                        == "validators[0].node_id bootstrap-ap-south-1 is not present in deployment bootstrap_nodes"
                 }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),

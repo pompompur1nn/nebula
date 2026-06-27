@@ -53,4 +53,5 @@ admission into the root artifact used to start a public testnet.
 
 The launch-package verifier checks that the deployment, public surface,
 validator set, and genesis artifacts all agree before operators advance to a
-live rollout.
+live rollout. It also rejects admitted validators that do not map to attested
+deployment operators and bootstrap nodes.

@@ -229,6 +229,9 @@ jobs:
           assert len(payload["fee_policy_root"]) == 64
           assert len(payload["validator_set_root"]) == 64
           assert len(payload["genesis_root"]) == 64
+          assert payload["matched_validator_count"] == payload["validator_count"]
+          assert payload["deployment_operator_count"] >= 2
+          assert payload["bootstrap_node_count"] >= 2
           assert payload["validator_count"] >= 2
           assert payload["total_genesis_power"] > 0
           assert payload["activation_height"] > 0
