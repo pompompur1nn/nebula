@@ -652,6 +652,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "deployment_attestation_max_ttl_ms": PUBLIC_ATTESTATION_MAX_TTL_MS,
                 "deployment_attestation_expires_after_generated": true,
                 "launch_bundle_id": PUBLIC_TESTNET_BUNDLE_ID,
+                "package_artifact_lock_roots_disjoint": true,
                 "minimum_tls_pin_validity_ms": MIN_TLS_PIN_VALIDITY_MS,
                 "rollback_drill_max_age_ms": ROLLBACK_DRILL_MAX_AGE_MS,
                 "preflight_runbook_evidence_domains_disjoint": true,
@@ -1791,6 +1792,11 @@ fn verify_package_identity(errors: &mut Vec<String>, package_identity: &PackageI
         "package_identity.cargo_lock_sha3_256",
         &package_identity.cargo_lock_sha3_256,
     );
+    if package_identity.artifact_sha3_256 == package_identity.cargo_lock_sha3_256 {
+        errors.push(
+            "package_identity.cargo_lock_sha3_256 must differ from artifact_sha3_256".to_string(),
+        );
+    }
     require_root(
         errors,
         "package_identity.root",
@@ -3776,6 +3782,33 @@ mod public_launch {
                 assert!(errors.iter().any(|error| {
                     error
                         == "launch_bundle.bundle_id expected nebula-public-testnet-bundle-1 but got nebula-wrong-testnet-bundle"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_reused_package_identity_roots() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["package_identity"]["cargo_lock_sha3_256"] =
+            value["package_identity"]["artifact_sha3_256"].clone();
+        value["package_identity"]["root"] = json!(package_identity_root(
+            &serde_json::from_value::<PackageIdentity>(value["package_identity"].clone()).unwrap()
+        ));
+        value["launch_bundle"]["package_root"] = value["package_identity"]["root"].clone();
+        value["launch_bundle"]["root"] = json!(launch_bundle_root(
+            &serde_json::from_value::<LaunchBundle>(value["launch_bundle"].clone()).unwrap()
+        ));
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error
+                        == "package_identity.cargo_lock_sha3_256 must differ from artifact_sha3_256"
                 }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),

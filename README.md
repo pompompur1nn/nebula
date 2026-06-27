@@ -68,6 +68,7 @@ The public launch suite covers:
 
 - launch bundle and package identity checks
 - fixed public-testnet launch bundle ID validation
+- package artifact and lockfile root domain separation
 - readiness report shape and remediation roots
 - deployment evidence root binding
 - public status manifest redaction
@@ -175,6 +176,7 @@ Public launch requires a filled deployment attestation. The verifier rejects:
 - stale or mismatched roots, package identities, launch bundle identities, and
   public status manifest identities
 - launch bundles that do not use `nebula-public-testnet-bundle-1`
+- package artifact roots that reuse Cargo.lock roots
 - duplicated preflight/runbook receipt phase names, step names, and step
   evidence roots
 - public status/probe endpoints that do not use `https://`
