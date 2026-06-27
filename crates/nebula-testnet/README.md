@@ -41,7 +41,8 @@ shared witness root for the launch bundle, public status, HTTPS endpoint/TLS
 pins, policy claim, and public probe. Operator and observer signature roots must
 bind their signer identity and that witness root. The launch bundle must use
 `nebula-public-testnet-bundle-1`, and package artifact roots must not reuse
-Cargo.lock roots. Bootstrap node IDs,
+Cargo.lock roots. Launch bundle, public status, policy claim, and public probe
+roots must be disjoint. Bootstrap node IDs,
 endpoints, endpoint hosts, operator IDs/keys, observer IDs/keys, and TLS
 certificate/public-key pins must be unique. Bootstrap node IDs must not reuse
 operator IDs. TLS certificate pins and public-key pins must not reuse each

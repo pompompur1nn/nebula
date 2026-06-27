@@ -659,6 +659,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "receipts_complete_before_deployment_generation": true,
                 "rollback_drill_before_deployment_generation": true,
                 "rollback_plan_recovery_roots_disjoint": true,
+                "deployment_component_roots_disjoint": true,
                 "deployment_witness_root_verified": true,
                 "public_https_endpoint_required": true,
                 "public_endpoint_authority_required": true,
@@ -1568,6 +1569,7 @@ pub fn verify_deployment_attestation_json(
         &attestation.launch_bundle.root,
         economics_root,
     );
+    verify_deployment_component_root_domains(&mut errors, &attestation);
     verify_receipt(
         &mut errors,
         "preflight_receipt",
@@ -2226,6 +2228,29 @@ fn verify_receipts_before_deployment_generation(
             "runbook_receipt.completed_at_unix_ms must be at or before generated_at_unix_ms"
                 .to_string(),
         );
+    }
+}
+
+fn verify_deployment_component_root_domains(
+    errors: &mut Vec<String>,
+    attestation: &DeploymentAttestation,
+) {
+    let mut roots_by_value = BTreeMap::new();
+    for (label, root) in [
+        (
+            "launch_bundle.root",
+            attestation.launch_bundle.root.as_str(),
+        ),
+        (
+            "public_status_manifest.root",
+            attestation.public_status_manifest.root.as_str(),
+        ),
+        ("policy_claim.root", attestation.policy_claim.root.as_str()),
+        ("public_probe.root", attestation.public_probe.root.as_str()),
+    ] {
+        if let Some(previous_label) = roots_by_value.insert(root, label) {
+            errors.push(format!("{label} must differ from {previous_label}"));
+        }
     }
 }
 
@@ -3810,6 +3835,24 @@ mod public_launch {
                     error
                         == "package_identity.cargo_lock_sha3_256 must differ from artifact_sha3_256"
                 }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_reused_component_roots() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["policy_claim"]["root"] = value["launch_bundle"]["root"].clone();
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "policy_claim.root must differ from launch_bundle.root"));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
