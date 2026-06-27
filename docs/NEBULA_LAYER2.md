@@ -95,6 +95,7 @@ The public launch suite covers:
   validator set, and genesis manifest artifacts
 - launch package binding between admitted validators, deployment operators, and
   bootstrap nodes
+- bootstrap node/operator region binding inside deployment evidence
 
 ## Hybrid Fees And Validator Rewards
 
@@ -156,6 +157,7 @@ Public launch requires a filled deployment attestation. The verifier rejects:
 - duplicate bootstrap node IDs, bootstrap endpoints, operator IDs, operator
   keys, observer IDs, and observer keys
 - bootstrap node sets that do not cover at least two regions
+- bootstrap nodes whose region does not match the attested operator region
 - operator quorums that do not cover at least two regions
 - observer quorums that do not cover at least two regions
 - duplicate TLS certificate and public-key pins

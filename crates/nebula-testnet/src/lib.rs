@@ -635,6 +635,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "unique_bootstrap_node_ids_required": true,
                 "unique_bootstrap_endpoints_required": true,
                 "bootstrap_region_spread_required": true,
+                "bootstrap_operator_region_binding_required": true,
                 "unique_operator_ids_required": true,
                 "unique_operator_keys_required": true,
                 "unique_observer_ids_required": true,
@@ -2018,6 +2019,7 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
     let mut operator_ids = BTreeSet::new();
     let mut operator_keys = BTreeSet::new();
     let mut operator_regions = BTreeSet::new();
+    let mut operator_regions_by_id = BTreeMap::new();
     for (index, operator) in attestation.operators.iter().enumerate() {
         require_non_empty(
             errors,
@@ -2035,6 +2037,7 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &operator.public_key,
         );
         operator_regions.insert(operator.region.clone());
+        operator_regions_by_id.insert(operator.operator_id.clone(), operator.region.clone());
         insert_unique(
             errors,
             &mut operator_ids,
@@ -2127,6 +2130,14 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             errors.push(format!(
                 "bootstrap_nodes[{index}].operator_id does not match an operator"
             ));
+        }
+        if let Some(operator_region) = operator_regions_by_id.get(&node.operator_id) {
+            require_eq(
+                errors,
+                &format!("bootstrap_nodes[{index}].operator.region"),
+                operator_region,
+                &node.region,
+            );
         }
         require_hex_root(
             errors,
@@ -3176,6 +3187,25 @@ mod public_launch {
                 assert!(errors
                     .iter()
                     .any(|error| error == "bootstrap_nodes must cover at least 2 regions"));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_bootstrap_region_mismatched_operator() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["bootstrap_nodes"][0]["region"] = json!("ap-south");
+        refresh_bootstrap_node_root(&mut value, 0);
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error == "bootstrap_nodes[0].operator.region expected ap-south but got us-east"
+                }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
