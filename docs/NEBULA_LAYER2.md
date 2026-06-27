@@ -78,8 +78,8 @@ The public launch suite covers:
   observers
 - deterministic operator, observer, and validator admission signature-root
   validation
-- unique bootstrap node, operator, observer, endpoint, witness-key, and
-  observer-region validation
+- unique bootstrap node, operator, observer, endpoint, witness-key, operator-region,
+  and observer-region validation
 - unique TLS certificate and public-key pin validation
 - deployment freshness windows for generated attestations, expiry, TLS pins,
   and rollback drills
@@ -155,6 +155,7 @@ Public launch requires a filled deployment attestation. The verifier rejects:
   the signed payload
 - duplicate bootstrap node IDs, bootstrap endpoints, operator IDs, operator
   keys, observer IDs, and observer keys
+- operator quorums that do not cover at least two regions
 - observer quorums that do not cover at least two regions
 - duplicate TLS certificate and public-key pins
 - deployment attestations older than `24` hours, expiry windows longer than

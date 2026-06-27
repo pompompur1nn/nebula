@@ -638,6 +638,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "unique_operator_keys_required": true,
                 "unique_observer_ids_required": true,
                 "unique_observer_keys_required": true,
+                "operator_region_spread_required": true,
                 "observer_region_spread_required": true,
                 "operator_signature_roots_verified": true,
                 "observer_signature_roots_verified": true,
@@ -2015,6 +2016,7 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
 
     let mut operator_ids = BTreeSet::new();
     let mut operator_keys = BTreeSet::new();
+    let mut operator_regions = BTreeSet::new();
     for (index, operator) in attestation.operators.iter().enumerate() {
         require_non_empty(
             errors,
@@ -2031,6 +2033,7 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &format!("operators[{index}].public_key"),
             &operator.public_key,
         );
+        operator_regions.insert(operator.region.clone());
         insert_unique(
             errors,
             &mut operator_ids,
@@ -2069,6 +2072,11 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
     if operator_ids.len() < MIN_PUBLIC_TESTNET_OPERATORS {
         errors.push(format!(
             "operators must include at least {MIN_PUBLIC_TESTNET_OPERATORS} unique operator_id values"
+        ));
+    }
+    if operator_regions.len() < MIN_PUBLIC_TESTNET_REGIONS {
+        errors.push(format!(
+            "operators must cover at least {MIN_PUBLIC_TESTNET_REGIONS} regions"
         ));
     }
 
@@ -3107,6 +3115,25 @@ mod public_launch {
     }
 
     #[test]
+    fn deployment_attestation_rejects_single_region_operator_quorum() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["operators"][1]["region"] = value["operators"][0]["region"].clone();
+        refresh_operator_signature_root(&mut value, 1);
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "operators must cover at least 2 regions"));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
     fn deployment_attestation_rejects_duplicate_bootstrap_node_id() {
         let mut value =
             serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
@@ -3602,6 +3629,24 @@ mod public_launch {
         .unwrap();
         attestation["observers"][observer_index]["signature"]["signature_sha3_256"] =
             json!(observer_signature_root(&observer, &witness_evidence_root));
+    }
+
+    fn refresh_operator_signature_root(attestation: &mut Value, operator_index: usize) {
+        let deployment =
+            serde_json::from_value::<DeploymentAttestation>(attestation.clone()).unwrap();
+        let witness_evidence_root = deployment_witness_root(
+            &deployment.launch_bundle,
+            &deployment.public_status_manifest,
+            &deployment.public_endpoint,
+            &deployment.policy_claim,
+            &deployment.public_probe,
+        );
+        let operator = serde_json::from_value::<OperatorAttestation>(
+            attestation["operators"][operator_index].clone(),
+        )
+        .unwrap();
+        attestation["operators"][operator_index]["signature_sha3_256"] =
+            json!(operator_signature_root(&operator, &witness_evidence_root));
     }
 }
 
