@@ -35,6 +35,10 @@ the required deployment attestation.
 Public status and probe verifiers let operators prove the exact public surface
 before wrapping it in deployment evidence.
 
+Deployment evidence binds bootstrap nodes, operators, and observers to one
+shared witness root for the launch bundle, public status, endpoint/TLS pins,
+policy claim, and public probe.
+
 Preflight and runbook receipt verifiers let operators prove launch steps before
 wrapping those receipts in deployment evidence.
 

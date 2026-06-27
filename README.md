@@ -73,6 +73,8 @@ The public launch suite covers:
 - public endpoint and TLS pin evidence
 - standalone public status/probe surface exact-shape validation
 - final package binding for the public status/probe surface
+- shared deployment witness root binding for bootstrap nodes, operators, and
+  observers
 - standalone preflight/runbook receipt exact-shape validation
 - policy claim and public probe body exact-shape validation
 - preflight and runbook receipt exact-shape validation
@@ -137,6 +139,8 @@ Public launch requires a filled deployment attestation. The verifier rejects:
 - unexpected observer and signature verification fields
 - stale or mismatched roots, package identities, launch bundle identities, and
   public status manifest identities
+- operator and observer witness roots that do not match the deployment surface
+- bootstrap node attestation roots that do not bind the deployment witness root
 
 Until an operator provides fresh deployment evidence that satisfies those rules,
 `public_launch_ready` must remain `false`.

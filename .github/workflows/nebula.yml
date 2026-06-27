@@ -146,6 +146,7 @@ jobs:
           assert payload["public_launch_ready"] is True
           assert payload["level"] == "public-launch-attested"
           assert len(payload["evidence_root"]) == 64
+          assert len(payload["witness_evidence_root"]) == 64
           assert payload["verified_operator_count"] >= 2
           assert payload["verified_observer_count"] >= 2
           assert payload["verified_region_count"] >= 2
@@ -222,6 +223,7 @@ jobs:
           assert payload["launch_package_ready"] is True
           assert payload["level"] == "launch-package-attested"
           assert len(payload["deployment_attestation_root"]) == 64
+          assert len(payload["witness_evidence_root"]) == 64
           assert len(payload["public_status_manifest_root"]) == 64
           assert len(payload["public_probe_root"]) == 64
           assert payload["endpoint_url"] == "https://testnet.nebula.example/status"

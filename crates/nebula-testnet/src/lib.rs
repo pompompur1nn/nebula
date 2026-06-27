@@ -280,6 +280,7 @@ pub struct DeploymentAttestationReport {
     pub public_launch_ready: bool,
     pub level: &'static str,
     pub evidence_root: String,
+    pub witness_evidence_root: String,
     pub attestation_expires_at_unix_ms: u128,
     pub verified_operator_count: usize,
     pub verified_observer_count: usize,
@@ -365,6 +366,7 @@ pub struct LaunchPackageReport {
     pub launch_package_ready: bool,
     pub level: &'static str,
     pub deployment_attestation_root: String,
+    pub witness_evidence_root: String,
     pub public_status_manifest_root: String,
     pub public_probe_root: String,
     pub endpoint_url: String,
@@ -611,6 +613,7 @@ pub fn readiness_report() -> NebulaReadiness {
             })),
             "launch_package": stable_root(&json!({
                 "deployment_attestation_verified": true,
+                "deployment_witness_root_verified": true,
                 "public_status_surface_verified": true,
                 "public_probe_surface_verified": true,
                 "validator_set_verified": true,
@@ -700,6 +703,48 @@ pub fn sample_deployment_attestation_json_pretty() -> String {
     let preflight_receipt = sample_receipt("preflight-receipt", now);
     let runbook_receipt = sample_receipt("runbook-receipt", now);
     let public_status_manifest_root = public_status_manifest.root.clone();
+    let public_endpoint = PublicEndpointEvidence {
+        url: endpoint_url.clone(),
+        public_status_manifest_root,
+        tls_pins: vec![
+            TlsEndpointPin {
+                cert_sha256: hex_64("tls-cert-a"),
+                public_key_sha256: hex_64("tls-key-a"),
+                not_after_unix_ms: now + 2_592_000_000,
+            },
+            TlsEndpointPin {
+                cert_sha256: hex_64("tls-cert-b"),
+                public_key_sha256: hex_64("tls-key-b"),
+                not_after_unix_ms: now + 2_592_000_000,
+            },
+        ],
+    };
+    let witness_evidence_root = deployment_witness_root(
+        &launch_bundle,
+        &public_status_manifest,
+        &public_endpoint,
+        &policy_claim,
+        &public_probe,
+    );
+    let mut bootstrap_nodes = vec![
+        BootstrapNode {
+            node_id: "bootstrap-us-east-1".to_string(),
+            operator_id: "operator-a".to_string(),
+            region: "us-east".to_string(),
+            endpoint: "https://bootstrap-a.testnet.nebula.example".to_string(),
+            attestation_root: String::new(),
+        },
+        BootstrapNode {
+            node_id: "bootstrap-eu-west-1".to_string(),
+            operator_id: "operator-b".to_string(),
+            region: "eu-west".to_string(),
+            endpoint: "https://bootstrap-b.testnet.nebula.example".to_string(),
+            attestation_root: String::new(),
+        },
+    ];
+    for node in &mut bootstrap_nodes {
+        node.attestation_root = bootstrap_node_root(node, &witness_evidence_root);
+    }
 
     let attestation = DeploymentAttestation {
         chain_id: CHAIN_ID.to_string(),
@@ -709,55 +754,25 @@ pub fn sample_deployment_attestation_json_pretty() -> String {
         package_identity,
         launch_bundle,
         public_status_manifest,
-        public_endpoint: PublicEndpointEvidence {
-            url: endpoint_url.clone(),
-            public_status_manifest_root,
-            tls_pins: vec![
-                TlsEndpointPin {
-                    cert_sha256: hex_64("tls-cert-a"),
-                    public_key_sha256: hex_64("tls-key-a"),
-                    not_after_unix_ms: now + 2_592_000_000,
-                },
-                TlsEndpointPin {
-                    cert_sha256: hex_64("tls-cert-b"),
-                    public_key_sha256: hex_64("tls-key-b"),
-                    not_after_unix_ms: now + 2_592_000_000,
-                },
-            ],
-        },
+        public_endpoint,
         policy_claim,
         public_probe,
         preflight_receipt,
         runbook_receipt,
-        bootstrap_nodes: vec![
-            BootstrapNode {
-                node_id: "bootstrap-us-east-1".to_string(),
-                operator_id: "operator-a".to_string(),
-                region: "us-east".to_string(),
-                endpoint: "https://bootstrap-a.testnet.nebula.example".to_string(),
-                attestation_root: hex_64("bootstrap-a"),
-            },
-            BootstrapNode {
-                node_id: "bootstrap-eu-west-1".to_string(),
-                operator_id: "operator-b".to_string(),
-                region: "eu-west".to_string(),
-                endpoint: "https://bootstrap-b.testnet.nebula.example".to_string(),
-                attestation_root: hex_64("bootstrap-b"),
-            },
-        ],
+        bootstrap_nodes,
         operators: vec![
             OperatorAttestation {
                 operator_id: "operator-a".to_string(),
                 region: "us-east".to_string(),
                 public_key: "nebula-operator-key-a".to_string(),
-                signed_evidence_root: hex_64("operator-a-root"),
+                signed_evidence_root: witness_evidence_root.clone(),
                 signature_sha3_256: hex_64("operator-a-signature"),
             },
             OperatorAttestation {
                 operator_id: "operator-b".to_string(),
                 region: "eu-west".to_string(),
                 public_key: "nebula-operator-key-b".to_string(),
-                signed_evidence_root: hex_64("operator-b-root"),
+                signed_evidence_root: witness_evidence_root.clone(),
                 signature_sha3_256: hex_64("operator-b-signature"),
             },
         ],
@@ -766,7 +781,7 @@ pub fn sample_deployment_attestation_json_pretty() -> String {
                 observer_id: "observer-us-east-1".to_string(),
                 region: "us-east".to_string(),
                 observed_endpoint: endpoint_url.clone(),
-                observed_evidence_root: hex_64("observer-a-root"),
+                observed_evidence_root: witness_evidence_root.clone(),
                 signature: SignatureVerification {
                     algorithm: "ed25519-testnet-attestation".to_string(),
                     public_key: "nebula-observer-key-a".to_string(),
@@ -778,7 +793,7 @@ pub fn sample_deployment_attestation_json_pretty() -> String {
                 observer_id: "observer-eu-west-1".to_string(),
                 region: "eu-west".to_string(),
                 observed_endpoint: endpoint_url,
-                observed_evidence_root: hex_64("observer-b-root"),
+                observed_evidence_root: witness_evidence_root,
                 signature: SignatureVerification {
                     algorithm: "ed25519-testnet-attestation".to_string(),
                     public_key: "nebula-observer-key-b".to_string(),
@@ -1292,6 +1307,7 @@ pub fn verify_launch_package_jsons(
         launch_package_ready: true,
         level: "launch-package-attested",
         deployment_attestation_root: deployment_report.evidence_root,
+        witness_evidence_root: deployment_report.witness_evidence_root,
         public_status_manifest_root: public_status_manifest.root,
         public_probe_root: public_probe.root,
         endpoint_url: public_status_manifest.endpoint_url,
@@ -1403,10 +1419,19 @@ pub fn verify_deployment_attestation_json(
         )
         .collect::<BTreeSet<_>>();
 
+    let witness_evidence_root = deployment_witness_root(
+        &attestation.launch_bundle,
+        &attestation.public_status_manifest,
+        &attestation.public_endpoint,
+        &attestation.policy_claim,
+        &attestation.public_probe,
+    );
+
     Ok(DeploymentAttestationReport {
         public_launch_ready: true,
         level: "public-launch-attested",
         evidence_root: stable_root(&value),
+        witness_evidence_root,
         attestation_expires_at_unix_ms: attestation.expires_at_unix_ms,
         verified_operator_count: attestation.operators.len(),
         verified_observer_count: attestation.observers.len(),
@@ -1883,6 +1908,13 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
     if attestation.observers.len() < MIN_PUBLIC_TESTNET_OBSERVERS {
         errors.push("observers must include at least two observers".to_string());
     }
+    let witness_evidence_root = deployment_witness_root(
+        &attestation.launch_bundle,
+        &attestation.public_status_manifest,
+        &attestation.public_endpoint,
+        &attestation.policy_claim,
+        &attestation.public_probe,
+    );
 
     let operator_ids = attestation
         .operators
@@ -1915,12 +1947,24 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &format!("bootstrap_nodes[{index}].attestation_root"),
             &node.attestation_root,
         );
+        require_root(
+            errors,
+            &format!("bootstrap_nodes[{index}].attestation_root"),
+            &node.attestation_root,
+            &bootstrap_node_root(node, &witness_evidence_root),
+        );
     }
     for (index, operator) in attestation.operators.iter().enumerate() {
         require_hex_root(
             errors,
             &format!("operators[{index}].signed_evidence_root"),
             &operator.signed_evidence_root,
+        );
+        require_eq(
+            errors,
+            &format!("operators[{index}].signed_evidence_root"),
+            &operator.signed_evidence_root,
+            &witness_evidence_root,
         );
         require_hex_root(
             errors,
@@ -1939,6 +1983,12 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             errors,
             &format!("observers[{index}].observed_evidence_root"),
             &observer.observed_evidence_root,
+        );
+        require_eq(
+            errors,
+            &format!("observers[{index}].observed_evidence_root"),
+            &observer.observed_evidence_root,
+            &witness_evidence_root,
         );
         require_hex_root(
             errors,
@@ -2198,6 +2248,33 @@ fn public_probe_root(public_probe: &PublicProbe) -> String {
     }))
 }
 
+fn deployment_witness_root(
+    launch_bundle: &LaunchBundle,
+    public_status_manifest: &PublicStatusManifest,
+    public_endpoint: &PublicEndpointEvidence,
+    policy_claim: &PolicyClaim,
+    public_probe: &PublicProbe,
+) -> String {
+    stable_root(&json!({
+        "chain_id": CHAIN_ID,
+        "launch_bundle_root": launch_bundle.root,
+        "public_status_manifest_root": public_status_manifest.root,
+        "public_endpoint": public_endpoint,
+        "policy_claim_root": policy_claim.root,
+        "public_probe_root": public_probe.root,
+    }))
+}
+
+fn bootstrap_node_root(node: &BootstrapNode, witness_evidence_root: &str) -> String {
+    stable_root(&json!({
+        "node_id": node.node_id,
+        "operator_id": node.operator_id,
+        "region": node.region,
+        "endpoint": node.endpoint,
+        "witness_evidence_root": witness_evidence_root,
+    }))
+}
+
 fn receipt_root(receipt: &Receipt) -> String {
     stable_root(&json!({
         "receipt_id": receipt.receipt_id,
@@ -2355,6 +2432,7 @@ mod public_launch {
         assert_eq!(report.verified_observer_count, 2);
         assert_eq!(report.verified_region_count, 2);
         assert_eq!(report.evidence_root.len(), 64);
+        assert_eq!(report.witness_evidence_root.len(), 64);
     }
 
     #[test]
@@ -2486,6 +2564,42 @@ mod public_launch {
     }
 
     #[test]
+    fn deployment_attestation_rejects_operator_wrong_witness_root() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["operators"][0]["signed_evidence_root"] = json!(hex_64("wrong-operator-root"));
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error.starts_with("operators[0].signed_evidence_root expected")
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_observer_wrong_witness_root() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["observers"][0]["observed_evidence_root"] = json!(hex_64("wrong-observer-root"));
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error.starts_with("observers[0].observed_evidence_root expected")
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
     fn sample_validator_set_verifies_public_testnet_admission() {
         let report = verify_validator_set_json(&sample_validator_set_json_pretty()).unwrap();
 
@@ -2606,6 +2720,7 @@ mod public_launch {
         assert_eq!(report.total_genesis_power, 2);
         assert_eq!(report.activation_height, 1);
         assert_eq!(report.deployment_attestation_root.len(), 64);
+        assert_eq!(report.witness_evidence_root.len(), 64);
         assert_eq!(report.public_status_manifest_root.len(), 64);
         assert_eq!(report.public_probe_root.len(), 64);
         assert_eq!(report.endpoint_url, "https://testnet.nebula.example/status");
