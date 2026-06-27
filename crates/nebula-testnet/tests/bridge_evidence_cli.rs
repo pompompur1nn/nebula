@@ -36,6 +36,26 @@ fn run_nebula(args: Vec<String>) -> String {
     String::from_utf8(output.stdout).expect("stdout should be utf8")
 }
 
+fn run_nebula_failure(args: Vec<String>) -> String {
+    let output = Command::new(binary())
+        .args(args)
+        .output()
+        .expect("run nebula-testnet");
+
+    assert!(
+        !output.status.success(),
+        "command unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
 fn secret(byte: u8) -> String {
     format!("{byte:02x}").repeat(32)
 }
@@ -213,4 +233,129 @@ fn bridge_evidence_commands_emit_rpc_ready_json() {
             .len(),
         2
     );
+
+    let rotation_a_path = dir.join("rotation-a.json");
+    let rotation_b_path = dir.join("rotation-b.json");
+    let launch_root = "9".repeat(64);
+    let previous_key_history_root = "8".repeat(64);
+    let rotation_proof_root = "7".repeat(64);
+    let old_public_key =
+        nebula_testnet::runtime::public_key_hex_for_secret(&secret(0x55)).expect("old public key");
+    let new_secret = secret(0x66);
+    let new_public_key =
+        nebula_testnet::runtime::public_key_hex_for_secret(&new_secret).expect("new public key");
+
+    let rotation_a = run_nebula(vec![
+        "--sign-sequencer-rotation-approval".into(),
+        "--launch-package-bundle-root".into(),
+        launch_root.clone(),
+        "--previous-sequencer-key-history-root".into(),
+        previous_key_history_root.clone(),
+        "--activation-height".into(),
+        "3".into(),
+        "--old-sequencer-public-key".into(),
+        old_public_key.clone(),
+        "--new-sequencer-public-key".into(),
+        new_public_key.clone(),
+        "--rotation-proof-root".into(),
+        rotation_proof_root.clone(),
+        "--operator-id".into(),
+        "operator-a".into(),
+        "--operator-secret-key".into(),
+        secret(0x77),
+    ]);
+    fs::write(&rotation_a_path, rotation_a).expect("write rotation a approval");
+
+    let rotation_b = run_nebula(vec![
+        "--sign-sequencer-rotation-approval".into(),
+        "--launch-package-bundle-root".into(),
+        launch_root.clone(),
+        "--previous-sequencer-key-history-root".into(),
+        previous_key_history_root.clone(),
+        "--activation-height".into(),
+        "3".into(),
+        "--old-sequencer-public-key".into(),
+        old_public_key.clone(),
+        "--new-sequencer-public-key".into(),
+        new_public_key,
+        "--rotation-proof-root".into(),
+        rotation_proof_root.clone(),
+        "--operator-id".into(),
+        "operator-b".into(),
+        "--operator-secret-key".into(),
+        secret(0x88),
+    ]);
+    fs::write(&rotation_b_path, rotation_b).expect("write rotation b approval");
+
+    let rotation_params = run_nebula(vec![
+        "--assemble-sequencer-rotation".into(),
+        "--launch-package-bundle-root".into(),
+        launch_root.clone(),
+        "--previous-sequencer-key-history-root".into(),
+        previous_key_history_root.clone(),
+        "--activation-height".into(),
+        "3".into(),
+        "--old-sequencer-public-key".into(),
+        old_public_key.clone(),
+        "--new-sequencer-secret-key-hex".into(),
+        new_secret,
+        "--rotation-proof-root".into(),
+        rotation_proof_root.clone(),
+        "--operator-approval".into(),
+        rotation_a_path.display().to_string(),
+        "--operator-approval".into(),
+        rotation_b_path.display().to_string(),
+        "--admin-token".into(),
+        "launch-admin".into(),
+    ]);
+    let rotation_params: Value =
+        serde_json::from_str(&rotation_params).expect("rotation params json");
+    assert_eq!(rotation_params["admin_token"], "launch-admin");
+    assert_eq!(
+        rotation_params["rotation_proof_root"],
+        Value::String(rotation_proof_root.clone())
+    );
+    assert_eq!(
+        rotation_params["operator_approval_ids"]
+            .as_array()
+            .expect("rotation approval ids")
+            .len(),
+        2
+    );
+    assert_eq!(
+        rotation_params["operator_approval_roots"]
+            .as_array()
+            .expect("rotation approval roots")
+            .len(),
+        2
+    );
+    let rotation_approvals = rotation_params["operator_approvals"]
+        .as_array()
+        .expect("rotation approvals");
+    assert_eq!(rotation_approvals.len(), 2);
+    assert_eq!(rotation_approvals[0]["operator_id"], "operator-a");
+    assert_eq!(rotation_approvals[1]["operator_id"], "operator-b");
+    assert_eq!(
+        rotation_approvals[0]["payload_root"],
+        rotation_approvals[1]["payload_root"]
+    );
+
+    let mismatch = run_nebula_failure(vec![
+        "--assemble-sequencer-rotation".into(),
+        "--launch-package-bundle-root".into(),
+        launch_root,
+        "--previous-sequencer-key-history-root".into(),
+        previous_key_history_root,
+        "--activation-height".into(),
+        "3".into(),
+        "--old-sequencer-public-key".into(),
+        old_public_key,
+        "--new-sequencer-secret-key-hex".into(),
+        secret(0x99),
+        "--rotation-proof-root".into(),
+        rotation_proof_root,
+        "--operator-approval".into(),
+        rotation_a_path.display().to_string(),
+    ]);
+    assert!(mismatch.contains("payload_root does not match sequencer rotation"));
 }

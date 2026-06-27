@@ -81,6 +81,12 @@ fn main() {
     let wants_assemble_finalize_withdrawal = args
         .iter()
         .any(|arg| arg == "--assemble-finalize-withdrawal");
+    let wants_sign_sequencer_rotation_approval = args
+        .iter()
+        .any(|arg| arg == "--sign-sequencer-rotation-approval");
+    let wants_assemble_sequencer_rotation = args
+        .iter()
+        .any(|arg| arg == "--assemble-sequencer-rotation");
     let wants_build_deployment_attestation = args
         .iter()
         .any(|arg| arg == "--build-deployment-attestation");
@@ -114,6 +120,10 @@ fn main() {
         sign_withdrawal_operator_approval(&args, wants_json);
     } else if wants_assemble_finalize_withdrawal {
         assemble_finalize_withdrawal(&args, wants_json);
+    } else if wants_sign_sequencer_rotation_approval {
+        sign_sequencer_rotation_approval(&args, wants_json);
+    } else if wants_assemble_sequencer_rotation {
+        assemble_sequencer_rotation(&args, wants_json);
     } else if wants_build_deployment_attestation {
         build_deployment_attestation(&args, wants_json);
     } else if wants_sample_attestation {
@@ -735,6 +745,17 @@ fn required_bridge_arg(args: &[String], name: &str, wants_json: bool) -> String 
         process::exit(1);
     };
     value.to_string()
+}
+
+fn required_bridge_u64_arg(args: &[String], name: &str, wants_json: bool) -> u64 {
+    let value = required_bridge_arg(args, name, wants_json);
+    value.parse::<u64>().unwrap_or_else(|error| {
+        print_bridge_evidence_error(
+            wants_json,
+            &[format!("{name} must be an unsigned integer: {error}")],
+        );
+        process::exit(1);
+    })
 }
 
 fn read_launch_package_inputs(args: &[String], wants_json: bool) -> LaunchPackageInputs {
@@ -1894,11 +1915,224 @@ fn assemble_finalize_withdrawal(args: &[String], wants_json: bool) {
     );
 }
 
+fn sign_sequencer_rotation_approval(args: &[String], wants_json: bool) {
+    let new_public_key_hex = required_bridge_arg(args, "--new-sequencer-public-key", wants_json);
+    let payload_root = sequencer_rotation_payload_root_from_args(
+        args,
+        &new_public_key_hex,
+        "--new-sequencer-public-key",
+        wants_json,
+    );
+    let operator_id = required_bridge_arg(args, "--operator-id", wants_json);
+    let operator_secret_key = required_bridge_arg(args, "--operator-secret-key", wants_json);
+    let operator_public_key_hex =
+        match nebula_testnet::runtime::public_key_hex_for_secret(&operator_secret_key) {
+            Ok(public_key) => public_key,
+            Err(error) => {
+                print_bridge_evidence_error(wants_json, &[error]);
+                process::exit(1);
+            }
+        };
+    let signature =
+        match nebula_testnet::runtime::sign_runtime_root(&operator_secret_key, &payload_root) {
+            Ok(signature) => signature,
+            Err(error) => {
+                print_bridge_evidence_error(wants_json, &[error]);
+                process::exit(1);
+            }
+        };
+    let mut approval = nebula_testnet::runtime::RuntimeSequencerKeyRotationApproval {
+        operator_id,
+        operator_public_key_hex,
+        payload_root,
+        signature,
+        signed_at_unix_ms: parse_u128_arg(args, "--signed-at-unix-ms", current_unix_ms()),
+        approval_root: String::new(),
+    };
+    approval.approval_root =
+        nebula_testnet::runtime::sequencer_key_rotation_approval_root(&approval);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&approval).expect("sequencer rotation approval serializes")
+    );
+}
+
+fn assemble_sequencer_rotation(args: &[String], wants_json: bool) {
+    let new_sequencer_secret_key_hex =
+        required_bridge_arg(args, "--new-sequencer-secret-key-hex", wants_json);
+    let new_public_key_hex =
+        match nebula_testnet::runtime::public_key_hex_for_secret(&new_sequencer_secret_key_hex) {
+            Ok(public_key) => public_key,
+            Err(error) => {
+                print_bridge_evidence_error(wants_json, &[error]);
+                process::exit(1);
+            }
+        };
+    let rotation_proof_root = required_bridge_arg(args, "--rotation-proof-root", wants_json);
+    validate_hex_arg(
+        &rotation_proof_root,
+        "--rotation-proof-root",
+        64,
+        wants_json,
+    );
+    let expected_payload_root = sequencer_rotation_payload_root_from_args(
+        args,
+        &new_public_key_hex,
+        "public key derived from --new-sequencer-secret-key-hex",
+        wants_json,
+    );
+    let approval_paths = arg_values(args, "--operator-approval");
+    if approval_paths.is_empty() {
+        print_bridge_evidence_error(
+            wants_json,
+            &["missing --operator-approval <path>; repeat once per operator signer".to_string()],
+        );
+        process::exit(1);
+    }
+    let approvals = approval_paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let approval = read_bridge_json_file::<
+                nebula_testnet::runtime::RuntimeSequencerKeyRotationApproval,
+            >(path, wants_json);
+            validate_operator_approval_for_sequencer_rotation(
+                &expected_payload_root,
+                &approval,
+                index,
+                path,
+                wants_json,
+            );
+            approval
+        })
+        .collect::<Vec<_>>();
+    validate_sequencer_rotation_operator_approval_set(&approvals, wants_json);
+
+    let operator_approval_ids = approvals
+        .iter()
+        .map(|approval| approval.operator_id.clone())
+        .collect::<Vec<_>>();
+    let operator_approval_roots = approvals
+        .iter()
+        .map(|approval| approval.approval_root.clone())
+        .collect::<Vec<_>>();
+    let mut params = serde_json::json!({
+        "new_sequencer_secret_key_hex": new_sequencer_secret_key_hex,
+        "rotation_proof_root": rotation_proof_root,
+        "operator_approval_ids": operator_approval_ids,
+        "operator_approval_roots": operator_approval_roots,
+        "operator_approvals": approvals,
+    });
+    if let Some(admin_token) = arg_value(args, "--admin-token") {
+        params["admin_token"] = serde_json::Value::String(admin_token.to_string());
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&params).expect("sequencer rotation params serialize")
+    );
+}
+
+fn sequencer_rotation_payload_root_from_args(
+    args: &[String],
+    new_public_key_hex: &str,
+    new_public_key_name: &str,
+    wants_json: bool,
+) -> String {
+    let launch_package_bundle_root =
+        required_bridge_arg(args, "--launch-package-bundle-root", wants_json);
+    let previous_sequencer_key_history_root =
+        required_bridge_arg(args, "--previous-sequencer-key-history-root", wants_json);
+    let activation_height = required_bridge_u64_arg(args, "--activation-height", wants_json);
+    let old_public_key_hex = required_bridge_arg(args, "--old-sequencer-public-key", wants_json);
+    let rotation_proof_root = required_bridge_arg(args, "--rotation-proof-root", wants_json);
+
+    validate_hex_arg(
+        &launch_package_bundle_root,
+        "--launch-package-bundle-root",
+        64,
+        wants_json,
+    );
+    validate_hex_arg(
+        &previous_sequencer_key_history_root,
+        "--previous-sequencer-key-history-root",
+        64,
+        wants_json,
+    );
+    validate_hex_arg(
+        &old_public_key_hex,
+        "--old-sequencer-public-key",
+        64,
+        wants_json,
+    );
+    validate_hex_arg(new_public_key_hex, new_public_key_name, 64, wants_json);
+    validate_hex_arg(
+        &rotation_proof_root,
+        "--rotation-proof-root",
+        64,
+        wants_json,
+    );
+
+    nebula_testnet::runtime::sequencer_key_rotation_payload_root_for_context(
+        &nebula_testnet::runtime::RuntimeSequencerKeyRotationPayloadContext {
+            chain_id: nebula_testnet::CHAIN_ID,
+            runtime_version: nebula_testnet::VERSION,
+            launch_package_bundle_root: Some(&launch_package_bundle_root),
+            previous_sequencer_key_history_root: &previous_sequencer_key_history_root,
+            activation_height,
+            old_public_key_hex: &old_public_key_hex,
+            new_public_key_hex,
+            rotation_proof_root: &rotation_proof_root,
+        },
+    )
+}
+
 fn validate_hex_arg(value: &str, name: &str, len: usize, wants_json: bool) {
     if value.len() != len || !value.chars().all(|character| character.is_ascii_hexdigit()) {
         print_bridge_evidence_error(
             wants_json,
             &[format!("{name} must be {len} hex characters")],
+        );
+        process::exit(1);
+    }
+}
+
+fn validate_operator_approval_for_sequencer_rotation(
+    expected_payload_root: &str,
+    approval: &nebula_testnet::runtime::RuntimeSequencerKeyRotationApproval,
+    index: usize,
+    path: &str,
+    wants_json: bool,
+) {
+    if approval.payload_root != expected_payload_root {
+        print_bridge_evidence_error(
+            wants_json,
+            &[format!(
+                "--operator-approval[{index}] {path} payload_root does not match sequencer rotation"
+            )],
+        );
+        process::exit(1);
+    }
+    let expected_approval_root =
+        nebula_testnet::runtime::sequencer_key_rotation_approval_root(approval);
+    if approval.approval_root != expected_approval_root {
+        print_bridge_evidence_error(
+            wants_json,
+            &[format!(
+                "--operator-approval[{index}] {path} approval_root does not match approval contents"
+            )],
+        );
+        process::exit(1);
+    }
+    if let Err(error) = nebula_testnet::runtime::verify_runtime_root_signature(
+        &approval.operator_public_key_hex,
+        &approval.payload_root,
+        &approval.signature,
+    ) {
+        print_bridge_evidence_error(
+            wants_json,
+            &[format!(
+                "--operator-approval[{index}] {path} signature rejected: {error}"
+            )],
         );
         process::exit(1);
     }
@@ -2118,6 +2352,47 @@ fn validate_operator_approval_set(
                 wants_json,
                 &[format!(
                     "duplicate operator approval root for operator_id {}",
+                    approval.operator_id
+                )],
+            );
+            process::exit(1);
+        }
+    }
+}
+
+fn validate_sequencer_rotation_operator_approval_set(
+    approvals: &[nebula_testnet::runtime::RuntimeSequencerKeyRotationApproval],
+    wants_json: bool,
+) {
+    let mut seen_ids = BTreeSet::new();
+    let mut seen_keys = BTreeSet::new();
+    let mut seen_roots = BTreeSet::new();
+    for approval in approvals {
+        if !seen_ids.insert(approval.operator_id.to_ascii_lowercase()) {
+            print_bridge_evidence_error(
+                wants_json,
+                &[format!(
+                    "duplicate sequencer rotation operator approval for operator_id {}",
+                    approval.operator_id
+                )],
+            );
+            process::exit(1);
+        }
+        if !seen_keys.insert(approval.operator_public_key_hex.to_ascii_lowercase()) {
+            print_bridge_evidence_error(
+                wants_json,
+                &[format!(
+                    "duplicate sequencer rotation operator approval public key for operator_id {}",
+                    approval.operator_id
+                )],
+            );
+            process::exit(1);
+        }
+        if !seen_roots.insert(approval.approval_root.to_ascii_lowercase()) {
+            print_bridge_evidence_error(
+                wants_json,
+                &[format!(
+                    "duplicate sequencer rotation operator approval root for operator_id {}",
                     approval.operator_id
                 )],
             );
@@ -4037,6 +4312,8 @@ fn print_help() {
     nebula-testnet --assemble-bridge-deposit --bridge-deposit <path> --observer-evidence <path>...
     nebula-testnet --sign-withdrawal-operator-approval --withdrawal <path> --finalized-monero-tx-id <hex> --finalization-proof-root <hex> --operator-id <id> --operator-secret-key <hex> [--signed-at-unix-ms <ms>]
     nebula-testnet --assemble-finalize-withdrawal --withdrawal <path> --finalized-monero-tx-id <hex> --finalization-proof-root <hex> --operator-approval <path>... [--admin-token <token>]
+    nebula-testnet --sign-sequencer-rotation-approval --launch-package-bundle-root <hex> --previous-sequencer-key-history-root <hex> --activation-height <height> --old-sequencer-public-key <hex> --new-sequencer-public-key <hex> --rotation-proof-root <hex> --operator-id <id> --operator-secret-key <hex> [--signed-at-unix-ms <ms>]
+    nebula-testnet --assemble-sequencer-rotation --launch-package-bundle-root <hex> --previous-sequencer-key-history-root <hex> --activation-height <height> --old-sequencer-public-key <hex> --new-sequencer-secret-key-hex <hex> --rotation-proof-root <hex> --operator-approval <path>... [--admin-token <token>]
     nebula-testnet --build-validator-join --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>
     nebula-testnet --verify-validator-join <path> --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]
     nebula-testnet --build-operator-join-confirmation --validator-join <path> --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>
@@ -4100,6 +4377,11 @@ BRIDGE EVIDENCE TOOLING:
     --assemble-bridge-deposit before submitting nebula_observeBridgeDeposit.
     Run --sign-withdrawal-operator-approval on each operator signer, then
     --assemble-finalize-withdrawal to build nebula_finalizeWithdrawal params.
+    Run --sign-sequencer-rotation-approval on each launch-attested operator
+    signer, then --assemble-sequencer-rotation to build
+    nebula_rotateSequencerKey params. Rotation approvals are bound to the
+    launch-package bundle root, previous key-history root, activation height,
+    old/new sequencer public keys, and rotation proof root.
 
 RPC OPERATOR OPS, BACKUP, AND METRICS:
     Operator ops discovery uses /ops and nebula_opsStatus. Backup discovery

@@ -489,6 +489,17 @@ pub struct RuntimeSequencerKeyRotationApproval {
     pub approval_root: String,
 }
 
+pub struct RuntimeSequencerKeyRotationPayloadContext<'a> {
+    pub chain_id: &'a str,
+    pub runtime_version: &'a str,
+    pub launch_package_bundle_root: Option<&'a str>,
+    pub previous_sequencer_key_history_root: &'a str,
+    pub activation_height: u64,
+    pub old_public_key_hex: &'a str,
+    pub new_public_key_hex: &'a str,
+    pub rotation_proof_root: &'a str,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeWithdrawalRequest {
@@ -7243,16 +7254,31 @@ pub fn sequencer_key_rotation_payload_root(
         .unwrap_or(VERSION);
     let launch_package_bundle_root =
         launch_binding.map(|binding| binding.launch_package_bundle_root.as_str());
+    sequencer_key_rotation_payload_root_for_context(&RuntimeSequencerKeyRotationPayloadContext {
+        chain_id,
+        runtime_version,
+        launch_package_bundle_root,
+        previous_sequencer_key_history_root,
+        activation_height,
+        old_public_key_hex,
+        new_public_key_hex,
+        rotation_proof_root,
+    })
+}
+
+pub fn sequencer_key_rotation_payload_root_for_context(
+    context: &RuntimeSequencerKeyRotationPayloadContext<'_>,
+) -> String {
     stable_runtime_root(&json!({
         "sequencer_key_rotation_payload_domain": "nebula-runtime-sequencer-key-rotation-payload-v1",
-        "chain_id": chain_id,
-        "runtime_version": runtime_version,
-        "launch_package_bundle_root": launch_package_bundle_root,
-        "previous_sequencer_key_history_root": previous_sequencer_key_history_root,
-        "activation_height": activation_height,
-        "old_public_key_hex": old_public_key_hex,
-        "new_public_key_hex": new_public_key_hex,
-        "rotation_proof_root": rotation_proof_root,
+        "chain_id": context.chain_id,
+        "runtime_version": context.runtime_version,
+        "launch_package_bundle_root": context.launch_package_bundle_root,
+        "previous_sequencer_key_history_root": context.previous_sequencer_key_history_root,
+        "activation_height": context.activation_height,
+        "old_public_key_hex": context.old_public_key_hex,
+        "new_public_key_hex": context.new_public_key_hex,
+        "rotation_proof_root": context.rotation_proof_root,
     }))
 }
 

@@ -314,6 +314,12 @@ Operators can generate those payloads with the bundled CLI:
 `--sign-withdrawal-operator-approval` creates one operator approval, and
 `--assemble-finalize-withdrawal` builds RPC-ready `nebula_finalizeWithdrawal`
 params after recomputing payload roots, evidence roots, and Ed25519 signatures.
+Sequencer rotations use `--sign-sequencer-rotation-approval` on each
+launch-attested operator signer and `--assemble-sequencer-rotation` at the admin
+desk; the assembler derives the new public key from
+`--new-sequencer-secret-key-hex` and rejects approval roots, payload roots, or
+signatures that are not bound to the launch package root, previous key-history
+root, activation height, old key, new key, and rotation proof root.
 Public testnet operators should require `/health`, `/status`, and
 `nebula_status` to report or agree with the bridge policy root, confirmation
 floor, observer quorum, withdrawal operator quorum, identity-quorum
@@ -380,6 +386,10 @@ before advertising an endpoint. Rotation RPC parameters are `admin_token`,
 `operator_approval_ids`, `operator_approval_roots`, and signed
 `operator_approvals`; the response binds the old key, new key, activation
 height, previous key-history root, approval quorum, and rotation root.
+Operators should produce those approval objects with
+`--sign-sequencer-rotation-approval` and assemble the final RPC params with
+`--assemble-sequencer-rotation` so rotation signatures are launch-bound before
+submission.
 Equivocation RPC parameters are `height`, `first_block_hash`,
 `second_block_hash`, `reporter_id`, `evidence_root`, and `admin_token`;
 unresolved evidence halts block production and state mutations while status/ops

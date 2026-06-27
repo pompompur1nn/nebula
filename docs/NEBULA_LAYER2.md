@@ -801,6 +801,19 @@ scripts. Each observer signs the unsigned deposit JSON with
 --withdrawal <path> --finalized-monero-tx-id <hex> --finalization-proof-root
 <hex> --operator-approval <path>...`. The assemblers recompute payload roots,
 evidence roots, and Ed25519 signatures before emitting RPC-ready JSON.
+Sequencer rotations use the same operator-desk flow: each launch-attested
+operator signs `--sign-sequencer-rotation-approval --launch-package-bundle-root
+<hex> --previous-sequencer-key-history-root <hex> --activation-height <height>
+--old-sequencer-public-key <hex> --new-sequencer-public-key <hex>
+--rotation-proof-root <hex> --operator-id <id> --operator-secret-key <hex>`,
+then the admin desk runs `--assemble-sequencer-rotation
+--launch-package-bundle-root <hex> --previous-sequencer-key-history-root <hex>
+--activation-height <height> --old-sequencer-public-key <hex>
+--new-sequencer-secret-key-hex <hex> --rotation-proof-root <hex>
+--operator-approval <path>... [--admin-token <token>]`. The rotation assembler
+derives the new public key from the submitted secret and rejects approvals whose
+payload root, approval root, or Ed25519 signature does not match the
+launch-bound rotation.
 
 Public launch observers should treat the bridge as launch-blocked unless
 `/health`, `/status`, and `nebula_status` expose or agree with
@@ -833,6 +846,11 @@ approval signatures, and rotation root, then prove followers reject stale-key
 blocks and accept only blocks signed by the active key after the activation
 height. Rotation history must be rooted so launch observers can compare it
 across `/status`, `nebula_status`, and snapshots.
+Operators should create those signed approval payloads with
+`--sign-sequencer-rotation-approval` and assemble `nebula_rotateSequencerKey`
+params with `--assemble-sequencer-rotation`, which recomputes the launch-bound
+payload root from the launch package root, previous key-history root,
+activation height, old key, derived new key, and rotation proof root.
 
 Accountability evidence uses `nebula_reportEquivocation` with `height`,
 `first_block_hash`, `second_block_hash`, `reporter_id`, and `evidence_root`.
