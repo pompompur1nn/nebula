@@ -2044,7 +2044,8 @@ RPC OPERATOR OPS, BACKUP, AND METRICS:
     uses /backup and nebula_backupManifest. Scrapeable monitoring uses
     /metrics. Public operators must verify block freshness, latest height/hash,
     state and snapshot roots, persisted snapshot path and presence, sync peer
-    count, mempool capacity and full/admission rejection counts, RPC
+    count, successful sync peer count, sync attempt/success/failure/import
+    counts, mempool capacity and full/admission rejection counts, RPC
     request-size/rate-limit policy, admin RPC state, bridge policy root, bridge
     custody reconciliation, backup manifest root, and public ops readiness
     gauges before opening a public testnet endpoint.

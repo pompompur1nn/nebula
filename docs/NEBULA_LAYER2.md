@@ -141,11 +141,14 @@ evidence is absent or stale.
     `--max-requests-per-minute`. Mempool admission is stateful: public nodes
     reject missing senders, duplicate pending account nonces, nonce mismatches,
     and insufficient `NBLA`/`nXMR` balances before consuming bounded capacity.
+    Follower ops readiness must include at least one configured sync peer with a
+    successful valid snapshot response; attempts, successes, failures, stale
+    snapshots, fork rejections, and imports must be visible as telemetry.
 12. Confirm the sequencer/follower public-testnet RPC surfaces before launch.
     `/health`, `/status`, `/snapshot`, and JSON-RPC `/rpc` must agree on chain
     head, genesis identity, activation height, fee policy, validator identity,
     state root, snapshot root, sequencer public key, and configured follower sync
-    peers. Every snapshot block must commit to the producer public key and verify
+    peers plus per-peer sync telemetry. Every snapshot block must commit to the producer public key and verify
     its Ed25519 signature before a follower treats the peer as ready; exported
     snapshots must never include the sequencer secret key. Imported snapshots
     must bind the current state root to the latest signed block and reconcile
@@ -177,15 +180,16 @@ evidence is absent or stale.
     `nebula_backupManifest` must agree with `/health`, `/status`, and
     `nebula_status` on block freshness,
     latest height/hash, state root, snapshot root, persisted snapshot path and
-    presence, sync peer count, mempool cap/remaining capacity/full and
-    admission rejection counts, RPC request-size and rate-limit policy, admin
-    RPC state, bridge policy root, bridge custody reconciliation, backup
+    presence, sync peer count, successful peer count, sync attempt/success/failure/import
+    counts, mempool cap/remaining capacity/full and admission rejection counts,
+    RPC request-size and rate-limit policy, admin RPC state, bridge policy root,
+    bridge custody reconciliation, backup
     manifest root, and public ops readiness gauges. Operators must treat
     stale blocks, missing
     persisted snapshots, mismatched backup roots, missing bridge policy roots,
-    nXMR custody deficits, full mempools, unexpected admission-rejection spikes,
-    disabled or unexpected admin RPC state, or unexpected sync/RPC-limit values
-    as public-launch blockers.
+    nXMR custody deficits, full mempools, followers with no successful sync peer
+    evidence, unexpected admission-rejection spikes, disabled or unexpected
+    admin RPC state, or unexpected sync/RPC-limit values as public-launch blockers.
 15. Gate sequencer key rotation and operator accountability before public
     endpoint exposure. `/health`, `/status`, and `nebula_status` must expose
     the current sequencer public key, sequencer key-rotation history/root,
@@ -352,9 +356,11 @@ cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet 
 This gives public replicas a Base-style failover shape: each follower can sync
 from the sequencer or another verified replica, skip stale or unreachable peers,
 and keep serving from its persisted local snapshot. `/health`, `/status`, and
-`nebula_status` expose the configured `sync_peer_urls` list so operators and launch
-observers can confirm that replicas are attached to the intended peer set rather
-than one fragile upstream.
+`nebula_status` expose the configured `sync_peer_urls` list, per-peer
+`sync_peer_telemetry`, successful peer count, attempt/success/failure/import
+counts, stale snapshot count, and fork rejection count. Followers remain
+launch-blocked with `follower-no-successful-sync-peer` until at least one
+configured peer has returned a valid snapshot response.
 
 HTTP surfaces:
 

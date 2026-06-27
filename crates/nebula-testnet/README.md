@@ -156,8 +156,11 @@ imports one verified snapshot at startup. Repeat
 `--sync-rpc <http://peer/snapshot>` for the sequencer and replica peers; the
 follower keeps fetching, verifying, importing, and persisting newer snapshots
 from the highest ahead peer whose snapshot extends local state. `/health`,
-`/status`, and `nebula_status` expose the configured `sync_peer_urls` list so
-operators can verify that replicas share the intended failover peer set.
+`/status`, and `nebula_status` expose the configured `sync_peer_urls` list,
+per-peer `sync_peer_telemetry`, successful peer count, attempt/success/failure/import
+counts, stale snapshot count, and fork rejection count. Followers remain
+launch-blocked with `follower-no-successful-sync-peer` until at least one
+configured peer has returned a valid snapshot response.
 
 Public RPC nodes enforce a bounded local mempool, maximum request body size, and
 per-client request rate limit before dispatching JSON-RPC work. Use

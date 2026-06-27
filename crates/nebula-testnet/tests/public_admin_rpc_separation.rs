@@ -122,6 +122,9 @@ fn metrics_endpoint_exposes_public_rpc_operational_gauges() {
     assert!(body.contains("nebula_sub_second_blocks 1"));
     assert!(body.contains("nebula_rpc_max_request_bytes "));
     assert!(body.contains("nebula_rpc_max_requests_per_minute 10000"));
+    assert!(body.contains("nebula_sync_successful_peer_count 0"));
+    assert!(body.contains("nebula_sync_attempt_count 0"));
+    assert!(body.contains("nebula_sync_import_count 0"));
     assert!(body.contains("nebula_mempool_admission_rejection_count 0"));
     assert!(body.contains("nebula_faucet_nxmr_units 0"));
     assert!(body.contains("nebula_bridge_only_nxmr 1"));

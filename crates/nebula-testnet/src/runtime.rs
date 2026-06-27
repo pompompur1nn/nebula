@@ -437,6 +437,17 @@ pub struct RuntimeOpsStatus {
     pub storage_snapshot_height: Option<u64>,
     pub storage_snapshot_matches_runtime: bool,
     pub sync_peer_count: usize,
+    pub sync_successful_peer_count: usize,
+    pub sync_failed_peer_count: usize,
+    pub sync_attempt_count: u64,
+    pub sync_success_count: u64,
+    pub sync_failure_count: u64,
+    pub sync_stale_snapshot_count: u64,
+    pub sync_fork_rejection_count: u64,
+    pub sync_import_count: u64,
+    pub sync_last_success_unix_ms: Option<u128>,
+    pub sync_last_import_height: Option<u64>,
+    pub sync_peer_telemetry: Vec<RuntimeSyncPeerTelemetry>,
     pub rpc_max_request_bytes: usize,
     pub rpc_max_requests_per_minute: u32,
     pub admin_rpc_enabled: bool,
@@ -495,6 +506,17 @@ pub struct RuntimeBackupManifest {
     pub sequencer_accountability_clean: bool,
     pub bridge_policy_root: String,
     pub sync_peer_count: usize,
+    pub sync_successful_peer_count: usize,
+    pub sync_failed_peer_count: usize,
+    pub sync_attempt_count: u64,
+    pub sync_success_count: u64,
+    pub sync_failure_count: u64,
+    pub sync_stale_snapshot_count: u64,
+    pub sync_fork_rejection_count: u64,
+    pub sync_import_count: u64,
+    pub sync_last_success_unix_ms: Option<u128>,
+    pub sync_last_import_height: Option<u64>,
+    pub sync_peer_telemetry: Vec<RuntimeSyncPeerTelemetry>,
     pub rpc_max_request_bytes: usize,
     pub rpc_max_requests_per_minute: u32,
     pub admin_rpc_enabled: bool,
@@ -599,6 +621,7 @@ struct RuntimeRpcState {
     storage: Option<RuntimeStorage>,
     rpc_limits: RuntimeRpcLimits,
     sync_peers: RuntimeSyncPeerSet,
+    sync_telemetry: Arc<Mutex<BTreeMap<String, RuntimeSyncPeerTelemetry>>>,
     admin_token: Option<String>,
     rate_limits: Arc<Mutex<BTreeMap<String, RuntimeRateLimitBucket>>>,
 }
@@ -613,6 +636,42 @@ struct RuntimeRpcLimits {
 struct RuntimeSyncPeerSet {
     bootstrap_peer_urls: Vec<String>,
     sync_peer_urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RuntimeSyncPeerTelemetry {
+    pub url: String,
+    pub last_attempt_unix_ms: Option<u128>,
+    pub last_success_unix_ms: Option<u128>,
+    pub last_import_unix_ms: Option<u128>,
+    pub last_error_unix_ms: Option<u128>,
+    pub last_latency_ms: Option<u128>,
+    pub last_seen_height: Option<u64>,
+    pub last_seen_snapshot_root: Option<String>,
+    pub last_import_height: Option<u64>,
+    pub last_import_snapshot_root: Option<String>,
+    pub last_error: Option<String>,
+    pub attempt_count: u64,
+    pub success_count: u64,
+    pub failure_count: u64,
+    pub stale_snapshot_count: u64,
+    pub fork_rejection_count: u64,
+    pub import_count: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RuntimeSyncTelemetrySummary {
+    peer_telemetry: Vec<RuntimeSyncPeerTelemetry>,
+    successful_peer_count: usize,
+    failed_peer_count: usize,
+    attempt_count: u64,
+    success_count: u64,
+    failure_count: u64,
+    stale_snapshot_count: u64,
+    fork_rejection_count: u64,
+    import_count: u64,
+    last_success_unix_ms: Option<u128>,
+    last_import_height: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -685,6 +744,186 @@ impl RuntimeRpcState {
         Ok(())
     }
 
+    fn sync_telemetry_summary(&self) -> Result<RuntimeSyncTelemetrySummary, String> {
+        let mut telemetry = self
+            .sync_telemetry
+            .lock()
+            .map_err(|_| "sync telemetry mutex poisoned".to_string())?;
+        for url in &self.sync_peers.sync_peer_urls {
+            telemetry
+                .entry(url.clone())
+                .or_insert_with(|| RuntimeSyncPeerTelemetry {
+                    url: url.clone(),
+                    ..RuntimeSyncPeerTelemetry::default()
+                });
+        }
+        let mut peer_telemetry = Vec::new();
+        for url in &self.sync_peers.sync_peer_urls {
+            if let Some(peer) = telemetry.get(url) {
+                peer_telemetry.push(peer.clone());
+            }
+        }
+        for (url, peer) in telemetry.iter() {
+            if !self
+                .sync_peers
+                .sync_peer_urls
+                .iter()
+                .any(|configured| configured == url)
+            {
+                peer_telemetry.push(peer.clone());
+            }
+        }
+        Ok(RuntimeSyncTelemetrySummary {
+            successful_peer_count: peer_telemetry
+                .iter()
+                .filter(|peer| peer.last_success_unix_ms.is_some())
+                .count(),
+            failed_peer_count: peer_telemetry
+                .iter()
+                .filter(|peer| peer.last_error.is_some())
+                .count(),
+            attempt_count: peer_telemetry.iter().map(|peer| peer.attempt_count).sum(),
+            success_count: peer_telemetry.iter().map(|peer| peer.success_count).sum(),
+            failure_count: peer_telemetry.iter().map(|peer| peer.failure_count).sum(),
+            stale_snapshot_count: peer_telemetry
+                .iter()
+                .map(|peer| peer.stale_snapshot_count)
+                .sum(),
+            fork_rejection_count: peer_telemetry
+                .iter()
+                .map(|peer| peer.fork_rejection_count)
+                .sum(),
+            import_count: peer_telemetry.iter().map(|peer| peer.import_count).sum(),
+            last_success_unix_ms: peer_telemetry
+                .iter()
+                .filter_map(|peer| peer.last_success_unix_ms)
+                .max(),
+            last_import_height: peer_telemetry
+                .iter()
+                .filter_map(|peer| peer.last_import_height)
+                .max(),
+            peer_telemetry,
+        })
+    }
+
+    fn record_sync_peer_attempt(&self, url: &str, started_at_unix_ms: u128) -> Result<(), String> {
+        let mut telemetry = self
+            .sync_telemetry
+            .lock()
+            .map_err(|_| "sync telemetry mutex poisoned".to_string())?;
+        let entry = telemetry
+            .entry(url.to_string())
+            .or_insert_with(|| RuntimeSyncPeerTelemetry {
+                url: url.to_string(),
+                ..RuntimeSyncPeerTelemetry::default()
+            });
+        entry.last_attempt_unix_ms = Some(started_at_unix_ms);
+        entry.attempt_count = entry.attempt_count.saturating_add(1);
+        Ok(())
+    }
+
+    fn record_sync_peer_fetch_failure(
+        &self,
+        url: &str,
+        error: String,
+        latency_ms: u128,
+    ) -> Result<(), String> {
+        let mut telemetry = self
+            .sync_telemetry
+            .lock()
+            .map_err(|_| "sync telemetry mutex poisoned".to_string())?;
+        let entry = telemetry
+            .entry(url.to_string())
+            .or_insert_with(|| RuntimeSyncPeerTelemetry {
+                url: url.to_string(),
+                ..RuntimeSyncPeerTelemetry::default()
+            });
+        entry.last_latency_ms = Some(latency_ms);
+        entry.last_error_unix_ms = Some(unix_ms());
+        entry.last_error = Some(error);
+        entry.failure_count = entry.failure_count.saturating_add(1);
+        Ok(())
+    }
+
+    fn record_sync_peer_success(
+        &self,
+        url: &str,
+        snapshot: &RuntimeSnapshot,
+        latency_ms: u128,
+    ) -> Result<(), String> {
+        let now = unix_ms();
+        let mut telemetry = self
+            .sync_telemetry
+            .lock()
+            .map_err(|_| "sync telemetry mutex poisoned".to_string())?;
+        let entry = telemetry
+            .entry(url.to_string())
+            .or_insert_with(|| RuntimeSyncPeerTelemetry {
+                url: url.to_string(),
+                ..RuntimeSyncPeerTelemetry::default()
+            });
+        entry.last_success_unix_ms = Some(now);
+        entry.last_latency_ms = Some(latency_ms);
+        entry.last_seen_height = Some(snapshot.latest_height());
+        entry.last_seen_snapshot_root = Some(snapshot.root.clone());
+        entry.last_error = None;
+        entry.last_error_unix_ms = None;
+        entry.success_count = entry.success_count.saturating_add(1);
+        Ok(())
+    }
+
+    fn record_sync_peer_stale(&self, url: &str) -> Result<(), String> {
+        let mut telemetry = self
+            .sync_telemetry
+            .lock()
+            .map_err(|_| "sync telemetry mutex poisoned".to_string())?;
+        let entry = telemetry
+            .entry(url.to_string())
+            .or_insert_with(|| RuntimeSyncPeerTelemetry {
+                url: url.to_string(),
+                ..RuntimeSyncPeerTelemetry::default()
+            });
+        entry.stale_snapshot_count = entry.stale_snapshot_count.saturating_add(1);
+        Ok(())
+    }
+
+    fn record_sync_peer_fork(&self, url: &str, error: String) -> Result<(), String> {
+        let mut telemetry = self
+            .sync_telemetry
+            .lock()
+            .map_err(|_| "sync telemetry mutex poisoned".to_string())?;
+        let entry = telemetry
+            .entry(url.to_string())
+            .or_insert_with(|| RuntimeSyncPeerTelemetry {
+                url: url.to_string(),
+                ..RuntimeSyncPeerTelemetry::default()
+            });
+        entry.last_error = Some(error);
+        entry.last_error_unix_ms = Some(unix_ms());
+        entry.failure_count = entry.failure_count.saturating_add(1);
+        entry.fork_rejection_count = entry.fork_rejection_count.saturating_add(1);
+        Ok(())
+    }
+
+    fn record_sync_peer_import(&self, url: &str, snapshot: &RuntimeSnapshot) -> Result<(), String> {
+        let now = unix_ms();
+        let mut telemetry = self
+            .sync_telemetry
+            .lock()
+            .map_err(|_| "sync telemetry mutex poisoned".to_string())?;
+        let entry = telemetry
+            .entry(url.to_string())
+            .or_insert_with(|| RuntimeSyncPeerTelemetry {
+                url: url.to_string(),
+                ..RuntimeSyncPeerTelemetry::default()
+            });
+        entry.last_import_unix_ms = Some(now);
+        entry.last_import_height = Some(snapshot.latest_height());
+        entry.last_import_snapshot_root = Some(snapshot.root.clone());
+        entry.import_count = entry.import_count.saturating_add(1);
+        Ok(())
+    }
+
     fn status_json(&self) -> Result<Value, String> {
         let status = {
             let runtime = self
@@ -698,6 +937,7 @@ impl RuntimeRpcState {
         let Value::Object(fields) = &mut status else {
             return Err("runtime status did not serialize as an object".to_string());
         };
+        let sync_telemetry = self.sync_telemetry_summary()?;
         fields.insert(
             "rpc_max_request_bytes".to_string(),
             json!(self.rpc_limits.max_request_bytes),
@@ -717,6 +957,50 @@ impl RuntimeRpcState {
         fields.insert(
             "sync_peer_count".to_string(),
             json!(self.sync_peers.sync_peer_urls.len()),
+        );
+        fields.insert(
+            "sync_successful_peer_count".to_string(),
+            json!(sync_telemetry.successful_peer_count),
+        );
+        fields.insert(
+            "sync_failed_peer_count".to_string(),
+            json!(sync_telemetry.failed_peer_count),
+        );
+        fields.insert(
+            "sync_attempt_count".to_string(),
+            json!(sync_telemetry.attempt_count),
+        );
+        fields.insert(
+            "sync_success_count".to_string(),
+            json!(sync_telemetry.success_count),
+        );
+        fields.insert(
+            "sync_failure_count".to_string(),
+            json!(sync_telemetry.failure_count),
+        );
+        fields.insert(
+            "sync_stale_snapshot_count".to_string(),
+            json!(sync_telemetry.stale_snapshot_count),
+        );
+        fields.insert(
+            "sync_fork_rejection_count".to_string(),
+            json!(sync_telemetry.fork_rejection_count),
+        );
+        fields.insert(
+            "sync_import_count".to_string(),
+            json!(sync_telemetry.import_count),
+        );
+        fields.insert(
+            "sync_last_success_unix_ms".to_string(),
+            json!(sync_telemetry.last_success_unix_ms),
+        );
+        fields.insert(
+            "sync_last_import_height".to_string(),
+            json!(sync_telemetry.last_import_height),
+        );
+        fields.insert(
+            "sync_peer_telemetry".to_string(),
+            json!(sync_telemetry.peer_telemetry),
         );
         fields.insert(
             "admin_rpc_enabled".to_string(),
@@ -763,6 +1047,7 @@ impl RuntimeRpcState {
                     && persisted.state_root == snapshot.state_root
             })
             .unwrap_or(false);
+        let sync_telemetry = self.sync_telemetry_summary()?;
         let latest_timestamp_unix_ms = snapshot
             .blocks
             .last()
@@ -794,6 +1079,12 @@ impl RuntimeRpcState {
         }
         if status.node_role == "follower" && self.sync_peers.sync_peer_urls.is_empty() {
             blocking_gaps.push("follower-missing-sync-peers".to_string());
+        }
+        if status.node_role == "follower"
+            && !self.sync_peers.sync_peer_urls.is_empty()
+            && sync_telemetry.successful_peer_count == 0
+        {
+            blocking_gaps.push("follower-no-successful-sync-peer".to_string());
         }
         if bridge_policy().live_value_enabled {
             blocking_gaps.push("bridge-live-value-enabled".to_string());
@@ -832,6 +1123,17 @@ impl RuntimeRpcState {
             storage_snapshot_height,
             storage_snapshot_matches_runtime,
             sync_peer_count: self.sync_peers.sync_peer_urls.len(),
+            sync_successful_peer_count: sync_telemetry.successful_peer_count,
+            sync_failed_peer_count: sync_telemetry.failed_peer_count,
+            sync_attempt_count: sync_telemetry.attempt_count,
+            sync_success_count: sync_telemetry.success_count,
+            sync_failure_count: sync_telemetry.failure_count,
+            sync_stale_snapshot_count: sync_telemetry.stale_snapshot_count,
+            sync_fork_rejection_count: sync_telemetry.fork_rejection_count,
+            sync_import_count: sync_telemetry.import_count,
+            sync_last_success_unix_ms: sync_telemetry.last_success_unix_ms,
+            sync_last_import_height: sync_telemetry.last_import_height,
+            sync_peer_telemetry: sync_telemetry.peer_telemetry,
             rpc_max_request_bytes: self.rpc_limits.max_request_bytes,
             rpc_max_requests_per_minute: self.rpc_limits.max_requests_per_minute,
             admin_rpc_enabled: self.admin_token.is_some(),
@@ -896,6 +1198,17 @@ impl RuntimeRpcState {
             sequencer_accountability_clean: ops_status.sequencer_accountability_clean,
             bridge_policy_root: ops_status.bridge_policy_root,
             sync_peer_count: ops_status.sync_peer_count,
+            sync_successful_peer_count: ops_status.sync_successful_peer_count,
+            sync_failed_peer_count: ops_status.sync_failed_peer_count,
+            sync_attempt_count: ops_status.sync_attempt_count,
+            sync_success_count: ops_status.sync_success_count,
+            sync_failure_count: ops_status.sync_failure_count,
+            sync_stale_snapshot_count: ops_status.sync_stale_snapshot_count,
+            sync_fork_rejection_count: ops_status.sync_fork_rejection_count,
+            sync_import_count: ops_status.sync_import_count,
+            sync_last_success_unix_ms: ops_status.sync_last_success_unix_ms,
+            sync_last_import_height: ops_status.sync_last_import_height,
+            sync_peer_telemetry: ops_status.sync_peer_telemetry,
             rpc_max_request_bytes: ops_status.rpc_max_request_bytes,
             rpc_max_requests_per_minute: ops_status.rpc_max_requests_per_minute,
             admin_rpc_enabled: ops_status.admin_rpc_enabled,
@@ -1002,6 +1315,48 @@ impl RuntimeRpcState {
             "nebula_sync_peer_count",
             "Configured continuous snapshot sync peers.",
             self.sync_peers.sync_peer_urls.len(),
+        );
+        push_metric(
+            &mut output,
+            "nebula_sync_successful_peer_count",
+            "Configured sync peers with at least one successful valid snapshot response.",
+            ops_status.sync_successful_peer_count,
+        );
+        push_metric(
+            &mut output,
+            "nebula_sync_failed_peer_count",
+            "Configured sync peers with a recorded current error.",
+            ops_status.sync_failed_peer_count,
+        );
+        push_metric(
+            &mut output,
+            "nebula_sync_attempt_count",
+            "Total sync peer fetch attempts.",
+            ops_status.sync_attempt_count,
+        );
+        push_metric(
+            &mut output,
+            "nebula_sync_success_count",
+            "Total successful valid snapshot responses from sync peers.",
+            ops_status.sync_success_count,
+        );
+        push_metric(
+            &mut output,
+            "nebula_sync_failure_count",
+            "Total failed sync peer fetch or validation attempts.",
+            ops_status.sync_failure_count,
+        );
+        push_metric(
+            &mut output,
+            "nebula_sync_import_count",
+            "Total ahead snapshots imported from sync peers.",
+            ops_status.sync_import_count,
+        );
+        push_metric(
+            &mut output,
+            "nebula_sync_fork_rejection_count",
+            "Total ahead peer snapshots rejected because they did not extend local state.",
+            ops_status.sync_fork_rejection_count,
         );
         push_metric_bool(
             &mut output,
@@ -2184,6 +2539,7 @@ pub fn serve_runtime_rpc_with_options(
         storage,
         rpc_limits,
         sync_peers,
+        sync_telemetry: Arc::new(Mutex::new(BTreeMap::new())),
         admin_token,
         rate_limits: Arc::new(Mutex::new(BTreeMap::new())),
     };
@@ -2397,11 +2753,67 @@ fn select_best_extending_snapshot(
     Ok(selected)
 }
 
+fn select_best_extending_snapshot_with_telemetry(
+    state: &RuntimeRpcState,
+    local: &RuntimeSnapshot,
+    peer_snapshots: Vec<(String, RuntimeSnapshot)>,
+) -> Result<Option<(String, RuntimeSnapshot)>, String> {
+    let mut selected: Option<(String, RuntimeSnapshot)> = None;
+    let mut rejected = Vec::new();
+    for (url, snapshot) in peer_snapshots {
+        if snapshot.latest_height() <= local.latest_height() {
+            state.record_sync_peer_stale(&url)?;
+            continue;
+        }
+        if !snapshot_extends(local, &snapshot) {
+            let error = format!(
+                "height {} does not extend local height {}",
+                snapshot.latest_height(),
+                local.latest_height()
+            );
+            state.record_sync_peer_fork(&url, error.clone())?;
+            rejected.push(format!("{url}: {error}"));
+            continue;
+        }
+        if selected
+            .as_ref()
+            .map(|(_, best)| snapshot.latest_height() > best.latest_height())
+            .unwrap_or(true)
+        {
+            selected = Some((url, snapshot));
+        }
+    }
+    if selected.is_none() && !rejected.is_empty() {
+        return Err(format!(
+            "no sync peer returned an extending ahead snapshot: {}",
+            rejected.join("; ")
+        ));
+    }
+    Ok(selected)
+}
+
 fn sync_runtime_from_peers(
     state: &RuntimeRpcState,
     sync_rpc_urls: &[String],
 ) -> Result<bool, String> {
-    let (peer_snapshots, fetch_errors) = fetch_runtime_snapshots(sync_rpc_urls);
+    let mut peer_snapshots = Vec::new();
+    let mut fetch_errors = Vec::new();
+    for url in sync_rpc_urls {
+        let started_at_unix_ms = unix_ms();
+        state.record_sync_peer_attempt(url, started_at_unix_ms)?;
+        match fetch_runtime_snapshot(url) {
+            Ok(snapshot) => {
+                let latency_ms = unix_ms().saturating_sub(started_at_unix_ms);
+                state.record_sync_peer_success(url, &snapshot, latency_ms)?;
+                peer_snapshots.push((url.clone(), snapshot));
+            }
+            Err(error) => {
+                let latency_ms = unix_ms().saturating_sub(started_at_unix_ms);
+                state.record_sync_peer_fetch_failure(url, error.clone(), latency_ms)?;
+                fetch_errors.push(format!("{url}: {error}"));
+            }
+        }
+    }
     if peer_snapshots.is_empty() && !sync_rpc_urls.is_empty() {
         return Err(format!(
             "no sync peer returned a usable snapshot: {}",
@@ -2414,10 +2826,13 @@ fn sync_runtime_from_peers(
             .lock()
             .map_err(|_| "runtime mutex poisoned".to_string())?;
         let local = runtime.export_snapshot();
-        let Some((_, peer)) = select_best_extending_snapshot(&local, peer_snapshots)? else {
+        let Some((peer_url, peer)) =
+            select_best_extending_snapshot_with_telemetry(state, &local, peer_snapshots)?
+        else {
             return Ok(false);
         };
-        runtime.import_snapshot(peer)?;
+        runtime.import_snapshot(peer.clone())?;
+        state.record_sync_peer_import(&peer_url, &peer)?;
         true
     };
     if imported {
@@ -2575,6 +2990,17 @@ fn handle_http_connection(mut stream: TcpStream, state: RuntimeRpcState) -> std:
                     "bootstrap_peer_urls": state.sync_peers.bootstrap_peer_urls,
                     "sync_peer_urls": state.sync_peers.sync_peer_urls,
                     "sync_peer_count": state.sync_peers.sync_peer_urls.len(),
+                    "sync_successful_peer_count": status["sync_successful_peer_count"],
+                    "sync_failed_peer_count": status["sync_failed_peer_count"],
+                    "sync_attempt_count": status["sync_attempt_count"],
+                    "sync_success_count": status["sync_success_count"],
+                    "sync_failure_count": status["sync_failure_count"],
+                    "sync_stale_snapshot_count": status["sync_stale_snapshot_count"],
+                    "sync_fork_rejection_count": status["sync_fork_rejection_count"],
+                    "sync_import_count": status["sync_import_count"],
+                    "sync_last_success_unix_ms": status["sync_last_success_unix_ms"],
+                    "sync_last_import_height": status["sync_last_import_height"],
+                    "sync_peer_telemetry": status["sync_peer_telemetry"],
                     "max_mempool_transactions": status["max_mempool_transactions"],
                     "mempool_size": status["mempool_size"],
                     "mempool_capacity_remaining": status["mempool_capacity_remaining"],
@@ -3857,6 +4283,17 @@ fn ops_status_root(report: &RuntimeOpsStatus) -> String {
         "storage_snapshot_height": report.storage_snapshot_height,
         "storage_snapshot_matches_runtime": report.storage_snapshot_matches_runtime,
         "sync_peer_count": report.sync_peer_count,
+        "sync_successful_peer_count": report.sync_successful_peer_count,
+        "sync_failed_peer_count": report.sync_failed_peer_count,
+        "sync_attempt_count": report.sync_attempt_count,
+        "sync_success_count": report.sync_success_count,
+        "sync_failure_count": report.sync_failure_count,
+        "sync_stale_snapshot_count": report.sync_stale_snapshot_count,
+        "sync_fork_rejection_count": report.sync_fork_rejection_count,
+        "sync_import_count": report.sync_import_count,
+        "sync_last_success_unix_ms": report.sync_last_success_unix_ms,
+        "sync_last_import_height": report.sync_last_import_height,
+        "sync_peer_telemetry": report.sync_peer_telemetry,
         "rpc_max_request_bytes": report.rpc_max_request_bytes,
         "rpc_max_requests_per_minute": report.rpc_max_requests_per_minute,
         "admin_rpc_enabled": report.admin_rpc_enabled,
@@ -3916,6 +4353,17 @@ fn backup_manifest_root(manifest: &RuntimeBackupManifest) -> String {
         "sequencer_accountability_clean": manifest.sequencer_accountability_clean,
         "bridge_policy_root": manifest.bridge_policy_root,
         "sync_peer_count": manifest.sync_peer_count,
+        "sync_successful_peer_count": manifest.sync_successful_peer_count,
+        "sync_failed_peer_count": manifest.sync_failed_peer_count,
+        "sync_attempt_count": manifest.sync_attempt_count,
+        "sync_success_count": manifest.sync_success_count,
+        "sync_failure_count": manifest.sync_failure_count,
+        "sync_stale_snapshot_count": manifest.sync_stale_snapshot_count,
+        "sync_fork_rejection_count": manifest.sync_fork_rejection_count,
+        "sync_import_count": manifest.sync_import_count,
+        "sync_last_success_unix_ms": manifest.sync_last_success_unix_ms,
+        "sync_last_import_height": manifest.sync_last_import_height,
+        "sync_peer_telemetry": manifest.sync_peer_telemetry,
         "rpc_max_request_bytes": manifest.rpc_max_request_bytes,
         "rpc_max_requests_per_minute": manifest.rpc_max_requests_per_minute,
         "admin_rpc_enabled": manifest.admin_rpc_enabled,
@@ -4121,6 +4569,7 @@ mod tests {
                 max_requests_per_minute,
             },
             sync_peers: RuntimeSyncPeerSet::default(),
+            sync_telemetry: Arc::new(Mutex::new(BTreeMap::new())),
             admin_token: None,
             rate_limits: Arc::new(Mutex::new(BTreeMap::new())),
         }
@@ -4170,6 +4619,41 @@ mod tests {
             observer_signature_roots: vec!["9".repeat(64), "a".repeat(64)],
             observed_at_unix_ms: 1,
         }
+    }
+
+    fn one_shot_http_response(body: String, status_line: &str) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let status_line = status_line.to_string();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 256];
+            while !String::from_utf8_lossy(&request).contains("\r\n\r\n") {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(read) => request.extend_from_slice(&chunk[..read]),
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            || error.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
+            let response = format!(
+                "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.flush().unwrap();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            thread::sleep(Duration::from_millis(25));
+        });
+        (format!("http://{address}/snapshot"), handle)
     }
 
     fn snapshot_test_state_root(snapshot: &RuntimeSnapshot) -> String {
@@ -4386,10 +4870,31 @@ mod tests {
                 "http://127.0.0.1:9946/snapshot"
             ])
         );
+        assert_eq!(status["sync_successful_peer_count"], 0);
+        assert_eq!(status["sync_attempt_count"], 0);
+        assert_eq!(status["sync_peer_telemetry"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            status["sync_peer_telemetry"][0]["url"],
+            "http://127.0.0.1:9945/snapshot"
+        );
+        assert_eq!(
+            status["sync_peer_telemetry"][0]["last_attempt_unix_ms"],
+            Value::Null
+        );
+        assert_eq!(
+            status["sync_peer_telemetry"][0]["last_success_unix_ms"],
+            Value::Null
+        );
+        assert_eq!(status["sync_peer_telemetry"][0]["attempt_count"], 0);
         assert_eq!(
             dispatch_json_rpc_method(&state, "nebula_status", json!({})).unwrap()
                 ["rpc_max_requests_per_minute"],
             7
+        );
+        assert_eq!(
+            dispatch_json_rpc_method(&state, "nebula_status", json!({})).unwrap()
+                ["sync_peer_telemetry"][1]["url"],
+            "http://127.0.0.1:9946/snapshot"
         );
     }
 
@@ -4412,6 +4917,50 @@ mod tests {
             .contains(&"no-produced-blocks-observed".to_string()));
         assert!(!ops.storage_snapshot_present);
         assert_eq!(ops.ops_root.len(), 64);
+    }
+
+    #[test]
+    fn runtime_ops_status_follower_requires_successful_peer_sync_evidence() {
+        let mut sequencer = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        sequencer.produce_block();
+        let snapshot = sequencer.export_snapshot();
+        let mut follower_config = RuntimeConfig::public_testnet_default();
+        follower_config.produce_blocks = false;
+        let follower = NebulaRuntime::from_snapshot(follower_config, snapshot.clone()).unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("nebula-runtime-follower-sync-ready-{}", unix_ms()));
+        let storage = RuntimeStorage::from_data_dir(&dir);
+        storage.save_snapshot(&snapshot).unwrap();
+        let mut state = test_rpc_state_with_limits(
+            follower,
+            DEFAULT_MAX_REQUEST_BYTES,
+            DEFAULT_MAX_REQUESTS_PER_MINUTE,
+        );
+        state.storage = Some(storage);
+        state.sync_peers = RuntimeSyncPeerSet {
+            bootstrap_peer_urls: Vec::new(),
+            sync_peer_urls: vec!["http://127.0.0.1:9945/snapshot".to_string()],
+        };
+
+        let ops = state.ops_status().unwrap();
+        assert!(!ops.public_ops_ready);
+        assert!(!ops
+            .blocking_gaps
+            .contains(&"follower-missing-sync-peers".to_string()));
+        assert!(ops
+            .blocking_gaps
+            .contains(&"follower-no-successful-sync-peer".to_string()));
+        assert_eq!(ops.sync_successful_peer_count, 0);
+
+        state
+            .record_sync_peer_success("http://127.0.0.1:9945/snapshot", &snapshot, 1)
+            .unwrap();
+        let ops = state.ops_status().unwrap();
+        assert!(ops.public_ops_ready, "{:?}", ops.blocking_gaps);
+        assert_eq!(ops.sync_successful_peer_count, 1);
+        assert_eq!(ops.sync_peer_telemetry[0].success_count, 1);
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -4536,6 +5085,11 @@ mod tests {
         assert!(metrics.contains("nebula_rpc_max_request_bytes 2048"));
         assert!(metrics.contains("nebula_rpc_max_requests_per_minute 7"));
         assert!(metrics.contains("nebula_sync_peer_count 0"));
+        assert!(metrics.contains("nebula_sync_successful_peer_count 0"));
+        assert!(metrics.contains("nebula_sync_attempt_count 0"));
+        assert!(metrics.contains("nebula_sync_success_count 0"));
+        assert!(metrics.contains("nebula_sync_failure_count 0"));
+        assert!(metrics.contains("nebula_sync_import_count 0"));
         assert!(metrics.contains("nebula_admin_rpc_enabled 0"));
         assert!(metrics.contains("nebula_mempool_admission_rejection_count 0"));
         assert!(metrics.contains("nebula_faucet_nxmr_units 0"));
@@ -5269,6 +5823,71 @@ mod tests {
         )
         .unwrap_err()
         .contains("does not extend local height"));
+    }
+
+    #[test]
+    fn runtime_sync_peer_telemetry_records_attempt_success_error_and_import() {
+        let local_runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let local_snapshot = local_runtime.export_snapshot();
+        let mut peer_runtime =
+            NebulaRuntime::from_snapshot(RuntimeConfig::public_testnet_default(), local_snapshot)
+                .unwrap();
+        peer_runtime.produce_block();
+        let peer_snapshot = peer_runtime.export_snapshot();
+        let (good_url, good_handle) = one_shot_http_response(
+            serde_json::to_string(&peer_snapshot).unwrap(),
+            "HTTP/1.1 200 OK",
+        );
+        let (bad_url, bad_handle) = one_shot_http_response(
+            "{\"error\":\"not available\"}".to_string(),
+            "HTTP/1.1 500 Internal Server Error",
+        );
+        let mut state = test_rpc_state_with_limits(
+            local_runtime,
+            DEFAULT_MAX_REQUEST_BYTES,
+            DEFAULT_MAX_REQUESTS_PER_MINUTE,
+        );
+        state.sync_peers = RuntimeSyncPeerSet {
+            bootstrap_peer_urls: Vec::new(),
+            sync_peer_urls: vec![good_url.clone(), bad_url.clone()],
+        };
+
+        let imported =
+            sync_runtime_from_peers(&state, &[good_url.clone(), bad_url.clone()]).unwrap();
+        good_handle.join().unwrap();
+        bad_handle.join().unwrap();
+
+        assert!(imported);
+        let status = state.status_json().unwrap();
+        assert_eq!(status["latest_height"], 1);
+        assert_eq!(status["sync_peer_count"], 2);
+        assert_eq!(status["sync_successful_peer_count"], 1);
+        assert_eq!(status["sync_failed_peer_count"], 1);
+        assert_eq!(status["sync_attempt_count"], 2);
+        assert_eq!(status["sync_success_count"], 1);
+        assert_eq!(status["sync_failure_count"], 1);
+        assert_eq!(status["sync_import_count"], 1);
+        assert_eq!(status["sync_last_import_height"], 1);
+        let peers = status["sync_peer_telemetry"].as_array().unwrap();
+        assert_eq!(peers.len(), 2);
+        assert_eq!(peers[0]["url"], good_url);
+        assert_eq!(peers[0]["attempt_count"], 1);
+        assert_eq!(peers[0]["success_count"], 1);
+        assert_eq!(peers[0]["failure_count"], 0);
+        assert_eq!(peers[0]["import_count"], 1);
+        assert_eq!(peers[0]["last_import_height"], 1);
+        assert_ne!(peers[0]["last_success_unix_ms"], Value::Null);
+        assert_eq!(peers[0]["last_error"], Value::Null);
+        assert_eq!(peers[0]["last_error_unix_ms"], Value::Null);
+        assert_eq!(peers[1]["url"], bad_url);
+        assert_eq!(peers[1]["attempt_count"], 1);
+        assert_eq!(peers[1]["success_count"], 0);
+        assert_eq!(peers[1]["failure_count"], 1);
+        assert_ne!(peers[1]["last_error_unix_ms"], Value::Null);
+        assert!(peers[1]["last_error"]
+            .as_str()
+            .unwrap()
+            .contains("500 Internal Server Error"));
     }
 
     #[test]
