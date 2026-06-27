@@ -165,38 +165,48 @@ evidence is absent or stale.
     policy root, and backup manifest root. Operators must treat stale blocks,
     missing persisted snapshots, mismatched backup roots, missing bridge policy
     roots, or unexpected sync/RPC-limit values as public-launch blockers.
-15. Build and verify validator activation receipts that bind every admitted
+15. Gate sequencer key rotation and operator accountability before public
+    endpoint exposure. `/health`, `/status`, and `nebula_status` must expose
+    the current sequencer public key, sequencer key-rotation history/root,
+    accountability evidence root, equivocation evidence, and mis-signing
+    evidence. Operators must rehearse `nebula_rotateSequencerKey` with the old
+    key, new key, activation height, rotation proof root, and operator approval
+    roots, then prove followers fail closed on stale-key blocks.
+    `nebula_reportEquivocation` must bind conflicting block/signature evidence
+    to the accountability root, and unresolved equivocation or mis-signing
+    evidence keeps the public launch gate closed.
+16. Build and verify validator activation receipts that bind every admitted
     validator to the verified launch-package bundle, activation root, reward
     account, P2P endpoint, consensus key, network key, and operator acceptance
     root.
-16. Build and verify validator join receipts after activation. Each activated
+17. Build and verify validator join receipts after activation. Each activated
     validator must observe the chain at or after activation height `1`, prove the
     required peer count, and sign the observed validator join root.
-17. Build and verify operator join confirmations after validator join. Every
+18. Build and verify operator join confirmations after validator join. Every
     operator must confirm the validator join root, activation root,
     launch-package bundle root, operator acceptance root, and operator
     confirmation signature root.
-18. Build and verify public observer confirmations after operator-confirmed
+19. Build and verify public observer confirmations after operator-confirmed
     validator join. Deployment observers must re-check the live public endpoint,
     public status root, public probe root, observer region, and observer
     signature root with the required observer and region coverage.
-19. Build and verify the public testnet launch-candidate certificate. The
+20. Build and verify the public testnet launch-candidate certificate. The
     certificate binds the launch-package bundle, validator activation, validator
     join, operator join confirmation, public observer confirmation, public
     status, public probe, validator set, genesis, endpoint URL, and validator,
     operator, observer, and region counts into one candidate root.
-20. Open the public launch gate only after the signed launch package, verified
+21. Open the public launch gate only after the signed launch package, verified
     launch-package bundle, Base-style sequencer/follower rehearsal evidence,
     verified snapshots, and launch-candidate certificate all bind to the same
     deployment, public-surface, validator, genesis, and fee-policy roots.
-21. Run the economics trial with `NBLA` gas, `nXMR` gas, nXMR-funded NBLA
+22. Run the economics trial with `NBLA` gas, `nXMR` gas, nXMR-funded NBLA
     buybacks, NBLA backing, and validator-reward accounting at `0.001 XMR` per
     `NBLA`, while live-value policy stays disabled.
-22. Publish the remaining blocking evidence list. If any deployment, operator,
+23. Publish the remaining blocking evidence list. If any deployment, operator,
     validator, observer, sequencer/follower, snapshot, ops/backup, bridge
-    custody, certificate, or economics evidence is missing, mismatched,
-    unsigned, signed by an unexpected sequencer key, or stale, keep the public
-    launch gate closed and report the exact blocking gap.
+    custody, key-rotation/accountability, certificate, or economics evidence is
+    missing, mismatched, unsigned, signed by an unexpected sequencer key, or
+    stale, keep the public launch gate closed and report the exact blocking gap.
 
 ## Local RPC Devnet
 
@@ -221,6 +231,17 @@ The default dev sequencer key is only for throwaway local rehearsals. Public
 rehearsals should pass `--sequencer-public-key <hex>` to all nodes and pass the
 matching `--sequencer-secret-key <hex>` only to the sequencer. The secret key is
 kept in process memory and is never exported in `/snapshot`.
+
+Sequencer key rotation and accountability are public-testnet launch gates.
+`/health`, `/status`, and `nebula_status` must expose the current sequencer
+public key, key-rotation history/root, accountability evidence root,
+equivocation evidence root, and mis-signing evidence root. Runtime rotation
+uses `nebula_rotateSequencerKey`; public rehearsals should prove the old key,
+new key, activation height, rotation proof root, and operator approval roots
+agree before followers accept post-rotation blocks. Accountability reports use
+`nebula_reportEquivocation` to bind conflicting height/hash/signature evidence
+or other sequencer mis-signing evidence. Public endpoints fail closed when
+unresolved accountability evidence is present.
 
 The node writes a versioned, self-verifying, Ed25519-signed JSON snapshot to
 `nebula-runtime-snapshot.json` under `--data-dir`. Snapshots preserve genesis,
@@ -302,6 +323,8 @@ RPC methods are JSON-RPC 2.0 over `POST /rpc`:
 - `nebula_bridgePolicy`
 - `nebula_opsStatus`
 - `nebula_backupManifest`
+- `nebula_rotateSequencerKey`
+- `nebula_reportEquivocation`
 - `nebula_produceBlock`
 
 Example trial:
@@ -520,6 +543,31 @@ Public launch observers should treat the bridge as launch-blocked unless
 `bridge_live_value_enabled`, `bridge_deposit_count`, and
 `withdrawal_request_count`, and `nebula_bridgePolicy` returns the same policy
 root. `bridge_live_value_enabled` must remain `false` for public testnet.
+
+## Sequencer Key Rotation And Accountability
+
+Public testnet operators must be able to discover the current sequencer key and
+prove rotation readiness before an endpoint is advertised. `GET /health`,
+`GET /status`, and JSON-RPC `nebula_status` should agree on the active
+sequencer public key, the sequencer key-rotation history/root, the latest
+rotation activation height, the accountability evidence root, and unresolved
+equivocation or mis-signing evidence counts.
+
+Key rotation uses `nebula_rotateSequencerKey` with
+`new_sequencer_secret_key_hex`, `operator_id`, and `approval_root`. A public
+rehearsal must prove the response binds the old sequencer public key, new
+sequencer public key, activation height, approval root, and rotation root, then
+prove followers reject stale-key blocks and accept only blocks signed by the
+active key after the activation height. Rotation history must be rooted so
+launch observers can compare it across `/status`, `nebula_status`, and
+snapshots.
+
+Accountability evidence uses `nebula_reportEquivocation` with `height`,
+`first_block_hash`, `second_block_hash`, `reporter_id`, and `evidence_root`.
+The evidence root must bind the conflicting signatures or mis-signing proof
+outside the canonical block hash pair. Public testnet launch stays fail-closed
+when unresolved equivocation, stale-key signing, or other sequencer mis-signing
+evidence is present, even if the node is otherwise fresh and synced.
 
 ## CI
 

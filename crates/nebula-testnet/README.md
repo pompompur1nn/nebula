@@ -39,6 +39,14 @@ state/snapshot roots, persisted snapshot path and presence, sync peer count, RPC
 limit policy, bridge policy root, and backup manifest root before opening an
 endpoint.
 
+Sequencer key rotation and operator accountability are launch gates too. Public
+operators must be able to discover the active sequencer key, key-rotation
+history/root, accountability evidence root, equivocation evidence, and
+mis-signing evidence through `/status` and `nebula_status`, rotate keys through
+`nebula_rotateSequencerKey`, and report conflicting block/signature evidence
+through `nebula_reportEquivocation`. Unresolved accountability evidence keeps
+the public endpoint fail-closed.
+
 The public launch sequence for this crate is:
 
 1. Prove local readiness with formatting, build, tests, the readiness contract,
@@ -97,16 +105,25 @@ The public launch sequence for this crate is:
    and backup manifest root. Stale blocks, missing persisted snapshots,
    mismatched backup roots, missing bridge policy roots, or unexpected sync/RPC
    limit values keep the public endpoint launch-blocked.
-11. Build and verify validator activation receipts, validator join receipts,
+11. Exercise sequencer key rotation and operator accountability. `/health`,
+   `/status`, and `nebula_status` must expose the current sequencer public key,
+   key-rotation history/root, accountability evidence root, equivocation
+   evidence, and mis-signing evidence. `nebula_rotateSequencerKey` must bind
+   old/new sequencer keys, activation height, rotation proof root, and operator
+   approval roots. `nebula_reportEquivocation` must bind conflicting
+   block/signature evidence, and unresolved accountability evidence must keep
+   the endpoint launch-blocked.
+12. Build and verify validator activation receipts, validator join receipts,
    operator join confirmations, public observer confirmations, and the public
    testnet launch-candidate certificate against the same deployment,
    public-surface, validator, genesis, fee-policy, and bundle roots.
-12. Open the public launch gate only after the signed launch package, verified
+13. Open the public launch gate only after the signed launch package, verified
     bundle, sequencer/follower rehearsal evidence, verified snapshots, and
     launch certificate all agree. Run the `NBLA`/`nXMR` economics trial with
     live value disabled, and keep reporting any remaining blocking evidence
     until every deployment, operator, validator, observer, RPC, snapshot, bridge
-    custody, ops/backup, certificate, and economics gap is closed.
+    custody, ops/backup, key-rotation/accountability, certificate, and economics
+    gap is closed.
 
 ## Local RPC Devnet
 
@@ -164,6 +181,18 @@ rehearsals should pass `--sequencer-public-key <hex>` to all nodes and pass the
 matching `--sequencer-secret-key <hex>` only to the sequencer. Snapshots export
 the public sequencer key and block signatures, never the secret key.
 
+Sequencer key rotation and accountability are rehearsed over
+`nebula_rotateSequencerKey` and `nebula_reportEquivocation`. Public operators
+should require `/health`, `/status`, and `nebula_status` to expose the current
+sequencer key, key-rotation history/root, latest rotation activation height,
+accountability evidence root, equivocation evidence, and mis-signing evidence
+before advertising an endpoint. Rotation RPC parameters are
+`new_sequencer_secret_key_hex`, `operator_id`, and `approval_root`; the response
+binds the old key, new key, activation height, approval root, and rotation root.
+Equivocation RPC parameters are `height`, `first_block_hash`,
+`second_block_hash`, `reporter_id`, and `evidence_root`; unresolved evidence
+keeps the endpoint fail-closed until resolved.
+
 Each node exposes `/health`, `/status`, `/snapshot`, `/ops`, `/backup`, and
 JSON-RPC 2.0 on `/rpc` for
 `nebula_status`, `nebula_chainHead`, `nebula_getBlockByHeight`,
@@ -171,7 +200,8 @@ JSON-RPC 2.0 on `/rpc` for
 `nebula_importSnapshot`, `nebula_feeQuote`, `nebula_faucet`,
 `nebula_sendTransaction`, `nebula_observeBridgeDeposit`,
 `nebula_requestWithdrawal`, `nebula_finalizeWithdrawal`, `nebula_bridgePolicy`,
-`nebula_opsStatus`, `nebula_backupManifest`, and `nebula_produceBlock`.
+`nebula_opsStatus`, `nebula_backupManifest`, `nebula_rotateSequencerKey`,
+`nebula_reportEquivocation`, and `nebula_produceBlock`.
 
 ## Commands
 

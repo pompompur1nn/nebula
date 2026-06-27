@@ -29,7 +29,7 @@ pub const MIN_WITHDRAWAL_OPERATOR_QUORUM: usize = 2;
 pub const BRIDGE_CUSTODY_POLICY_ID: &str = "nebula-monero-bridge-custody-testnet-v1";
 pub const VALIDATOR_REWARD_ACCOUNT_PREFIX: &str = "validator:";
 pub const RUNTIME_SNAPSHOT_FILE: &str = "nebula-runtime-snapshot.json";
-pub const RUNTIME_SNAPSHOT_VERSION: u32 = 3;
+pub const RUNTIME_SNAPSHOT_VERSION: u32 = 4;
 pub const DEFAULT_PEER_SYNC_MS: u64 = 100;
 pub const DEFAULT_MAX_REQUEST_BYTES: usize = 1_048_576;
 pub const DEFAULT_MAX_REQUESTS_PER_MINUTE: u32 = 600;
@@ -234,6 +234,31 @@ pub struct RuntimeWithdrawalRequest {
     pub root: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeSequencerKeyRotation {
+    pub activation_height: u64,
+    pub old_public_key_hex: String,
+    pub new_public_key_hex: String,
+    pub operator_id: String,
+    pub approval_root: String,
+    pub rotated_at_unix_ms: u128,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeAccountabilityReport {
+    pub report_id: String,
+    pub height: u64,
+    pub first_block_hash: String,
+    pub second_block_hash: String,
+    pub reporter_id: String,
+    pub evidence_root: String,
+    pub reported_at_unix_ms: u128,
+    pub root: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeSnapshot {
@@ -250,6 +275,8 @@ pub struct RuntimeSnapshot {
     pub total_nxmr_fees_units: u128,
     pub buyback_pool_nebulai: u128,
     pub validator_reward_nebulai: u128,
+    pub sequencer_key_rotations: Vec<RuntimeSequencerKeyRotation>,
+    pub accountability_reports: Vec<RuntimeAccountabilityReport>,
     pub root: String,
 }
 
@@ -296,6 +323,12 @@ pub struct RuntimeStatus {
     pub block_production_enabled: bool,
     pub node_role: String,
     pub sequencer_public_key_hex: String,
+    pub sequencer_key_rotation_count: usize,
+    pub sequencer_latest_rotation_activation_height: Option<u64>,
+    pub sequencer_key_history_root: String,
+    pub accountability_report_count: usize,
+    pub accountability_root: String,
+    pub sequencer_accountability_clean: bool,
     pub mempool_size: usize,
     pub account_count: usize,
     pub bridge_deposit_count: usize,
@@ -349,6 +382,13 @@ pub struct RuntimeOpsStatus {
     pub sync_peer_count: usize,
     pub rpc_max_request_bytes: usize,
     pub rpc_max_requests_per_minute: u32,
+    pub sequencer_public_key_hex: String,
+    pub sequencer_key_rotation_count: usize,
+    pub sequencer_latest_rotation_activation_height: Option<u64>,
+    pub sequencer_key_history_root: String,
+    pub accountability_report_count: usize,
+    pub accountability_root: String,
+    pub sequencer_accountability_clean: bool,
     pub bridge_policy_root: String,
     pub bridge_live_value_enabled: bool,
     pub public_ops_ready: bool,
@@ -372,6 +412,13 @@ pub struct RuntimeBackupManifest {
     pub snapshot_persisted: bool,
     pub storage_snapshot_root: Option<String>,
     pub storage_snapshot_matches_runtime: bool,
+    pub sequencer_public_key_hex: String,
+    pub sequencer_key_rotation_count: usize,
+    pub sequencer_latest_rotation_activation_height: Option<u64>,
+    pub sequencer_key_history_root: String,
+    pub accountability_report_count: usize,
+    pub accountability_root: String,
+    pub sequencer_accountability_clean: bool,
     pub bridge_policy_root: String,
     pub sync_peer_count: usize,
     pub rpc_max_request_bytes: usize,
@@ -413,6 +460,22 @@ pub struct WithdrawalFinalizationReport {
     pub finalization_root: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SequencerKeyRotationReport {
+    pub rotated: bool,
+    pub rotation: RuntimeSequencerKeyRotation,
+    pub sequencer_public_key_hex: String,
+    pub sequencer_key_history_root: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountabilityReportReceipt {
+    pub recorded: bool,
+    pub report: RuntimeAccountabilityReport,
+    pub accountability_root: String,
+    pub sequencer_accountability_clean: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct NebulaRuntime {
     config: RuntimeConfig,
@@ -426,6 +489,8 @@ pub struct NebulaRuntime {
     total_nxmr_fees_units: u128,
     buyback_pool_nebulai: u128,
     validator_reward_nebulai: u128,
+    sequencer_key_rotations: Vec<RuntimeSequencerKeyRotation>,
+    accountability_reports: Vec<RuntimeAccountabilityReport>,
 }
 
 #[derive(Debug, Clone)]
@@ -614,6 +679,9 @@ impl RuntimeRpcState {
         if bridge_policy().live_value_enabled {
             blocking_gaps.push("bridge-live-value-enabled".to_string());
         }
+        if !status.sequencer_accountability_clean {
+            blocking_gaps.push("sequencer-accountability-evidence-open".to_string());
+        }
         let mut report = RuntimeOpsStatus {
             service: "nebula-testnet-rpc".to_string(),
             generated_at_unix_ms,
@@ -638,6 +706,14 @@ impl RuntimeRpcState {
             sync_peer_count: self.sync_peers.sync_peer_urls.len(),
             rpc_max_request_bytes: self.rpc_limits.max_request_bytes,
             rpc_max_requests_per_minute: self.rpc_limits.max_requests_per_minute,
+            sequencer_public_key_hex: status.sequencer_public_key_hex,
+            sequencer_key_rotation_count: status.sequencer_key_rotation_count,
+            sequencer_latest_rotation_activation_height: status
+                .sequencer_latest_rotation_activation_height,
+            sequencer_key_history_root: status.sequencer_key_history_root,
+            accountability_report_count: status.accountability_report_count,
+            accountability_root: status.accountability_root,
+            sequencer_accountability_clean: status.sequencer_accountability_clean,
             bridge_policy_root: bridge_policy_root(),
             bridge_live_value_enabled: bridge_policy().live_value_enabled,
             public_ops_ready: blocking_gaps.is_empty(),
@@ -665,6 +741,14 @@ impl RuntimeRpcState {
             snapshot_persisted: ops_status.storage_snapshot_present,
             storage_snapshot_root: ops_status.storage_snapshot_root,
             storage_snapshot_matches_runtime: ops_status.storage_snapshot_matches_runtime,
+            sequencer_public_key_hex: ops_status.sequencer_public_key_hex,
+            sequencer_key_rotation_count: ops_status.sequencer_key_rotation_count,
+            sequencer_latest_rotation_activation_height: ops_status
+                .sequencer_latest_rotation_activation_height,
+            sequencer_key_history_root: ops_status.sequencer_key_history_root,
+            accountability_report_count: ops_status.accountability_report_count,
+            accountability_root: ops_status.accountability_root,
+            sequencer_accountability_clean: ops_status.sequencer_accountability_clean,
             bridge_policy_root: ops_status.bridge_policy_root,
             sync_peer_count: ops_status.sync_peer_count,
             rpc_max_request_bytes: ops_status.rpc_max_request_bytes,
@@ -799,6 +883,8 @@ impl NebulaRuntime {
             total_nxmr_fees_units: 0,
             buyback_pool_nebulai: 0,
             validator_reward_nebulai: 0,
+            sequencer_key_rotations: Vec::new(),
+            accountability_reports: Vec::new(),
         };
         runtime.accounts.insert(
             runtime.config.validator_reward_account(),
@@ -817,7 +903,7 @@ impl NebulaRuntime {
         snapshot: RuntimeSnapshot,
         sequencer_secret_key_hex: Option<String>,
     ) -> Result<Self, String> {
-        let (mut config, sequencer_secret_key_hex) =
+        let (mut config, mut sequencer_secret_key_hex) =
             prepare_runtime_config(config, sequencer_secret_key_hex)?;
         validate_snapshot(&snapshot)?;
         if snapshot.config.chain_id != config.chain_id {
@@ -832,15 +918,25 @@ impl NebulaRuntime {
                 snapshot.config.runtime_version, config.runtime_version
             ));
         }
-        if !snapshot
-            .config
-            .sequencer_public_key_hex
-            .eq_ignore_ascii_case(&config.sequencer_public_key_hex)
-        {
+        let local_sequencer_public_key_hex = config.sequencer_public_key_hex.clone();
+        if !snapshot_accepts_local_sequencer_key(&config, &snapshot) {
             return Err(format!(
                 "snapshot sequencer_public_key_hex {} does not match local sequencer_public_key_hex {}",
-                snapshot.config.sequencer_public_key_hex, config.sequencer_public_key_hex
+                snapshot.config.sequencer_public_key_hex, local_sequencer_public_key_hex
             ));
+        }
+        config.sequencer_public_key_hex = snapshot.config.sequencer_public_key_hex.clone();
+        if let Some(secret_key_hex) = sequencer_secret_key_hex.as_deref() {
+            let derived_public_key = public_key_hex_for_secret(secret_key_hex)?;
+            if !derived_public_key.eq_ignore_ascii_case(&config.sequencer_public_key_hex) {
+                if config.produce_blocks {
+                    return Err(format!(
+                        "sequencer_secret_key_hex derives public key {derived_public_key}, expected {}",
+                        config.sequencer_public_key_hex
+                    ));
+                }
+                sequencer_secret_key_hex = None;
+            }
         }
         config.gas_price_nebulai = snapshot.config.gas_price_nebulai;
         config.max_block_transactions = snapshot.config.max_block_transactions;
@@ -859,6 +955,8 @@ impl NebulaRuntime {
             total_nxmr_fees_units: snapshot.total_nxmr_fees_units,
             buyback_pool_nebulai: snapshot.buyback_pool_nebulai,
             validator_reward_nebulai: snapshot.validator_reward_nebulai,
+            sequencer_key_rotations: snapshot.sequencer_key_rotations,
+            accountability_reports: snapshot.accountability_reports,
         };
         runtime
             .accounts
@@ -886,6 +984,8 @@ impl NebulaRuntime {
             total_nxmr_fees_units: self.total_nxmr_fees_units,
             buyback_pool_nebulai: self.buyback_pool_nebulai,
             validator_reward_nebulai: self.validator_reward_nebulai,
+            sequencer_key_rotations: self.sequencer_key_rotations.clone(),
+            accountability_reports: self.accountability_reports.clone(),
             root: String::new(),
         };
         snapshot.root = snapshot_root(&snapshot);
@@ -929,6 +1029,15 @@ impl NebulaRuntime {
                 "follower".to_string()
             },
             sequencer_public_key_hex: self.config.sequencer_public_key_hex.clone(),
+            sequencer_key_rotation_count: self.sequencer_key_rotations.len(),
+            sequencer_latest_rotation_activation_height: self
+                .sequencer_key_rotations
+                .last()
+                .map(|rotation| rotation.activation_height),
+            sequencer_key_history_root: sequencer_key_history_root(&self.sequencer_key_rotations),
+            accountability_report_count: self.accountability_reports.len(),
+            accountability_root: accountability_root(&self.accountability_reports),
+            sequencer_accountability_clean: self.accountability_reports.is_empty(),
             mempool_size: self.mempool.len(),
             account_count: self.accounts.len(),
             bridge_deposit_count: self.bridge_deposits.len(),
@@ -1172,6 +1281,112 @@ impl NebulaRuntime {
             withdrawal: withdrawal.clone(),
             operator_approval_count: withdrawal.operator_approval_roots.len(),
             finalization_root: withdrawal.root.clone(),
+        })
+    }
+
+    pub fn rotate_sequencer_key(
+        &mut self,
+        new_sequencer_secret_key_hex: &str,
+        operator_id: &str,
+        approval_root: &str,
+    ) -> Result<SequencerKeyRotationReport, String> {
+        if !self.config.produce_blocks {
+            return Err("sequencer key rotation requires block production mode".to_string());
+        }
+        validate_account_id(operator_id)?;
+        let approval_root = normalize_fixed_hex(approval_root, "approval_root", 64)?;
+        let new_sequencer_secret_key_hex = normalize_fixed_hex(
+            new_sequencer_secret_key_hex,
+            "new_sequencer_secret_key_hex",
+            64,
+        )?;
+        let new_public_key_hex = public_key_hex_for_secret(&new_sequencer_secret_key_hex)?;
+        if new_public_key_hex.eq_ignore_ascii_case(&self.config.sequencer_public_key_hex) {
+            return Err("new sequencer key must differ from current key".to_string());
+        }
+        let latest_height = self.latest_block().height;
+        if self
+            .sequencer_key_rotations
+            .last()
+            .map(|rotation| rotation.activation_height > latest_height)
+            .unwrap_or(false)
+        {
+            return Err("a sequencer key rotation is already pending activation".to_string());
+        }
+        let mut rotation = RuntimeSequencerKeyRotation {
+            activation_height: latest_height
+                .checked_add(1)
+                .ok_or_else(|| "activation_height overflowed".to_string())?,
+            old_public_key_hex: self.config.sequencer_public_key_hex.clone(),
+            new_public_key_hex,
+            operator_id: operator_id.to_string(),
+            approval_root,
+            rotated_at_unix_ms: unix_ms(),
+            root: String::new(),
+        };
+        rotation.root = sequencer_key_rotation_root(&rotation);
+        validate_sequencer_key_rotation(&rotation)?;
+        self.config.sequencer_public_key_hex = rotation.new_public_key_hex.clone();
+        self.sequencer_secret_key_hex = Some(new_sequencer_secret_key_hex);
+        self.sequencer_key_rotations.push(rotation.clone());
+        Ok(SequencerKeyRotationReport {
+            rotated: true,
+            rotation,
+            sequencer_public_key_hex: self.config.sequencer_public_key_hex.clone(),
+            sequencer_key_history_root: sequencer_key_history_root(&self.sequencer_key_rotations),
+        })
+    }
+
+    pub fn report_equivocation(
+        &mut self,
+        height: u64,
+        first_block_hash: &str,
+        second_block_hash: &str,
+        reporter_id: &str,
+        evidence_root: &str,
+    ) -> Result<AccountabilityReportReceipt, String> {
+        if height == 0 {
+            return Err("height must be greater than zero".to_string());
+        }
+        let first_block_hash = normalize_fixed_hex(first_block_hash, "first_block_hash", 64)?;
+        let second_block_hash = normalize_fixed_hex(second_block_hash, "second_block_hash", 64)?;
+        if first_block_hash.eq_ignore_ascii_case(&second_block_hash) {
+            return Err("first_block_hash and second_block_hash must differ".to_string());
+        }
+        validate_account_id(reporter_id)?;
+        let evidence_root = normalize_fixed_hex(evidence_root, "evidence_root", 64)?;
+        let report_id = accountability_report_id(
+            height,
+            &first_block_hash,
+            &second_block_hash,
+            reporter_id,
+            &evidence_root,
+        );
+        if self
+            .accountability_reports
+            .iter()
+            .any(|report| report.report_id.eq_ignore_ascii_case(&report_id))
+        {
+            return Err(format!("accountability report {report_id} already exists"));
+        }
+        let mut report = RuntimeAccountabilityReport {
+            report_id,
+            height,
+            first_block_hash,
+            second_block_hash,
+            reporter_id: reporter_id.to_string(),
+            evidence_root,
+            reported_at_unix_ms: unix_ms(),
+            root: String::new(),
+        };
+        report.root = accountability_report_root(&report);
+        validate_accountability_report(&report)?;
+        self.accountability_reports.push(report.clone());
+        Ok(AccountabilityReportReceipt {
+            recorded: true,
+            report,
+            accountability_root: accountability_root(&self.accountability_reports),
+            sequencer_accountability_clean: self.accountability_reports.is_empty(),
         })
     }
 
@@ -1530,13 +1745,6 @@ fn snapshot_extends(local: &RuntimeSnapshot, peer: &RuntimeSnapshot) -> bool {
     if local.config.chain_id != peer.config.chain_id {
         return false;
     }
-    if !local
-        .config
-        .sequencer_public_key_hex
-        .eq_ignore_ascii_case(&peer.config.sequencer_public_key_hex)
-    {
-        return false;
-    }
     if local.blocks.len() > peer.blocks.len() {
         return false;
     }
@@ -1606,17 +1814,37 @@ fn snapshot_matches_config(
             snapshot.config.runtime_version, config.runtime_version
         ));
     }
-    if !snapshot
-        .config
-        .sequencer_public_key_hex
-        .eq_ignore_ascii_case(&config.sequencer_public_key_hex)
-    {
+    if !snapshot_accepts_local_sequencer_key(config, snapshot) {
         return Err(format!(
             "sequencer_public_key_hex {} does not match local sequencer_public_key_hex {}",
             snapshot.config.sequencer_public_key_hex, config.sequencer_public_key_hex
         ));
     }
     Ok(())
+}
+
+fn snapshot_accepts_local_sequencer_key(
+    config: &RuntimeConfig,
+    snapshot: &RuntimeSnapshot,
+) -> bool {
+    if snapshot
+        .config
+        .sequencer_public_key_hex
+        .eq_ignore_ascii_case(&config.sequencer_public_key_hex)
+    {
+        return true;
+    }
+    if config.produce_blocks {
+        return false;
+    }
+    snapshot.sequencer_key_rotations.iter().any(|rotation| {
+        rotation
+            .old_public_key_hex
+            .eq_ignore_ascii_case(&config.sequencer_public_key_hex)
+            || rotation
+                .new_public_key_hex
+                .eq_ignore_ascii_case(&config.sequencer_public_key_hex)
+    })
 }
 
 fn select_best_extending_snapshot(
@@ -1831,6 +2059,13 @@ fn handle_http_connection(mut stream: TcpStream, state: RuntimeRpcState) -> std:
                     "bootstrap_peer_urls": state.sync_peers.bootstrap_peer_urls,
                     "sync_peer_urls": state.sync_peers.sync_peer_urls,
                     "sync_peer_count": state.sync_peers.sync_peer_urls.len(),
+                    "sequencer_public_key_hex": status["sequencer_public_key_hex"],
+                    "sequencer_key_rotation_count": status["sequencer_key_rotation_count"],
+                    "sequencer_latest_rotation_activation_height": status["sequencer_latest_rotation_activation_height"],
+                    "sequencer_key_history_root": status["sequencer_key_history_root"],
+                    "accountability_report_count": status["accountability_report_count"],
+                    "accountability_root": status["accountability_root"],
+                    "sequencer_accountability_clean": status["sequencer_accountability_clean"],
                     "bridge_policy": bridge_policy(),
                     "bridge_policy_root": status["bridge_policy_root"],
                     "bridge_min_deposit_confirmations": status["bridge_min_deposit_confirmations"],
@@ -2041,6 +2276,43 @@ fn dispatch_json_rpc_method(
             state.persist()?;
             Ok(json!(report))
         }
+        "nebula_rotateSequencerKey" => {
+            ensure_block_producer(state)?;
+            let new_sequencer_secret_key_hex =
+                required_str_param(&params, "new_sequencer_secret_key_hex")?;
+            let operator_id = required_str_param(&params, "operator_id")?;
+            let approval_root = required_str_param(&params, "approval_root")?;
+            let report = {
+                let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+                runtime.rotate_sequencer_key(
+                    &new_sequencer_secret_key_hex,
+                    &operator_id,
+                    &approval_root,
+                )?
+            };
+            state.persist()?;
+            Ok(json!(report))
+        }
+        "nebula_reportEquivocation" => {
+            ensure_block_producer(state)?;
+            let height = required_u64_param(&params, "height")?;
+            let first_block_hash = required_str_param(&params, "first_block_hash")?;
+            let second_block_hash = required_str_param(&params, "second_block_hash")?;
+            let reporter_id = required_str_param(&params, "reporter_id")?;
+            let evidence_root = required_str_param(&params, "evidence_root")?;
+            let report = {
+                let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+                runtime.report_equivocation(
+                    height,
+                    &first_block_hash,
+                    &second_block_hash,
+                    &reporter_id,
+                    &evidence_root,
+                )?
+            };
+            state.persist()?;
+            Ok(json!(report))
+        }
         "nebula_bridgePolicy" => Ok(json!({
             "policy": bridge_policy(),
             "bridge_policy_root": bridge_policy_root(),
@@ -2176,6 +2448,8 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
     if snapshot.root != snapshot_root(snapshot) {
         return Err("snapshot root does not match snapshot contents".to_string());
     }
+    validate_sequencer_key_history(snapshot)?;
+    validate_accountability_reports(&snapshot.accountability_reports)?;
 
     let mut previous_hash: Option<String> = None;
     for (index, block) in snapshot.blocks.iter().enumerate() {
@@ -2201,7 +2475,8 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
         if block.block_hash != block_root(block) {
             return Err(format!("block {} block_hash does not match", block.height));
         }
-        verify_block_signature(block, &snapshot.config.sequencer_public_key_hex)
+        let expected_public_key_hex = sequencer_public_key_for_height(snapshot, block.height);
+        verify_block_signature(block, &expected_public_key_hex)
             .map_err(|error| format!("block {} signature rejected: {error}", block.height))?;
         for tx in &block.transactions {
             validate_transaction_shape(tx)?;
@@ -2334,6 +2609,135 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
     }));
     if snapshot.state_root != expected_state_root {
         return Err("snapshot state_root does not match snapshot state".to_string());
+    }
+    Ok(())
+}
+
+fn validate_sequencer_key_history(snapshot: &RuntimeSnapshot) -> Result<(), String> {
+    let current_public_key = normalize_fixed_hex(
+        &snapshot.config.sequencer_public_key_hex,
+        "sequencer_public_key_hex",
+        64,
+    )?;
+    verifying_key_from_hex(&current_public_key)?;
+    let mut active_public_key = snapshot
+        .sequencer_key_rotations
+        .first()
+        .map(|rotation| rotation.old_public_key_hex.to_ascii_lowercase())
+        .unwrap_or_else(|| current_public_key.clone());
+    verifying_key_from_hex(&active_public_key)?;
+    let mut previous_activation_height: Option<u64> = None;
+
+    for (index, rotation) in snapshot.sequencer_key_rotations.iter().enumerate() {
+        validate_sequencer_key_rotation(rotation)
+            .map_err(|error| format!("sequencer_key_rotations[{index}]: {error}"))?;
+        if let Some(previous) = previous_activation_height {
+            if rotation.activation_height <= previous {
+                return Err(format!(
+                    "sequencer_key_rotations[{index}] activation_height must be greater than {previous}"
+                ));
+            }
+        }
+        if !rotation
+            .old_public_key_hex
+            .eq_ignore_ascii_case(&active_public_key)
+        {
+            return Err(format!(
+                "sequencer_key_rotations[{index}] old_public_key_hex does not match active sequencer key"
+            ));
+        }
+        active_public_key = rotation.new_public_key_hex.to_ascii_lowercase();
+        previous_activation_height = Some(rotation.activation_height);
+    }
+
+    if !active_public_key.eq_ignore_ascii_case(&current_public_key) {
+        return Err(
+            "snapshot sequencer_public_key_hex does not match final sequencer key rotation"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_sequencer_key_rotation(rotation: &RuntimeSequencerKeyRotation) -> Result<(), String> {
+    if rotation.activation_height == 0 {
+        return Err("activation_height must be greater than zero".to_string());
+    }
+    validate_fixed_hex(&rotation.old_public_key_hex, "old_public_key_hex", 64)?;
+    validate_fixed_hex(&rotation.new_public_key_hex, "new_public_key_hex", 64)?;
+    verifying_key_from_hex(&rotation.old_public_key_hex)?;
+    verifying_key_from_hex(&rotation.new_public_key_hex)?;
+    if rotation
+        .old_public_key_hex
+        .eq_ignore_ascii_case(&rotation.new_public_key_hex)
+    {
+        return Err("new_public_key_hex must differ from old_public_key_hex".to_string());
+    }
+    validate_account_id(&rotation.operator_id)?;
+    validate_fixed_hex(&rotation.approval_root, "approval_root", 64)?;
+    if rotation.root != sequencer_key_rotation_root(rotation) {
+        return Err("root does not match sequencer key rotation contents".to_string());
+    }
+    Ok(())
+}
+
+fn sequencer_public_key_for_height(snapshot: &RuntimeSnapshot, height: u64) -> String {
+    let mut public_key = snapshot
+        .sequencer_key_rotations
+        .first()
+        .map(|rotation| rotation.old_public_key_hex.clone())
+        .unwrap_or_else(|| snapshot.config.sequencer_public_key_hex.clone());
+    for rotation in &snapshot.sequencer_key_rotations {
+        if height < rotation.activation_height {
+            break;
+        }
+        public_key = rotation.new_public_key_hex.clone();
+    }
+    public_key
+}
+
+fn validate_accountability_reports(reports: &[RuntimeAccountabilityReport]) -> Result<(), String> {
+    let mut report_ids = BTreeMap::<String, usize>::new();
+    for (index, report) in reports.iter().enumerate() {
+        validate_accountability_report(report)
+            .map_err(|error| format!("accountability_reports[{index}]: {error}"))?;
+        let normalized_report_id = report.report_id.to_ascii_lowercase();
+        if let Some(previous_index) = report_ids.insert(normalized_report_id, index) {
+            return Err(format!(
+                "accountability_reports[{index}] duplicates accountability_reports[{previous_index}]"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_accountability_report(report: &RuntimeAccountabilityReport) -> Result<(), String> {
+    if report.height == 0 {
+        return Err("height must be greater than zero".to_string());
+    }
+    validate_fixed_hex(&report.report_id, "report_id", 64)?;
+    validate_fixed_hex(&report.first_block_hash, "first_block_hash", 64)?;
+    validate_fixed_hex(&report.second_block_hash, "second_block_hash", 64)?;
+    if report
+        .first_block_hash
+        .eq_ignore_ascii_case(&report.second_block_hash)
+    {
+        return Err("first_block_hash and second_block_hash must differ".to_string());
+    }
+    validate_account_id(&report.reporter_id)?;
+    validate_fixed_hex(&report.evidence_root, "evidence_root", 64)?;
+    let expected_report_id = accountability_report_id(
+        report.height,
+        &report.first_block_hash,
+        &report.second_block_hash,
+        &report.reporter_id,
+        &report.evidence_root,
+    );
+    if !report.report_id.eq_ignore_ascii_case(&expected_report_id) {
+        return Err("report_id does not match accountability report contents".to_string());
+    }
+    if report.root != accountability_report_root(report) {
+        return Err("root does not match accountability report contents".to_string());
     }
     Ok(())
 }
@@ -2714,6 +3118,13 @@ fn ops_status_root(report: &RuntimeOpsStatus) -> String {
         "sync_peer_count": report.sync_peer_count,
         "rpc_max_request_bytes": report.rpc_max_request_bytes,
         "rpc_max_requests_per_minute": report.rpc_max_requests_per_minute,
+        "sequencer_public_key_hex": report.sequencer_public_key_hex,
+        "sequencer_key_rotation_count": report.sequencer_key_rotation_count,
+        "sequencer_latest_rotation_activation_height": report.sequencer_latest_rotation_activation_height,
+        "sequencer_key_history_root": report.sequencer_key_history_root,
+        "accountability_report_count": report.accountability_report_count,
+        "accountability_root": report.accountability_root,
+        "sequencer_accountability_clean": report.sequencer_accountability_clean,
         "bridge_policy_root": report.bridge_policy_root,
         "bridge_live_value_enabled": report.bridge_live_value_enabled,
         "public_ops_ready": report.public_ops_ready,
@@ -2738,6 +3149,13 @@ fn backup_manifest_root(manifest: &RuntimeBackupManifest) -> String {
         "snapshot_persisted": manifest.snapshot_persisted,
         "storage_snapshot_root": manifest.storage_snapshot_root,
         "storage_snapshot_matches_runtime": manifest.storage_snapshot_matches_runtime,
+        "sequencer_public_key_hex": manifest.sequencer_public_key_hex,
+        "sequencer_key_rotation_count": manifest.sequencer_key_rotation_count,
+        "sequencer_latest_rotation_activation_height": manifest.sequencer_latest_rotation_activation_height,
+        "sequencer_key_history_root": manifest.sequencer_key_history_root,
+        "accountability_report_count": manifest.accountability_report_count,
+        "accountability_root": manifest.accountability_root,
+        "sequencer_accountability_clean": manifest.sequencer_accountability_clean,
         "bridge_policy_root": manifest.bridge_policy_root,
         "sync_peer_count": manifest.sync_peer_count,
         "rpc_max_request_bytes": manifest.rpc_max_request_bytes,
@@ -2798,6 +3216,68 @@ fn withdrawal_root(withdrawal: &RuntimeWithdrawalRequest) -> String {
     }))
 }
 
+fn sequencer_key_rotation_root(rotation: &RuntimeSequencerKeyRotation) -> String {
+    stable_runtime_root(&json!({
+        "sequencer_key_rotation_domain": "nebula-runtime-sequencer-key-rotation-v1",
+        "activation_height": rotation.activation_height,
+        "old_public_key_hex": rotation.old_public_key_hex,
+        "new_public_key_hex": rotation.new_public_key_hex,
+        "operator_id": rotation.operator_id,
+        "approval_root": rotation.approval_root,
+        "rotated_at_unix_ms": rotation.rotated_at_unix_ms,
+    }))
+}
+
+fn sequencer_key_history_root(rotations: &[RuntimeSequencerKeyRotation]) -> String {
+    stable_runtime_root(&json!({
+        "sequencer_key_history_domain": "nebula-runtime-sequencer-key-history-v1",
+        "rotations": rotations,
+    }))
+}
+
+fn accountability_report_id(
+    height: u64,
+    first_block_hash: &str,
+    second_block_hash: &str,
+    reporter_id: &str,
+    evidence_root: &str,
+) -> String {
+    let first_block_hash = first_block_hash.to_ascii_lowercase();
+    let second_block_hash = second_block_hash.to_ascii_lowercase();
+    let (lower_block_hash, higher_block_hash) = if first_block_hash <= second_block_hash {
+        (first_block_hash, second_block_hash)
+    } else {
+        (second_block_hash, first_block_hash)
+    };
+    stable_runtime_root(&json!({
+        "accountability_report_id_domain": "nebula-runtime-sequencer-accountability-report-id-v1",
+        "height": height,
+        "block_hashes": [lower_block_hash, higher_block_hash],
+        "reporter_id": reporter_id,
+        "evidence_root": evidence_root.to_ascii_lowercase(),
+    }))
+}
+
+fn accountability_report_root(report: &RuntimeAccountabilityReport) -> String {
+    stable_runtime_root(&json!({
+        "accountability_report_domain": "nebula-runtime-sequencer-accountability-report-v1",
+        "report_id": report.report_id,
+        "height": report.height,
+        "first_block_hash": report.first_block_hash,
+        "second_block_hash": report.second_block_hash,
+        "reporter_id": report.reporter_id,
+        "evidence_root": report.evidence_root,
+        "reported_at_unix_ms": report.reported_at_unix_ms,
+    }))
+}
+
+fn accountability_root(reports: &[RuntimeAccountabilityReport]) -> String {
+    stable_runtime_root(&json!({
+        "accountability_root_domain": "nebula-runtime-sequencer-accountability-v1",
+        "reports": reports,
+    }))
+}
+
 fn snapshot_root(snapshot: &RuntimeSnapshot) -> String {
     stable_runtime_root(&json!({
         "snapshot_domain": "nebula-runtime-snapshot-v1",
@@ -2814,6 +3294,8 @@ fn snapshot_root(snapshot: &RuntimeSnapshot) -> String {
         "total_nxmr_fees_units": snapshot.total_nxmr_fees_units,
         "buyback_pool_nebulai": snapshot.buyback_pool_nebulai,
         "validator_reward_nebulai": snapshot.validator_reward_nebulai,
+        "sequencer_key_rotations": snapshot.sequencer_key_rotations,
+        "accountability_reports": snapshot.accountability_reports,
     }))
 }
 
@@ -3119,6 +3601,159 @@ mod tests {
         config.produce_blocks = false;
         let follower = NebulaRuntime::from_snapshot(config, runtime.export_snapshot()).unwrap();
         assert!(!follower.config().produce_blocks);
+    }
+
+    #[test]
+    fn runtime_rotates_sequencer_key_and_validates_history() {
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let old_public_key_hex = runtime.config().sequencer_public_key_hex.clone();
+        let old_block = runtime.produce_block();
+        assert_eq!(old_block.producer_public_key, old_public_key_hex);
+
+        let new_secret_key_hex = "4d".repeat(32);
+        let new_public_key_hex = public_key_hex_for_secret(&new_secret_key_hex).unwrap();
+        let rotation = runtime
+            .rotate_sequencer_key(&new_secret_key_hex, "operator-a", &"b".repeat(64))
+            .unwrap();
+        assert!(rotation.rotated);
+        assert_eq!(rotation.rotation.activation_height, 2);
+        assert_eq!(rotation.rotation.old_public_key_hex, old_public_key_hex);
+        assert_eq!(rotation.rotation.new_public_key_hex, new_public_key_hex);
+        assert_eq!(rotation.sequencer_key_history_root.len(), 64);
+
+        let new_block = runtime.produce_block();
+        assert_eq!(new_block.height, 2);
+        assert_eq!(new_block.producer_public_key, new_public_key_hex);
+
+        let snapshot = runtime.export_snapshot();
+        validate_snapshot(&snapshot).unwrap();
+        assert_eq!(snapshot.sequencer_key_rotations.len(), 1);
+        assert_eq!(runtime.status().sequencer_key_rotation_count, 1);
+        assert_eq!(
+            runtime.status().sequencer_latest_rotation_activation_height,
+            Some(2)
+        );
+        assert_eq!(
+            runtime.status().sequencer_key_history_root,
+            sequencer_key_history_root(&snapshot.sequencer_key_rotations)
+        );
+        verify_block_signature(&snapshot.blocks[1], &old_public_key_hex).unwrap();
+        verify_block_signature(&snapshot.blocks[2], &new_public_key_hex).unwrap();
+
+        let mut follower_config = RuntimeConfig::public_testnet_default();
+        follower_config.produce_blocks = false;
+        let follower = NebulaRuntime::from_snapshot(follower_config, snapshot.clone()).unwrap();
+        assert_eq!(
+            follower.config().sequencer_public_key_hex,
+            new_public_key_hex
+        );
+        assert!(follower.sequencer_secret_key_hex.is_none());
+
+        let mut tampered = snapshot;
+        tampered.sequencer_key_rotations[0].activation_height = 1;
+        tampered.sequencer_key_rotations[0].root =
+            sequencer_key_rotation_root(&tampered.sequencer_key_rotations[0]);
+        tampered.root = snapshot_root(&tampered);
+        assert!(validate_snapshot(&tampered)
+            .unwrap_err()
+            .contains("block 1 signature rejected"));
+    }
+
+    #[test]
+    fn runtime_records_equivocation_accountability_report() {
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        runtime.produce_block();
+        let first_block_hash = runtime.latest_block().block_hash;
+        let second_block_hash = "e".repeat(64);
+        let receipt = runtime
+            .report_equivocation(
+                1,
+                &first_block_hash,
+                &second_block_hash,
+                "observer-a",
+                &"c".repeat(64),
+            )
+            .unwrap();
+
+        assert!(receipt.recorded);
+        assert!(!receipt.sequencer_accountability_clean);
+        assert_eq!(receipt.accountability_root.len(), 64);
+        assert!(runtime
+            .report_equivocation(
+                1,
+                &second_block_hash,
+                &first_block_hash,
+                "observer-a",
+                &"c".repeat(64),
+            )
+            .unwrap_err()
+            .contains("already exists"));
+
+        let status = runtime.status();
+        assert_eq!(status.accountability_report_count, 1);
+        assert!(!status.sequencer_accountability_clean);
+        validate_snapshot(&runtime.export_snapshot()).unwrap();
+
+        let state = test_rpc_state_with_limits(
+            runtime,
+            DEFAULT_MAX_REQUEST_BYTES,
+            DEFAULT_MAX_REQUESTS_PER_MINUTE,
+        );
+        let ops = state.ops_status().unwrap();
+        assert!(!ops.public_ops_ready);
+        assert!(ops
+            .blocking_gaps
+            .contains(&"sequencer-accountability-evidence-open".to_string()));
+    }
+
+    #[test]
+    fn runtime_rpc_rotates_key_and_reports_equivocation() {
+        let runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let state = test_rpc_state_with_limits(
+            runtime,
+            DEFAULT_MAX_REQUEST_BYTES,
+            DEFAULT_MAX_REQUESTS_PER_MINUTE,
+        );
+        let new_secret_key_hex = "5e".repeat(32);
+        let new_public_key_hex = public_key_hex_for_secret(&new_secret_key_hex).unwrap();
+
+        let rotation = dispatch_json_rpc_method(
+            &state,
+            "nebula_rotateSequencerKey",
+            json!({
+                "new_sequencer_secret_key_hex": new_secret_key_hex,
+                "operator_id": "operator-a",
+                "approval_root": "d".repeat(64),
+            }),
+        )
+        .unwrap();
+        assert_eq!(rotation["rotated"], true);
+        assert_eq!(rotation["sequencer_public_key_hex"], new_public_key_hex);
+
+        let block = dispatch_json_rpc_method(&state, "nebula_produceBlock", json!({})).unwrap();
+        assert_eq!(block["height"], 1);
+        assert_eq!(block["producer_public_key"], new_public_key_hex);
+
+        let receipt = dispatch_json_rpc_method(
+            &state,
+            "nebula_reportEquivocation",
+            json!({
+                "height": 1,
+                "first_block_hash": block["block_hash"].as_str().unwrap(),
+                "second_block_hash": "f".repeat(64),
+                "reporter_id": "observer-a",
+                "evidence_root": "a".repeat(64),
+            }),
+        )
+        .unwrap();
+        assert_eq!(receipt["recorded"], true);
+        assert_eq!(receipt["sequencer_accountability_clean"], false);
+
+        let status = dispatch_json_rpc_method(&state, "nebula_status", json!({})).unwrap();
+        assert_eq!(status["sequencer_key_rotation_count"], 1);
+        assert_eq!(status["sequencer_latest_rotation_activation_height"], 1);
+        assert_eq!(status["accountability_report_count"], 1);
+        assert_eq!(status["sequencer_accountability_clean"], false);
     }
 
     #[test]
