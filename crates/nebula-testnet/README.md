@@ -287,8 +287,12 @@ For public launch evidence, use `--capture-public-runtime-surface` with the
 deployment attestation instead of hand-assembling files. It fetches the attested
 HTTPS `/status` origin plus sibling runtime surfaces, refuses redirects, and
 requires every response leaf certificate SHA-256, SPKI SHA-256, and
-`not_after_unix_ms` to match an attested `tls_pins` row before emitting
-`external-public-endpoint` evidence.
+`not_after_unix_ms` to match an attested `tls_pins` row before recording the
+observed TLS tuple into the `external-public-endpoint` evidence root. Manual
+`--build-runtime-surface-evidence` runs must provide the same tuple with
+`--runtime-surface-tls-pin`; final launch readiness rejects external runtime
+surface evidence whose TLS observation does not match the deployment
+attestation.
 The metrics scrape must expose matching block freshness, mempool pressure, RPC
 limit, peer count/quorum, sync quorum, bridge counter, storage snapshot, accountability, bridge
 custody, and public ops readiness gauges.

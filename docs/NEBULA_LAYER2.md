@@ -407,7 +407,12 @@ For public launch evidence, operators should use
 the attested HTTPS `/status` origin plus sibling runtime surfaces directly,
 disables redirects by construction, and verifies every response leaf
 certificate SHA-256, SPKI SHA-256, and `not_after_unix_ms` against an attested
-`tls_pins` row before emitting `external-public-endpoint` evidence.
+`tls_pins` row before recording the observed TLS tuple into the
+`external-public-endpoint` evidence root. Manual
+`--build-runtime-surface-evidence` runs must provide the same tuple with
+`--runtime-surface-tls-pin`; final launch readiness rejects external runtime
+surface evidence whose TLS observation does not match the deployment
+attestation.
 The `/metrics` scrape must expose the same block freshness, mempool pressure, RPC
 limit, peer count/quorum, sync quorum, bridge counter, storage snapshot, accountability, bridge
 custody, and public ops readiness gauges. A valid backup manifest must

@@ -877,6 +877,7 @@ fn capture_runtime_surface_evidence(rpc_addr: &str, endpoint_url: &str) -> Resul
     let evidence = build_runtime_surface_evidence_json_pretty(RuntimeSurfaceEvidenceBuildInput {
         endpoint_url: endpoint_url.to_string(),
         capture_mode: RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET.to_string(),
+        tls_observation: None,
         captured_at_unix_ms: current_unix_ms(),
         health_json: health.to_string(),
         status_json: status.to_string(),

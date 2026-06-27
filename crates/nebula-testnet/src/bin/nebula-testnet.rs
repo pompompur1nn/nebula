@@ -730,6 +730,7 @@ fn build_runtime_surface_evidence(args: &[String], wants_json: bool) {
         endpoint_url: endpoint_url.to_string(),
         capture_mode: nebula_testnet::RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT
             .to_string(),
+        tls_observation: parse_runtime_surface_tls_observation(args, wants_json),
         captured_at_unix_ms: parse_u128_arg(args, "--captured-at-unix-ms", current_unix_ms()),
         health_json: read_required_runtime_surface_input(args, "--health", wants_json),
         status_json: read_required_runtime_surface_input(args, "--status", wants_json),
@@ -818,6 +819,7 @@ fn capture_public_runtime_surface(args: &[String], wants_json: bool) {
         endpoint_url: attestation.public_endpoint.url,
         capture_mode: nebula_testnet::RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT
             .to_string(),
+        tls_observation: Some(capture.tls_observation),
         captured_at_unix_ms: current_unix_ms(),
         health_json: capture.health_json,
         status_json: capture.status_json,
@@ -881,6 +883,7 @@ struct PublicRuntimeOrigin {
 
 #[derive(Debug, Clone)]
 struct CapturedRuntimeSurface {
+    tls_observation: nebula_testnet::TlsEndpointPin,
     health_json: String,
     status_json: String,
     snapshot_json: String,
@@ -890,6 +893,12 @@ struct CapturedRuntimeSurface {
     rpc_ops_status_json: String,
     rpc_backup_manifest_json: String,
     metrics_text: String,
+}
+
+#[derive(Debug, Clone)]
+struct CapturedHttpsText {
+    body: String,
+    tls_certificate: LiveTlsCertificateInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -988,70 +997,99 @@ fn fetch_public_runtime_surface(
     timeout: Duration,
 ) -> Result<CapturedRuntimeSurface, String> {
     let config = Arc::new(public_runtime_tls_config()?);
+    let health_path = runtime_capture_path(origin, "health");
+    let status_path = origin.status_path.clone();
+    let snapshot_path = runtime_capture_path(origin, "snapshot");
+    let ops_path = runtime_capture_path(origin, "ops");
+    let backup_path = runtime_capture_path(origin, "backup");
+    let metrics_path = runtime_capture_path(origin, "metrics");
+
+    let health = https_get_text(
+        &config,
+        origin,
+        &health_path,
+        "application/json",
+        tls_pins,
+        timeout,
+    )?;
+    let tls_certificate = health.tls_certificate.clone();
+    let status = https_get_text(
+        &config,
+        origin,
+        &status_path,
+        "application/json",
+        tls_pins,
+        timeout,
+    )?;
+    require_same_live_tls(&status_path, &tls_certificate, &status.tls_certificate)?;
+    let snapshot = https_get_text(
+        &config,
+        origin,
+        &snapshot_path,
+        "application/json",
+        tls_pins,
+        timeout,
+    )?;
+    require_same_live_tls(&snapshot_path, &tls_certificate, &snapshot.tls_certificate)?;
+    let ops = https_get_text(
+        &config,
+        origin,
+        &ops_path,
+        "application/json",
+        tls_pins,
+        timeout,
+    )?;
+    require_same_live_tls(&ops_path, &tls_certificate, &ops.tls_certificate)?;
+    let backup = https_get_text(
+        &config,
+        origin,
+        &backup_path,
+        "application/json",
+        tls_pins,
+        timeout,
+    )?;
+    require_same_live_tls(&backup_path, &tls_certificate, &backup.tls_certificate)?;
+    let rpc_status = https_post_json_rpc(&config, origin, "nebula_status", tls_pins, timeout)?;
+    require_same_live_tls(
+        "nebula_status",
+        &tls_certificate,
+        &rpc_status.tls_certificate,
+    )?;
+    let rpc_ops_status =
+        https_post_json_rpc(&config, origin, "nebula_opsStatus", tls_pins, timeout)?;
+    require_same_live_tls(
+        "nebula_opsStatus",
+        &tls_certificate,
+        &rpc_ops_status.tls_certificate,
+    )?;
+    let rpc_backup_manifest =
+        https_post_json_rpc(&config, origin, "nebula_backupManifest", tls_pins, timeout)?;
+    require_same_live_tls(
+        "nebula_backupManifest",
+        &tls_certificate,
+        &rpc_backup_manifest.tls_certificate,
+    )?;
+    let metrics = https_get_text(
+        &config,
+        origin,
+        &metrics_path,
+        "text/plain",
+        tls_pins,
+        timeout,
+    )?;
+    require_same_live_tls(&metrics_path, &tls_certificate, &metrics.tls_certificate)?;
+
     Ok(CapturedRuntimeSurface {
-        health_json: https_get_text(
-            &config,
-            origin,
-            &runtime_capture_path(origin, "health"),
-            "application/json",
-            tls_pins,
-            timeout,
-        )?,
-        status_json: https_get_text(
-            &config,
-            origin,
-            &origin.status_path,
-            "application/json",
-            tls_pins,
-            timeout,
-        )?,
-        snapshot_json: https_get_text(
-            &config,
-            origin,
-            &runtime_capture_path(origin, "snapshot"),
-            "application/json",
-            tls_pins,
-            timeout,
-        )?,
-        ops_json: https_get_text(
-            &config,
-            origin,
-            &runtime_capture_path(origin, "ops"),
-            "application/json",
-            tls_pins,
-            timeout,
-        )?,
-        backup_json: https_get_text(
-            &config,
-            origin,
-            &runtime_capture_path(origin, "backup"),
-            "application/json",
-            tls_pins,
-            timeout,
-        )?,
-        rpc_status_json: https_post_json_rpc(&config, origin, "nebula_status", tls_pins, timeout)?,
-        rpc_ops_status_json: https_post_json_rpc(
-            &config,
-            origin,
-            "nebula_opsStatus",
-            tls_pins,
-            timeout,
-        )?,
-        rpc_backup_manifest_json: https_post_json_rpc(
-            &config,
-            origin,
-            "nebula_backupManifest",
-            tls_pins,
-            timeout,
-        )?,
-        metrics_text: https_get_text(
-            &config,
-            origin,
-            &runtime_capture_path(origin, "metrics"),
-            "text/plain",
-            tls_pins,
-            timeout,
-        )?,
+        tls_observation: tls_pin_from_live_certificate_info(&tls_certificate),
+        health_json: health.body,
+        status_json: status.body,
+        snapshot_json: snapshot.body,
+        ops_json: ops.body,
+        backup_json: backup.body,
+        rpc_status_json: rpc_status.body,
+        rpc_ops_status_json: rpc_ops_status.body,
+        rpc_backup_manifest_json: rpc_backup_manifest.body,
+        metrics_text: metrics.body,
     })
 }
 
@@ -1076,7 +1114,7 @@ fn https_get_text(
     accept: &str,
     tls_pins: &[nebula_testnet::TlsEndpointPin],
     timeout: Duration,
-) -> Result<String, String> {
+) -> Result<CapturedHttpsText, String> {
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {}\r\nUser-Agent: nebula-testnet/{}\r\nAccept: {accept}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
         origin.host_header,
@@ -1091,7 +1129,7 @@ fn https_post_json_rpc(
     method: &str,
     tls_pins: &[nebula_testnet::TlsEndpointPin],
     timeout: Duration,
-) -> Result<String, String> {
+) -> Result<CapturedHttpsText, String> {
     let path = runtime_capture_path(origin, "rpc");
     let body = serde_json::json!({
         "jsonrpc": "2.0",
@@ -1116,7 +1154,7 @@ fn https_request_text(
     request: &str,
     tls_pins: &[nebula_testnet::TlsEndpointPin],
     timeout: Duration,
-) -> Result<String, String> {
+) -> Result<CapturedHttpsText, String> {
     let mut tls = connect_public_runtime_tls(config, origin, timeout)
         .map_err(|error| format!("{path} HTTPS connection failed: {error}"))?;
     let certificates = tls
@@ -1144,7 +1182,11 @@ fn https_request_text(
             "{path} HTTPS response exceeded {MAX_PUBLIC_CAPTURE_RESPONSE_BYTES} bytes"
         ));
     }
-    parse_http_response_text(path, &response)
+    let body = parse_http_response_text(path, &response)?;
+    Ok(CapturedHttpsText {
+        body,
+        tls_certificate: tls_info,
+    })
 }
 
 fn connect_public_runtime_tls(
@@ -1213,6 +1255,29 @@ fn live_tls_certificate_info(leaf_der: &[u8]) -> Result<LiveTlsCertificateInfo, 
 
 fn sha256_hex(input: &[u8]) -> String {
     hex::encode(Sha256::digest(input))
+}
+
+fn tls_pin_from_live_certificate_info(
+    live: &LiveTlsCertificateInfo,
+) -> nebula_testnet::TlsEndpointPin {
+    nebula_testnet::TlsEndpointPin {
+        cert_sha256: live.cert_sha256.clone(),
+        public_key_sha256: live.public_key_sha256.clone(),
+        not_after_unix_ms: live.not_after_unix_ms,
+    }
+}
+
+fn require_same_live_tls(
+    label: &str,
+    expected: &LiveTlsCertificateInfo,
+    actual: &LiveTlsCertificateInfo,
+) -> Result<(), String> {
+    if expected == actual {
+        return Ok(());
+    }
+    Err(format!(
+        "{label} TLS observation changed during public runtime capture"
+    ))
 }
 
 fn verify_live_tls_pin(
@@ -1928,6 +1993,48 @@ fn parse_tls_pins(args: &[String], wants_json: bool) -> Vec<nebula_testnet::TlsE
             }),
         })
         .collect()
+}
+
+fn parse_runtime_surface_tls_observation(
+    args: &[String],
+    wants_json: bool,
+) -> Option<nebula_testnet::TlsEndpointPin> {
+    let values = arg_values(args, "--runtime-surface-tls-pin");
+    if values.is_empty() {
+        return None;
+    }
+    if values.len() != 1 {
+        print_runtime_surface_evidence_error(
+            wants_json,
+            &["--runtime-surface-tls-pin may be supplied at most once".to_string()],
+        );
+        process::exit(1);
+    }
+    let fields = values[0]
+        .split(',')
+        .map(str::trim)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if fields.len() != 3 || fields.iter().any(|field| field.is_empty()) {
+        print_runtime_surface_evidence_error(
+            wants_json,
+            &["--runtime-surface-tls-pin expected 3 non-empty comma-separated fields".to_string()],
+        );
+        process::exit(1);
+    }
+    Some(nebula_testnet::TlsEndpointPin {
+        cert_sha256: fields[0].clone(),
+        public_key_sha256: fields[1].clone(),
+        not_after_unix_ms: fields[2].parse::<u128>().unwrap_or_else(|error| {
+            print_runtime_surface_evidence_error(
+                wants_json,
+                &[format!(
+                    "--runtime-surface-tls-pin not_after_unix_ms must be an unsigned integer: {error}"
+                )],
+            );
+            process::exit(1);
+        }),
+    })
 }
 
 fn parse_bootstrap_nodes(
@@ -3670,10 +3777,12 @@ LIVE RPC RUNTIME SURFACE:
     --capture-public-runtime-surface fetches the deployment attestation's
     HTTPS /status origin, captures /health, /status, /snapshot, /ops, /backup,
     /metrics, and JSON-RPC mirrors, and requires each response TLS leaf cert,
-    SPKI, and not_after to match an attested tls_pins row before emitting
-    external-public-endpoint runtime-surface evidence.
+    SPKI, and not_after to match an attested tls_pins row before recording that
+    live TLS observation into external-public-endpoint runtime-surface evidence.
     Usage: nebula-testnet --capture-public-runtime-surface
     --deployment-attestation <path> [--endpoint-url <url>] [--timeout-ms <ms>]
+    Manual --build-runtime-surface-evidence runs must supply
+    --runtime-surface-tls-pin <cert_sha256,public_key_sha256,not_after_unix_ms>.
 
 OPTIONS:\n    --mainnet-readiness              Emit the public launch readiness contract\n    --prove-local-public-testnet     Build and verify the local launch rehearsal chain\n    --prove-live-rpc-devnet          Start loopback RPC nodes and prove live devnet behavior\n    --run-rpc                        Run the public-testnet RPC node with bridge and ops/backup status\n    --sequencer                      Produce sub-second blocks locally (default)\n    --follower                       Disable local production and follow a sequencer peer set\n    --rpc-bind                       RPC bind address, default 127.0.0.1:9944\n    --block-ms                       Block target in ms; public testnet requires < 1000\n    --validator-id                   Local validator producer ID for block rewards\n    --sequencer-public-key           Expected Ed25519 sequencer public key for signed blocks\n    --sequencer-secret-key           Local Ed25519 sequencer signing seed; never exported in snapshots\n    --admin-token <token>            Enables operator-only JSON-RPC methods; never printed\n    --data-dir                       Persist node snapshots under this directory\n    --bootstrap-rpc                  Import an ahead peer snapshot before serving\n    --sync-rpc                       Repeatable snapshot peer for continuous follower sync/failover\n    --sync-peer-quorum               Matching sync peer snapshots required before follower import\n    --disable-nbla-faucet            Set the public NBLA faucet amount to zero for launch-bound RPC\n    --max-mempool-transactions       Maximum pending transactions admitted to local mempool\n    --max-request-bytes              Maximum accepted HTTP request body size in bytes\n    --max-requests-per-minute        Per-client RPC request budget per minute\n    --build-public-status            Build public status for a real endpoint URL\n    --build-public-probe             Build public probe evidence for a real endpoint URL\n    --build-runtime-surface-evidence Build root-bound evidence from captured live RPC surfaces\n    --verify-runtime-surface-evidence Verify captured runtime-surface evidence\n    --health                         Captured GET /health JSON for runtime-surface evidence\n    --status                         Captured GET /status JSON for runtime-surface evidence\n    --snapshot                       Captured GET /snapshot JSON for runtime-surface evidence\n    --ops                            Captured GET /ops JSON for runtime-surface evidence\n    --backup                         Captured GET /backup JSON for runtime-surface evidence\n    --rpc-status                     Captured nebula_status JSON-RPC response\n    --rpc-ops-status                 Captured nebula_opsStatus JSON-RPC response\n    --rpc-backup-manifest            Captured nebula_backupManifest JSON-RPC response\n    --metrics                        Captured GET /metrics text for runtime-surface evidence\n    --captured-at-unix-ms            Override runtime-surface evidence capture time\n    --runtime-surface-evidence       Runtime surface evidence input for launch certificate\n    --build-deployment-attestation   Build deployment evidence from public surface and receipt files\n    --endpoint-url                   HTTPS public status/probe/runtime endpoint URL for builders\n    --artifact-sha3-256              64-hex package artifact hash for builder identity\n    --cargo-lock-sha3-256            64-hex Cargo.lock hash for builder identity\n    --preflight-receipt              Preflight receipt input for deployment-attestation builder\n    --runbook-receipt                Runbook receipt input for deployment-attestation builder\n    --tls-pin                        Repeatable cert_sha256,public_key_sha256,not_after_unix_ms row\n    --bootstrap-node                 Repeatable node_id,operator_id,region,endpoint row\n    --operator                       Repeatable operator_id,region,public_key row\n    --observer                       Repeatable observer_id,region,public_key row\n    --rollback-plan-sha3-256         64-hex rollback plan hash for deployment evidence\n    --rollback-recovery-root         64-hex recovery point root for deployment evidence\n    --rollback-last-drill-unix-ms    Rollback drill completion time for deployment evidence\n    --generated-at-unix-ms           Override generated time for deployment evidence\n    --expires-at-unix-ms             Override expiry time for deployment evidence\n    --sample-public-status           Emit a public status manifest sample\n    --verify-public-status           Verify a public status manifest file\n    --sample-public-probe            Emit a public probe sample\n    --verify-public-probe            Verify a public probe file\n    --sample-preflight-receipt       Emit a preflight receipt sample\n    --verify-preflight-receipt       Verify a preflight receipt file\n    --sample-runbook-receipt         Emit a runbook receipt sample\n    --verify-runbook-receipt         Verify a runbook receipt file\n    --sample-deployment-attestation  Emit a fillable deployment attestation sample\n    --verify-deployment-attestation  Verify a deployment attestation file\n    --sample-validator-set           Emit a fillable validator-set manifest sample\n    --verify-validator-set           Verify a validator-set manifest file\n    --sample-operator-handoff        Emit a sample operator handoff manifest\n    --build-operator-handoff         Build operator handoff from attestation and validator set\n    --verify-operator-handoff        Verify an operator handoff manifest file\n    --sample-operator-acceptance     Emit a sample operator acceptance manifest\n    --build-operator-acceptance      Build operator acceptance from handoff, attestation, and validator set\n    --verify-operator-acceptance     Verify an operator acceptance manifest file\n    --operator-handoff               Operator handoff input for acceptance/package verification\n    --operator-acceptance            Operator acceptance input for launch package verification\n    --sample-genesis-manifest        Emit a sample genesis manifest built from samples\n    --build-genesis-manifest         Build genesis manifest from attestation and validator set\n    --deployment-attestation         Deployment attestation input for genesis build/package verification\n    --public-status                  Public status manifest input for launch package verification\n    --public-probe                   Public probe input for launch package verification\n    --validator-set                  Validator-set input for genesis build/package verification\n    --genesis-manifest               Genesis manifest input for launch package verification\n    --verify-genesis-manifest        Verify a genesis manifest file\n    --verify-launch-package          Verify deployment, public surface, validator set, genesis, handoff, and acceptance agree\n    --build-launch-package-bundle    Build the external validator launch-package bundle manifest\n    --verify-launch-package-bundle   Verify launch-package bundle hashes and roots against the artifact files\n    --launch-package-bundle          Launch-package bundle input for validator activation/join\n    --validator-activation           Validator activation input for join receipt verification\n    --validator-join                 Validator join input for operator confirmation\n    --operator-join-confirmation     Operator join confirmation input for public observer confirmation\n    --public-observer-confirmation   Public observer confirmation input for launch certificate\n    --build-validator-activation     Build validator activation from a verified launch-package bundle\n    --verify-validator-activation    Verify validators activated against the launch-package bundle\n    --build-validator-join           Build validator join receipt from activation and bundle evidence\n    --verify-validator-join          Verify validators joined at/after activation height\n    --build-operator-join-confirmation  Build operator confirmation from joined validators\n    --verify-operator-join-confirmation Verify operators confirmed the validator join receipt\n    --build-public-observer-confirmation Build observer confirmation from public endpoint evidence\n    --verify-public-observer-confirmation Verify observers confirmed the public endpoint post-join\n    --build-public-testnet-launch-certificate Build the final public testnet launch-candidate certificate\n    --verify-public-testnet-launch-certificate Verify the final launch-candidate certificate\n    --json                           Emit JSON output\n    -h, --help                       Show this help"
     );
@@ -3693,6 +3802,22 @@ mod tests {
             public_key_sha256: public_key_sha256.to_string(),
             not_after_unix_ms,
         }
+    }
+
+    #[test]
+    fn runtime_surface_tls_observation_parses_manual_pin() {
+        assert!(parse_runtime_surface_tls_observation(&[], false).is_none());
+        let args = vec![
+            "--runtime-surface-tls-pin".to_string(),
+            format!("{},{},{}", "aa".repeat(32), "bb".repeat(32), 9_999),
+        ];
+
+        let parsed = parse_runtime_surface_tls_observation(&args, false)
+            .expect("runtime surface TLS observation parses");
+
+        assert_eq!(parsed.cert_sha256, "aa".repeat(32));
+        assert_eq!(parsed.public_key_sha256, "bb".repeat(32));
+        assert_eq!(parsed.not_after_unix_ms, 9_999);
     }
 
     #[test]
@@ -3776,5 +3901,14 @@ mod tests {
         let error =
             verify_live_tls_pin("/status", &pins, &live, 2_001).expect_err("expired cert rejects");
         assert!(error.contains("expired"));
+
+        let changed = LiveTlsCertificateInfo {
+            cert_sha256: live.cert_sha256.clone(),
+            public_key_sha256: "ee".repeat(32),
+            not_after_unix_ms: live.not_after_unix_ms,
+        };
+        let error = require_same_live_tls("/snapshot", &live, &changed)
+            .expect_err("changed TLS observation rejects");
+        assert!(error.contains("TLS observation changed"));
     }
 }

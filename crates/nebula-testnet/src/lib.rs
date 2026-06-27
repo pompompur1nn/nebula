@@ -951,6 +951,8 @@ pub struct RuntimeSurfaceEvidence {
     pub runtime_version: String,
     pub endpoint_url: String,
     pub capture_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_observation: Option<TlsEndpointPin>,
     pub captured_at_unix_ms: u128,
     pub health: Value,
     pub status: Value,
@@ -968,6 +970,7 @@ pub struct RuntimeSurfaceEvidence {
 pub struct RuntimeSurfaceEvidenceBuildInput {
     pub endpoint_url: String,
     pub capture_mode: String,
+    pub tls_observation: Option<TlsEndpointPin>,
     pub captured_at_unix_ms: u128,
     pub health_json: String,
     pub status_json: String,
@@ -987,6 +990,7 @@ pub struct RuntimeSurfaceEvidenceReport {
     pub runtime_surface_root: String,
     pub endpoint_url: String,
     pub capture_mode: String,
+    pub tls_observation: Option<TlsEndpointPin>,
     pub chain_id: String,
     pub runtime_version: String,
     pub launch_package_bundle_root: String,
@@ -2877,6 +2881,7 @@ pub fn build_runtime_surface_evidence_json_pretty(
         runtime_version,
         endpoint_url: input.endpoint_url,
         capture_mode: input.capture_mode,
+        tls_observation: input.tls_observation,
         captured_at_unix_ms: input.captured_at_unix_ms,
         health: parse_json_value(&input.health_json, "health")?,
         status,
@@ -2931,11 +2936,21 @@ fn verify_runtime_surface_evidence(
         VERSION,
     );
     match evidence.capture_mode.as_str() {
-        RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT
-        | RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET => {}
+        RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT => {
+            if evidence.tls_observation.is_none() {
+                errors.push(
+                    "runtime_surface.tls_observation is required for external-public-endpoint capture"
+                        .to_string(),
+                );
+            }
+        }
+        RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET => {}
         _ => errors.push(format!(
             "runtime_surface.capture_mode must be {RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT} or {RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET}"
         )),
+    }
+    if let Some(tls_observation) = &evidence.tls_observation {
+        verify_runtime_surface_tls_observation(&mut errors, tls_observation, now);
     }
     if let Some(launch_endpoint_url) = evidence
         .status
@@ -3108,6 +3123,7 @@ fn verify_runtime_surface_evidence(
         runtime_surface_root: evidence.root.clone(),
         endpoint_url: evidence.endpoint_url.clone(),
         capture_mode: evidence.capture_mode.clone(),
+        tls_observation: evidence.tls_observation.clone(),
         chain_id: evidence.chain_id.clone(),
         runtime_version: evidence.runtime_version.clone(),
         launch_package_bundle_root: launch_package_bundle_root
@@ -5743,6 +5759,10 @@ pub fn verify_public_testnet_launch_readiness_jsons(
     )?;
     let runtime_surface = verify_runtime_surface_evidence_json(runtime_surface_evidence_json)?;
     let deployment = verify_deployment_attestation_json(deployment_attestation_json)?;
+    let deployment_attestation = serde_json::from_str::<DeploymentAttestation>(
+        deployment_attestation_json.trim_start_matches('\u{feff}'),
+    )
+    .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
     let mut errors = Vec::new();
 
     if !certificate.public_testnet_launch_certificate_ready {
@@ -5763,6 +5783,21 @@ pub fn verify_public_testnet_launch_readiness_jsons(
         &runtime_surface.capture_mode,
         RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT,
     );
+    match runtime_surface.tls_observation.as_ref() {
+        Some(observed)
+            if deployment_attestation
+                .public_endpoint
+                .tls_pins
+                .iter()
+                .any(|pin| tls_endpoint_pins_match(observed, pin)) => {}
+        Some(_) => errors.push(
+            "runtime_surface.tls_observation does not match deployment public_endpoint.tls_pins"
+                .to_string(),
+        ),
+        None => errors.push(
+            "runtime_surface.tls_observation is required for public launch readiness".to_string(),
+        ),
+    }
     if certificate.operator_count < MIN_PUBLIC_TESTNET_OPERATORS {
         errors.push(format!(
             "operator_count must be at least {MIN_PUBLIC_TESTNET_OPERATORS}"
@@ -6200,6 +6235,7 @@ fn live_capture_runtime_surface_evidence(
         build_runtime_surface_evidence_json_pretty(RuntimeSurfaceEvidenceBuildInput {
             endpoint_url: endpoint_url.to_string(),
             capture_mode: RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET.to_string(),
+            tls_observation: None,
             captured_at_unix_ms: unix_ms(),
             health_json: health.to_string(),
             status_json: status.to_string(),
@@ -6916,6 +6952,7 @@ fn runtime_surface_evidence_root(evidence: &RuntimeSurfaceEvidence) -> String {
         "runtime_version": evidence.runtime_version,
         "endpoint_url": evidence.endpoint_url,
         "capture_mode": evidence.capture_mode,
+        "tls_observation": evidence.tls_observation,
         "captured_at_unix_ms": evidence.captured_at_unix_ms,
         "health": evidence.health,
         "status": evidence.status,
@@ -6940,6 +6977,40 @@ fn require_value_eq(errors: &mut Vec<String>, label: &str, actual: &Value, expec
     if actual != expected {
         errors.push(format!("{label} does not match expected captured value"));
     }
+}
+
+fn verify_runtime_surface_tls_observation(
+    errors: &mut Vec<String>,
+    tls_observation: &TlsEndpointPin,
+    now: u128,
+) {
+    require_hex_root(
+        errors,
+        "runtime_surface.tls_observation.cert_sha256",
+        &tls_observation.cert_sha256,
+    );
+    require_hex_root(
+        errors,
+        "runtime_surface.tls_observation.public_key_sha256",
+        &tls_observation.public_key_sha256,
+    );
+    if tls_observation.cert_sha256 == tls_observation.public_key_sha256 {
+        errors.push(
+            "runtime_surface.tls_observation.public_key_sha256 must differ from cert_sha256"
+                .to_string(),
+        );
+    }
+    if tls_observation.not_after_unix_ms <= now {
+        errors.push("runtime_surface.tls_observation.not_after_unix_ms is stale".to_string());
+    }
+}
+
+fn tls_endpoint_pins_match(left: &TlsEndpointPin, right: &TlsEndpointPin) -> bool {
+    left.cert_sha256.eq_ignore_ascii_case(&right.cert_sha256)
+        && left
+            .public_key_sha256
+            .eq_ignore_ascii_case(&right.public_key_sha256)
+        && left.not_after_unix_ms == right.not_after_unix_ms
 }
 
 fn require_durable_field_set_eq(
@@ -10689,12 +10760,16 @@ fn unix_ms() -> u128 {
 mod public_launch {
     use super::*;
 
-    fn external_public_runtime_surface_from(runtime_surface_json: &str) -> String {
+    fn external_public_runtime_surface_from(
+        runtime_surface_json: &str,
+        tls_observation: Option<TlsEndpointPin>,
+    ) -> Result<String, AttestationError> {
         let evidence = serde_json::from_str::<RuntimeSurfaceEvidence>(runtime_surface_json)
             .expect("runtime surface evidence parses");
         build_runtime_surface_evidence_json_pretty(RuntimeSurfaceEvidenceBuildInput {
             endpoint_url: evidence.endpoint_url,
             capture_mode: RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT.to_string(),
+            tls_observation,
             captured_at_unix_ms: unix_ms(),
             health_json: evidence.health.to_string(),
             status_json: evidence.status.to_string(),
@@ -10706,7 +10781,6 @@ mod public_launch {
             rpc_backup_manifest_json: evidence.rpc_backup_manifest.to_string(),
             metrics_text: evidence.metrics_text,
         })
-        .expect("external public runtime surface evidence builds")
     }
 
     #[test]
@@ -13967,7 +14041,22 @@ mod public_launch {
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
 
-        let external_runtime_surface = external_public_runtime_surface_from(&runtime_surface);
+        let missing_tls_error = external_public_runtime_surface_from(&runtime_surface, None)
+            .expect_err("external runtime surface evidence requires a TLS observation");
+        match missing_tls_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error
+                    == "runtime_surface.tls_observation is required for external-public-endpoint capture"
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let deployment_attestation =
+            serde_json::from_str::<DeploymentAttestation>(&deployment).unwrap();
+        let matching_tls_observation = deployment_attestation.public_endpoint.tls_pins[0].clone();
+        let external_runtime_surface =
+            external_public_runtime_surface_from(&runtime_surface, Some(matching_tls_observation))
+                .unwrap();
         let external_certificate = build_public_testnet_launch_certificate_json_pretty(
             &observer_confirmation,
             &external_runtime_surface,
@@ -14031,6 +14120,57 @@ mod public_launch {
             .unwrap()
             .public_testnet_launch_certificate_root
         );
+
+        let mismatched_tls_observation = TlsEndpointPin {
+            cert_sha256: "cc".repeat(32),
+            public_key_sha256: "dd".repeat(32),
+            not_after_unix_ms: unix_ms() + 2_592_000_000,
+        };
+        let mismatched_runtime_surface = external_public_runtime_surface_from(
+            &runtime_surface,
+            Some(mismatched_tls_observation),
+        )
+        .unwrap();
+        let mismatched_certificate = build_public_testnet_launch_certificate_json_pretty(
+            &observer_confirmation,
+            &mismatched_runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let mismatch_ready_error = verify_public_testnet_launch_readiness_jsons(
+            &mismatched_certificate,
+            &observer_confirmation,
+            &mismatched_runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+        match mismatch_ready_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error
+                    == "runtime_surface.tls_observation does not match deployment public_endpoint.tls_pins"
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
     }
 
     #[test]

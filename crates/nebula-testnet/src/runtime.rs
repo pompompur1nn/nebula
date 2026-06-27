@@ -7079,6 +7079,11 @@ mod tests {
                 endpoint_url: "https://public.testnet.nebula.example/status".to_string(),
                 capture_mode: crate::RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT
                     .to_string(),
+                tls_observation: Some(crate::TlsEndpointPin {
+                    cert_sha256: "aa".repeat(32),
+                    public_key_sha256: "bb".repeat(32),
+                    not_after_unix_ms: unix_ms() + 2_592_000_000,
+                }),
                 captured_at_unix_ms: unix_ms(),
                 health_json: health.to_string(),
                 status_json: status.to_string(),
@@ -7156,6 +7161,11 @@ mod tests {
                 endpoint_url: "https://public.testnet.nebula.example/status".to_string(),
                 capture_mode: crate::RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT
                     .to_string(),
+                tls_observation: Some(crate::TlsEndpointPin {
+                    cert_sha256: "aa".repeat(32),
+                    public_key_sha256: "bb".repeat(32),
+                    not_after_unix_ms: unix_ms() + 2_592_000_000,
+                }),
                 captured_at_unix_ms: unix_ms(),
                 health_json: health.to_string(),
                 status_json: status.to_string(),
