@@ -276,6 +276,98 @@ fn public_rpc_rate_limit_does_not_starve_private_admin_listener() {
 }
 
 #[test]
+fn trusted_proxy_headers_partition_public_rate_limit_clients() {
+    let mut config = RuntimeConfig::public_testnet_default();
+    config.block_target_ms = 999;
+    let trusted_addr = start_rpc_server_with_config(
+        config.clone(),
+        RuntimeNodeOptions {
+            max_requests_per_minute: 2,
+            trusted_proxy_ips: vec!["127.0.0.1".to_string()],
+            ..RuntimeNodeOptions::default()
+        },
+    );
+
+    for _ in 0..2 {
+        let (headers, _body) = http_response_with_headers(
+            &trusted_addr,
+            "GET",
+            "/status",
+            &["X-Forwarded-For: 203.0.113.10"],
+            None,
+        )
+        .expect("trusted proxy response");
+        assert!(
+            headers.lines().next().unwrap_or_default().contains(" 200 "),
+            "{headers}"
+        );
+    }
+    let (headers, body) = http_response_with_headers(
+        &trusted_addr,
+        "GET",
+        "/status",
+        &["X-Forwarded-For: 203.0.113.10"],
+        None,
+    )
+    .expect("trusted proxy rate limited response");
+    assert!(
+        headers.lines().next().unwrap_or_default().contains(" 429 "),
+        "{headers}: {body}"
+    );
+    let (headers, _body) = http_response_with_headers(
+        &trusted_addr,
+        "GET",
+        "/status",
+        &["X-Forwarded-For: 203.0.113.11"],
+        None,
+    )
+    .expect("second forwarded client response");
+    assert!(
+        headers.lines().next().unwrap_or_default().contains(" 200 "),
+        "{headers}"
+    );
+    let (headers, body) = http_response_with_headers(
+        &trusted_addr,
+        "GET",
+        "/status",
+        &["X-Forwarded-For: 203.0.113.12, 203.0.113.13"],
+        None,
+    )
+    .expect("ambiguous trusted proxy response");
+    assert!(
+        headers.lines().next().unwrap_or_default().contains(" 400 "),
+        "ambiguous trusted proxy header must fail closed: {headers}: {body}"
+    );
+
+    let untrusted_addr = start_rpc_server_with_config(
+        config,
+        RuntimeNodeOptions {
+            max_requests_per_minute: 5,
+            ..RuntimeNodeOptions::default()
+        },
+    );
+    let mut untrusted_rate_limited = false;
+    for index in 20..30 {
+        let header = format!("X-Forwarded-For: 203.0.113.{index}");
+        let (headers, _body) =
+            http_response_with_headers(&untrusted_addr, "GET", "/status", &[header.as_str()], None)
+                .expect("untrusted forwarded response");
+        if headers.lines().next().unwrap_or_default().contains(" 429 ") {
+            untrusted_rate_limited = true;
+            break;
+        }
+        assert!(
+            headers.lines().next().unwrap_or_default().contains(" 200 "),
+            "{headers}"
+        );
+    }
+    assert!(
+        untrusted_rate_limited,
+        "untrusted direct clients must not bypass the TCP-peer bucket with varied X-Forwarded-For headers"
+    );
+}
+
+#[test]
 fn public_rpc_rejects_incomplete_declared_body_without_dispatching() {
     let mut config = RuntimeConfig::public_testnet_default();
     config.block_target_ms = 999;
@@ -334,6 +426,9 @@ fn metrics_endpoint_exposes_public_rpc_operational_gauges() {
     assert!(body.contains("nebula_rpc_max_request_bytes "));
     assert!(body.contains("nebula_rpc_max_requests_per_minute 10000"));
     assert!(body.contains("nebula_admin_rpc_max_active_connections "));
+    assert!(body.contains("nebula_rpc_client_identity_proxy_aware 0"));
+    assert!(body.contains("nebula_rpc_trust_private_proxy_headers 0"));
+    assert!(body.contains("nebula_rpc_trusted_proxy_count 0"));
     assert!(body.contains("nebula_sync_peer_quorum 1"));
     assert!(body.contains("nebula_sync_quorum_met 0"));
     assert!(body.contains("nebula_sync_quorum_peer_count 0"));
@@ -467,6 +562,7 @@ fn launch_bound_follower_exports_verifiable_runtime_surface_evidence() {
             data_dir: Some(sequencer_data_dir),
             auto_produce_blocks: false,
             max_requests_per_minute: 10_000,
+            trusted_proxy_ips: vec!["127.0.0.1".to_string()],
             ..RuntimeNodeOptions::default()
         },
     );
@@ -704,6 +800,7 @@ fn launch_bound_follower_exports_verifiable_runtime_surface_evidence() {
             sync_rpc_url: Some(snapshot_url),
             sync_peer_quorum: 1,
             max_requests_per_minute: 10_000,
+            trusted_proxy_ips: vec!["127.0.0.1".to_string()],
             ..RuntimeNodeOptions::default()
         },
     );
@@ -832,6 +929,7 @@ fn launch_bound_accountability_report_blocks_public_ops_and_mutations() {
             sequencer_secret_key_hex: Some(initial_sequencer_secret_key_hex),
             data_dir: Some(temp_data_dir("accountability")),
             max_requests_per_minute: 10_000,
+            trusted_proxy_ips: vec!["127.0.0.1".to_string()],
             ..RuntimeNodeOptions::default()
         },
     );
@@ -1137,6 +1235,16 @@ fn http_response(
     path: &str,
     body: Option<Value>,
 ) -> Result<(String, String), String> {
+    http_response_with_headers(rpc_addr, method, path, &[], body)
+}
+
+fn http_response_with_headers(
+    rpc_addr: &str,
+    method: &str,
+    path: &str,
+    extra_headers: &[&str],
+    body: Option<Value>,
+) -> Result<(String, String), String> {
     let mut stream =
         TcpStream::connect(rpc_addr).map_err(|error| format!("connect {rpc_addr}: {error}"))?;
     stream
@@ -1144,9 +1252,14 @@ fn http_response(
         .map_err(|error| format!("set read timeout: {error}"))?;
 
     let body = body.map(|value| value.to_string()).unwrap_or_default();
+    let extra_headers = if extra_headers.is_empty() {
+        String::new()
+    } else {
+        format!("{}\r\n", extra_headers.join("\r\n"))
+    };
     write!(
         stream,
-        "{method} {path} HTTP/1.1\r\nHost: {rpc_addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "{method} {path} HTTP/1.1\r\nHost: {rpc_addr}\r\n{extra_headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
         body
     )

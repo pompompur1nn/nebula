@@ -161,6 +161,10 @@ evidence is absent or stale.
     `--max-active-connections`, and `--admin-max-active-connections`.
     Request-rate buckets and active-connection caps are listener-scoped so
     public traffic cannot consume the private admin control-plane budget.
+    Public HTTPS reverse-proxy deployments must configure explicit
+    `--trusted-proxy-ip` values for the immediate proxy hops; the proxy must
+    strip inbound `Forwarded`/`X-Forwarded-For` and set one canonical client IP
+    before forwarding.
     Bootstrap and follower sync reject peer HTTP snapshot responses above the
     configured snapshot response cap. `--admin-rpc-bind` must be a numeric
     loopback or private address. Mempool admission is stateful: public nodes
@@ -310,9 +314,14 @@ tune rehearsal limits with
 `--max-active-connections`, and `--admin-max-active-connections`. Admission
 rejects missing senders, duplicate pending account nonces, nonce mismatches,
 and insufficient `NBLA`/`nXMR` balances before consuming local mempool
-capacity. Bootstrap and follower sync reject peer HTTP snapshot responses above
-the configured snapshot response cap. HTTP requests whose declared
-`Content-Length` body is incomplete are rejected before JSON-RPC dispatch.
+capacity. Configure `--trusted-proxy-ip <ip>` for every immediate HTTPS reverse
+proxy so per-client rate limits use the canonical forwarded client IP; the
+proxy must strip inbound `Forwarded`/`X-Forwarded-For` before setting exactly
+one client IP. `--trust-private-proxy-headers` is for loopback/private local
+rehearsals only and does not satisfy launch-bound ops readiness. Bootstrap and
+follower sync reject peer HTTP snapshot responses above the configured snapshot
+response cap. HTTP requests whose declared `Content-Length` body is incomplete
+are rejected before JSON-RPC dispatch.
 
 Operator-only JSON-RPC methods require a node started with
 `--admin-rpc-bind <private-addr>` plus `--admin-token <operator-token>` and

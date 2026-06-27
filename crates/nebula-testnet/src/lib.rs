@@ -2106,6 +2106,7 @@ fn prove_live_rpc_devnet_rehearsal_with_bindings(
             data_dir: Some(sequencer_data_dir),
             auto_produce_blocks: false,
             max_requests_per_minute: 10_000,
+            trusted_proxy_ips: vec!["127.0.0.1".to_string()],
             ..runtime::RuntimeNodeOptions::default()
         },
     )?;
@@ -2365,6 +2366,7 @@ fn prove_live_rpc_devnet_rehearsal_with_bindings(
             sync_rpc_url: Some(snapshot_url),
             sync_peer_quorum: 1,
             max_requests_per_minute: 10_000,
+            trusted_proxy_ips: vec!["127.0.0.1".to_string()],
             ..runtime::RuntimeNodeOptions::default()
         },
     )?;
@@ -6753,6 +6755,10 @@ const RUNTIME_STATUS_DURABLE_FIELDS: &[&str] = &[
     "rpc_max_active_connections",
     "admin_rpc_max_active_connections",
     "sync_max_snapshot_response_bytes",
+    "rpc_client_identity_mode",
+    "rpc_client_identity_proxy_aware",
+    "rpc_trust_private_proxy_headers",
+    "rpc_trusted_proxy_count",
     "admin_rpc_enabled",
     "admin_rpc_private_listener",
     "public_rpc_admin_methods_enabled",
@@ -6834,6 +6840,10 @@ const RUNTIME_OPS_DURABLE_FIELDS: &[&str] = &[
     "rpc_max_active_connections",
     "admin_rpc_max_active_connections",
     "sync_max_snapshot_response_bytes",
+    "rpc_client_identity_mode",
+    "rpc_client_identity_proxy_aware",
+    "rpc_trust_private_proxy_headers",
+    "rpc_trusted_proxy_count",
     "admin_rpc_enabled",
     "admin_rpc_private_listener",
     "public_rpc_admin_methods_enabled",
@@ -6918,6 +6928,10 @@ const RUNTIME_BACKUP_DURABLE_FIELDS: &[&str] = &[
     "rpc_max_active_connections",
     "admin_rpc_max_active_connections",
     "sync_max_snapshot_response_bytes",
+    "rpc_client_identity_mode",
+    "rpc_client_identity_proxy_aware",
+    "rpc_trust_private_proxy_headers",
+    "rpc_trusted_proxy_count",
     "admin_rpc_enabled",
     "admin_rpc_private_listener",
     "public_rpc_admin_methods_enabled",
@@ -7263,6 +7277,10 @@ fn require_ops_backup_snapshot_agreement(
         "rpc_max_active_connections",
         "admin_rpc_max_active_connections",
         "sync_max_snapshot_response_bytes",
+        "rpc_client_identity_mode",
+        "rpc_client_identity_proxy_aware",
+        "rpc_trust_private_proxy_headers",
+        "rpc_trusted_proxy_count",
         "admin_rpc_enabled",
         "admin_rpc_private_listener",
         "public_rpc_admin_methods_enabled",
@@ -7446,6 +7464,25 @@ fn require_metrics_agreement(
         "nebula_sync_max_snapshot_response_bytes",
         status,
         "sync_max_snapshot_response_bytes",
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_rpc_client_identity_proxy_aware",
+        u8::from(json_bool(status, "rpc_client_identity_proxy_aware").unwrap_or(false)),
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_rpc_trust_private_proxy_headers",
+        u8::from(json_bool(status, "rpc_trust_private_proxy_headers").unwrap_or(false)),
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_rpc_trusted_proxy_count",
+        status,
+        "rpc_trusted_proxy_count",
     );
     require_metric_value(
         errors,

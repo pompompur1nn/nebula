@@ -9,8 +9,9 @@ use sha3::{Digest, Sha3_256};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -60,6 +61,8 @@ pub struct RuntimeNodeOptions {
     pub max_active_connections: usize,
     pub admin_max_active_connections: usize,
     pub max_snapshot_response_bytes: usize,
+    pub trust_private_proxy_headers: bool,
+    pub trusted_proxy_ips: Vec<String>,
 }
 
 impl Default for RuntimeNodeOptions {
@@ -79,6 +82,8 @@ impl Default for RuntimeNodeOptions {
             max_active_connections: DEFAULT_MAX_ACTIVE_CONNECTIONS,
             admin_max_active_connections: DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS,
             max_snapshot_response_bytes: DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES,
+            trust_private_proxy_headers: false,
+            trusted_proxy_ips: Vec::new(),
         }
     }
 }
@@ -654,6 +659,10 @@ pub struct RuntimeOpsStatus {
     pub rpc_max_active_connections: usize,
     pub admin_rpc_max_active_connections: usize,
     pub sync_max_snapshot_response_bytes: usize,
+    pub rpc_client_identity_mode: String,
+    pub rpc_client_identity_proxy_aware: bool,
+    pub rpc_trust_private_proxy_headers: bool,
+    pub rpc_trusted_proxy_count: usize,
     pub admin_rpc_enabled: bool,
     pub admin_rpc_private_listener: bool,
     pub public_rpc_admin_methods_enabled: bool,
@@ -751,6 +760,10 @@ pub struct RuntimeBackupManifest {
     pub rpc_max_active_connections: usize,
     pub admin_rpc_max_active_connections: usize,
     pub sync_max_snapshot_response_bytes: usize,
+    pub rpc_client_identity_mode: String,
+    pub rpc_client_identity_proxy_aware: bool,
+    pub rpc_trust_private_proxy_headers: bool,
+    pub rpc_trusted_proxy_count: usize,
     pub admin_rpc_enabled: bool,
     pub admin_rpc_private_listener: bool,
     pub public_rpc_admin_methods_enabled: bool,
@@ -856,6 +869,7 @@ struct RuntimeRpcState {
     storage: Option<RuntimeStorage>,
     rpc_limits: RuntimeRpcLimits,
     sync_limits: RuntimeSyncLimits,
+    client_identity: RuntimeClientIdentityConfig,
     connection_counters: RuntimeRpcConnectionCounters,
     sync_peers: RuntimeSyncPeerSet,
     sync_telemetry: Arc<Mutex<BTreeMap<String, RuntimeSyncPeerTelemetry>>>,
@@ -894,6 +908,12 @@ struct RuntimeRpcLimits {
 #[derive(Debug, Clone, Copy, Serialize)]
 struct RuntimeSyncLimits {
     max_snapshot_response_bytes: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct RuntimeClientIdentityConfig {
+    trust_private_proxy_headers: bool,
+    trusted_proxy_ips: Vec<IpAddr>,
 }
 
 impl RuntimeRpcLimits {
@@ -1464,6 +1484,22 @@ impl RuntimeRpcState {
             json!(self.sync_limits.max_snapshot_response_bytes),
         );
         fields.insert(
+            "rpc_client_identity_mode".to_string(),
+            json!(self.client_identity.mode()),
+        );
+        fields.insert(
+            "rpc_client_identity_proxy_aware".to_string(),
+            json!(self.client_identity.proxy_aware()),
+        );
+        fields.insert(
+            "rpc_trust_private_proxy_headers".to_string(),
+            json!(self.client_identity.trust_private_proxy_headers),
+        );
+        fields.insert(
+            "rpc_trusted_proxy_count".to_string(),
+            json!(self.client_identity.trusted_proxy_count()),
+        );
+        fields.insert(
             "bootstrap_peer_urls".to_string(),
             json!(self.sync_peers.bootstrap_peer_urls),
         );
@@ -1638,6 +1674,9 @@ impl RuntimeRpcState {
         if self.public_rpc_admin_methods_enabled() {
             blocking_gaps.push("public-rpc-admin-methods-enabled".to_string());
         }
+        if status.launch_binding_present && !self.client_identity.public_launch_ready() {
+            blocking_gaps.push("public-rpc-client-identity-not-proxy-aware".to_string());
+        }
         let max_acceptable_age_ms = u128::from(status.block_target_ms)
             .saturating_mul(20)
             .max(5_000);
@@ -1759,6 +1798,10 @@ impl RuntimeRpcState {
             rpc_max_active_connections: self.rpc_limits.max_active_connections,
             admin_rpc_max_active_connections: self.rpc_limits.admin_max_active_connections,
             sync_max_snapshot_response_bytes: self.sync_limits.max_snapshot_response_bytes,
+            rpc_client_identity_mode: self.client_identity.mode().to_string(),
+            rpc_client_identity_proxy_aware: self.client_identity.proxy_aware(),
+            rpc_trust_private_proxy_headers: self.client_identity.trust_private_proxy_headers,
+            rpc_trusted_proxy_count: self.client_identity.trusted_proxy_count(),
             admin_rpc_enabled: self.admin_rpc_enabled(),
             admin_rpc_private_listener: self.admin_rpc_private_listener,
             public_rpc_admin_methods_enabled: self.public_rpc_admin_methods_enabled(),
@@ -1862,6 +1905,10 @@ impl RuntimeRpcState {
             rpc_max_active_connections: ops_status.rpc_max_active_connections,
             admin_rpc_max_active_connections: ops_status.admin_rpc_max_active_connections,
             sync_max_snapshot_response_bytes: ops_status.sync_max_snapshot_response_bytes,
+            rpc_client_identity_mode: ops_status.rpc_client_identity_mode,
+            rpc_client_identity_proxy_aware: ops_status.rpc_client_identity_proxy_aware,
+            rpc_trust_private_proxy_headers: ops_status.rpc_trust_private_proxy_headers,
+            rpc_trusted_proxy_count: ops_status.rpc_trusted_proxy_count,
             admin_rpc_enabled: ops_status.admin_rpc_enabled,
             admin_rpc_private_listener: ops_status.admin_rpc_private_listener,
             public_rpc_admin_methods_enabled: ops_status.public_rpc_admin_methods_enabled,
@@ -1939,6 +1986,11 @@ impl RuntimeRpcState {
             "admin_rpc_max_active_connections": status["admin_rpc_max_active_connections"],
             "sync_limits": self.sync_limits,
             "sync_max_snapshot_response_bytes": status["sync_max_snapshot_response_bytes"],
+            "rpc_client_identity": self.client_identity,
+            "rpc_client_identity_mode": status["rpc_client_identity_mode"],
+            "rpc_client_identity_proxy_aware": status["rpc_client_identity_proxy_aware"],
+            "rpc_trust_private_proxy_headers": status["rpc_trust_private_proxy_headers"],
+            "rpc_trusted_proxy_count": status["rpc_trusted_proxy_count"],
             "admin_rpc_enabled": self.admin_rpc_enabled(),
             "admin_rpc_private_listener": self.admin_rpc_private_listener,
             "public_rpc_admin_methods_enabled": self.public_rpc_admin_methods_enabled(),
@@ -2117,6 +2169,24 @@ impl RuntimeRpcState {
             "nebula_sync_max_snapshot_response_bytes",
             "Maximum accepted HTTP response size when fetching peer snapshots.",
             self.sync_limits.max_snapshot_response_bytes,
+        );
+        push_metric_bool(
+            &mut output,
+            "nebula_rpc_client_identity_proxy_aware",
+            "Whether public RPC rate limiting trusts configured reverse-proxy client identity headers.",
+            self.client_identity.proxy_aware(),
+        );
+        push_metric_bool(
+            &mut output,
+            "nebula_rpc_trust_private_proxy_headers",
+            "Whether public RPC trusts proxy client identity headers from loopback or private peers.",
+            self.client_identity.trust_private_proxy_headers,
+        );
+        push_metric(
+            &mut output,
+            "nebula_rpc_trusted_proxy_count",
+            "Explicit trusted reverse-proxy IPs allowed to supply public RPC client identity headers.",
+            self.client_identity.trusted_proxy_count(),
         );
         push_metric(
             &mut output,
@@ -2375,6 +2445,71 @@ impl RuntimeSyncLimits {
         Ok(Self {
             max_snapshot_response_bytes: options.max_snapshot_response_bytes,
         })
+    }
+}
+
+impl RuntimeClientIdentityConfig {
+    fn from_options(options: &RuntimeNodeOptions) -> Result<Self, String> {
+        let mut trusted_proxy_ips = Vec::new();
+        for input in &options.trusted_proxy_ips {
+            let normalized = input.trim();
+            if normalized.is_empty() {
+                return Err("trusted_proxy_ips must not contain empty entries".to_string());
+            }
+            let ip = IpAddr::from_str(normalized)
+                .map_err(|error| format!("trusted_proxy_ip {normalized} is invalid: {error}"))?;
+            if !trusted_proxy_ips.contains(&ip) {
+                trusted_proxy_ips.push(ip);
+            }
+        }
+        Ok(Self {
+            trust_private_proxy_headers: options.trust_private_proxy_headers,
+            trusted_proxy_ips,
+        })
+    }
+
+    fn proxy_aware(&self) -> bool {
+        self.trust_private_proxy_headers || !self.trusted_proxy_ips.is_empty()
+    }
+
+    fn public_launch_ready(&self) -> bool {
+        !self.trusted_proxy_ips.is_empty()
+    }
+
+    fn mode(&self) -> &'static str {
+        if self.public_launch_ready() {
+            "trusted-proxy"
+        } else if self.trust_private_proxy_headers {
+            "private-proxy-dev"
+        } else {
+            "tcp-peer"
+        }
+    }
+
+    fn trusted_proxy_count(&self) -> usize {
+        self.trusted_proxy_ips.len()
+    }
+
+    fn trusts_proxy_peer(&self, peer_ip: IpAddr) -> bool {
+        self.trusted_proxy_ips.contains(&peer_ip)
+            || (self.trust_private_proxy_headers && private_admin_bind_ip(peer_ip))
+    }
+
+    fn client_id_for_request(
+        &self,
+        access: RuntimeRpcAccess,
+        peer_ip: Option<IpAddr>,
+        headers: &str,
+    ) -> Result<String, String> {
+        let Some(peer_ip) = peer_ip else {
+            return Ok("unknown-peer".to_string());
+        };
+        if access == RuntimeRpcAccess::Public && self.trusts_proxy_peer(peer_ip) {
+            if let Some(client_ip) = proxy_client_ip_from_headers(headers)? {
+                return Ok(client_ip.to_string());
+            }
+        }
+        Ok(peer_ip.to_string())
     }
 }
 
@@ -3465,6 +3600,8 @@ pub fn serve_runtime_rpc_with_options(
 ) -> std::io::Result<()> {
     let rpc_limits = RuntimeRpcLimits::from_options(&options).map_err(std::io::Error::other)?;
     let sync_limits = RuntimeSyncLimits::from_options(&options).map_err(std::io::Error::other)?;
+    let client_identity =
+        RuntimeClientIdentityConfig::from_options(&options).map_err(std::io::Error::other)?;
     let admin_token =
         normalize_admin_token(options.admin_token.clone()).map_err(std::io::Error::other)?;
     let admin_rpc_bind_addr = options.admin_rpc_bind_addr.clone();
@@ -3499,6 +3636,7 @@ pub fn serve_runtime_rpc_with_options(
         storage,
         rpc_limits,
         sync_limits,
+        client_identity,
         connection_counters: RuntimeRpcConnectionCounters::default(),
         sync_peers,
         sync_telemetry: Arc::new(Mutex::new(BTreeMap::new())),
@@ -4058,21 +4196,7 @@ fn handle_http_connection(
     access: RuntimeRpcAccess,
 ) -> std::io::Result<()> {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(750)));
-    let client_id = stream
-        .peer_addr()
-        .map(|address| address.ip().to_string())
-        .unwrap_or_else(|_| "unknown-peer".to_string());
-    if let Err(error) = state.check_request_allowed(access, &client_id) {
-        write_json_response(
-            &mut stream,
-            429,
-            &json!({
-                "error": error,
-                "listener": access.label(),
-            }),
-        )?;
-        return Ok(());
-    }
+    let peer_ip = stream.peer_addr().ok().map(|address| address.ip());
 
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 4096];
@@ -4124,6 +4248,35 @@ fn handle_http_connection(
         )?;
         return Ok(());
     };
+    let client_id = match state
+        .client_identity
+        .client_id_for_request(access, peer_ip, head)
+    {
+        Ok(client_id) => client_id,
+        Err(error) => {
+            write_json_response(
+                &mut stream,
+                400,
+                &json!({
+                    "error": error,
+                    "listener": access.label(),
+                }),
+            )?;
+            return Ok(());
+        }
+    };
+    if let Err(error) = state.check_request_allowed(access, &client_id) {
+        write_json_response(
+            &mut stream,
+            429,
+            &json!({
+                "error": error,
+                "listener": access.label(),
+                "client_identity_mode": state.client_identity.mode(),
+            }),
+        )?;
+        return Ok(());
+    }
     let Some(request_line) = head.lines().next() else {
         write_json_response(&mut stream, 400, &json!({"error": "missing request line"}))?;
         return Ok(());
@@ -4579,6 +4732,90 @@ fn content_length_from_headers(headers: &str) -> Option<usize> {
                 .find_map(|line| line.strip_prefix("content-length:"))
         })
         .and_then(|value| value.trim().parse::<usize>().ok())
+}
+
+fn proxy_client_ip_from_headers(headers: &str) -> Result<Option<IpAddr>, String> {
+    let mut parsed = Vec::new();
+    for value in header_values(headers, "Forwarded") {
+        if value.contains(',') {
+            return Err(
+                "trusted proxy Forwarded header must contain exactly one client identity"
+                    .to_string(),
+            );
+        }
+        for element in std::iter::once(value) {
+            for parameter in element.split(';') {
+                let Some((name, value)) = parameter.split_once('=') else {
+                    continue;
+                };
+                if name.trim().eq_ignore_ascii_case("for") {
+                    parsed.push(parse_proxy_client_ip(value)?);
+                }
+            }
+        }
+    }
+    for value in header_values(headers, "X-Forwarded-For") {
+        if value.contains(',') {
+            return Err(
+                "trusted proxy X-Forwarded-For header must contain exactly one client identity"
+                    .to_string(),
+            );
+        }
+        parsed.push(parse_proxy_client_ip(value)?);
+    }
+    parsed.sort_unstable();
+    parsed.dedup();
+    match parsed.len() {
+        0 => Ok(None),
+        1 => Ok(parsed.into_iter().next()),
+        _ => Err("trusted proxy supplied ambiguous client identity headers".to_string()),
+    }
+}
+
+fn header_values<'a>(headers: &'a str, name: &str) -> Vec<&'a str> {
+    headers
+        .lines()
+        .filter_map(|line| {
+            let (header_name, value) = line.split_once(':')?;
+            header_name
+                .trim()
+                .eq_ignore_ascii_case(name)
+                .then_some(value.trim())
+        })
+        .collect()
+}
+
+fn parse_proxy_client_ip(input: &str) -> Result<IpAddr, String> {
+    let mut candidate = input.trim().trim_matches('"').trim();
+    if candidate.is_empty() {
+        return Err("trusted proxy client IP header must not be empty".to_string());
+    }
+    if candidate.eq_ignore_ascii_case("unknown") || candidate.starts_with('_') {
+        return Err(format!(
+            "trusted proxy client IP header {candidate} is not a valid IP address"
+        ));
+    }
+    if let Some(rest) = candidate.strip_prefix('[') {
+        let Some((inside, _after)) = rest.split_once(']') else {
+            return Err(format!(
+                "trusted proxy client IP header {candidate} has malformed IPv6 brackets"
+            ));
+        };
+        candidate = inside.trim();
+    }
+    if let Ok(ip) = IpAddr::from_str(candidate) {
+        return Ok(ip);
+    }
+    if let Some((host, _port)) = candidate.rsplit_once(':') {
+        if host.matches(':').count() == 0 {
+            if let Ok(ip) = Ipv4Addr::from_str(host.trim()) {
+                return Ok(IpAddr::V4(ip));
+            }
+        }
+    }
+    Err(format!(
+        "trusted proxy client IP header {candidate} is not a valid IP address"
+    ))
 }
 
 fn validate_transaction_shape(tx: &RuntimeTransaction) -> Result<(), String> {
@@ -5970,6 +6207,10 @@ fn ops_status_root(report: &RuntimeOpsStatus) -> String {
         "rpc_max_active_connections": report.rpc_max_active_connections,
         "admin_rpc_max_active_connections": report.admin_rpc_max_active_connections,
         "sync_max_snapshot_response_bytes": report.sync_max_snapshot_response_bytes,
+        "rpc_client_identity_mode": report.rpc_client_identity_mode,
+        "rpc_client_identity_proxy_aware": report.rpc_client_identity_proxy_aware,
+        "rpc_trust_private_proxy_headers": report.rpc_trust_private_proxy_headers,
+        "rpc_trusted_proxy_count": report.rpc_trusted_proxy_count,
         "admin_rpc_enabled": report.admin_rpc_enabled,
         "admin_rpc_private_listener": report.admin_rpc_private_listener,
         "public_rpc_admin_methods_enabled": report.public_rpc_admin_methods_enabled,
@@ -6068,6 +6309,10 @@ fn backup_manifest_root(manifest: &RuntimeBackupManifest) -> String {
         "rpc_max_active_connections": manifest.rpc_max_active_connections,
         "admin_rpc_max_active_connections": manifest.admin_rpc_max_active_connections,
         "sync_max_snapshot_response_bytes": manifest.sync_max_snapshot_response_bytes,
+        "rpc_client_identity_mode": manifest.rpc_client_identity_mode,
+        "rpc_client_identity_proxy_aware": manifest.rpc_client_identity_proxy_aware,
+        "rpc_trust_private_proxy_headers": manifest.rpc_trust_private_proxy_headers,
+        "rpc_trusted_proxy_count": manifest.rpc_trusted_proxy_count,
         "admin_rpc_enabled": manifest.admin_rpc_enabled,
         "admin_rpc_private_listener": manifest.admin_rpc_private_listener,
         "public_rpc_admin_methods_enabled": manifest.public_rpc_admin_methods_enabled,
@@ -6360,6 +6605,7 @@ mod tests {
             sync_limits: RuntimeSyncLimits {
                 max_snapshot_response_bytes: DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES,
             },
+            client_identity: RuntimeClientIdentityConfig::default(),
             connection_counters: RuntimeRpcConnectionCounters::default(),
             sync_peers: RuntimeSyncPeerSet::default(),
             sync_telemetry: Arc::new(Mutex::new(BTreeMap::new())),
@@ -6447,6 +6693,10 @@ mod tests {
     fn enable_private_admin_control(state: &mut RuntimeRpcState) {
         state.admin_token = Some("admin".to_string());
         state.admin_rpc_private_listener = true;
+        state
+            .client_identity
+            .trusted_proxy_ips
+            .push(IpAddr::V4(Ipv4Addr::LOCALHOST));
     }
 
     fn test_account_secret_key_hex() -> String {
@@ -6818,6 +7068,11 @@ mod tests {
             sync_limits.max_snapshot_response_bytes,
             DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
         );
+        let client_identity = RuntimeClientIdentityConfig::from_options(&options).unwrap();
+        assert_eq!(client_identity.mode(), "tcp-peer");
+        assert!(!client_identity.proxy_aware());
+        assert!(!client_identity.trust_private_proxy_headers);
+        assert_eq!(client_identity.trusted_proxy_count(), 0);
 
         let options = RuntimeNodeOptions {
             max_request_bytes: 0,
@@ -6859,9 +7114,108 @@ mod tests {
             .unwrap_err()
             .contains("max_snapshot_response_bytes"));
 
+        let options = RuntimeNodeOptions {
+            trusted_proxy_ips: vec!["not-an-ip".to_string()],
+            ..RuntimeNodeOptions::default()
+        };
+        assert!(RuntimeClientIdentityConfig::from_options(&options)
+            .unwrap_err()
+            .contains("trusted_proxy_ip"));
+
         assert!(normalize_admin_token(Some(String::new()))
             .unwrap_err()
             .contains("admin_token"));
+    }
+
+    #[test]
+    fn runtime_client_identity_trusts_only_configured_proxy_headers() {
+        let raw = RuntimeClientIdentityConfig::default();
+        let headers = "GET /status HTTP/1.1\r\nX-Forwarded-For: 203.0.113.7\r\n";
+        assert_eq!(
+            raw.client_id_for_request(
+                RuntimeRpcAccess::Public,
+                Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                headers,
+            )
+            .unwrap(),
+            "127.0.0.1"
+        );
+
+        let private_proxy = RuntimeClientIdentityConfig {
+            trust_private_proxy_headers: true,
+            trusted_proxy_ips: Vec::new(),
+        };
+        assert_eq!(
+            private_proxy
+                .client_id_for_request(
+                    RuntimeRpcAccess::Public,
+                    Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                    headers,
+                )
+                .unwrap(),
+            "203.0.113.7"
+        );
+        assert_eq!(
+            private_proxy
+                .client_id_for_request(
+                    RuntimeRpcAccess::Admin,
+                    Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                    headers,
+                )
+                .unwrap(),
+            "127.0.0.1"
+        );
+
+        let explicit_proxy = RuntimeClientIdentityConfig {
+            trust_private_proxy_headers: false,
+            trusted_proxy_ips: vec![IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10))],
+        };
+        let forwarded = "GET /status HTTP/1.1\r\nForwarded: for=\"[2001:db8::7]\";proto=https\r\n";
+        assert_eq!(
+            explicit_proxy
+                .client_id_for_request(
+                    RuntimeRpcAccess::Public,
+                    Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10))),
+                    forwarded,
+                )
+                .unwrap(),
+            "2001:db8::7"
+        );
+        assert!(explicit_proxy.public_launch_ready());
+        assert_eq!(
+            explicit_proxy
+                .client_id_for_request(
+                    RuntimeRpcAccess::Public,
+                    Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 11))),
+                    forwarded,
+                )
+                .unwrap(),
+            "198.51.100.11"
+        );
+        assert!(private_proxy
+            .client_id_for_request(
+                RuntimeRpcAccess::Public,
+                Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                "GET /status HTTP/1.1\r\nForwarded: for=unknown\r\n",
+            )
+            .unwrap_err()
+            .contains("valid IP address"));
+        assert!(private_proxy
+            .client_id_for_request(
+                RuntimeRpcAccess::Public,
+                Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                "GET /status HTTP/1.1\r\nX-Forwarded-For: 203.0.113.1, 203.0.113.2\r\n",
+            )
+            .unwrap_err()
+            .contains("exactly one client identity"));
+        assert!(private_proxy
+            .client_id_for_request(
+                RuntimeRpcAccess::Public,
+                Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                "GET /status HTTP/1.1\r\nForwarded: for=203.0.113.1\r\nX-Forwarded-For: 203.0.113.2\r\n",
+            )
+            .unwrap_err()
+            .contains("ambiguous client identity"));
     }
 
     #[test]
@@ -6967,6 +7321,10 @@ mod tests {
             status["sync_max_snapshot_response_bytes"],
             DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
         );
+        assert_eq!(status["rpc_client_identity_mode"], "tcp-peer");
+        assert_eq!(status["rpc_client_identity_proxy_aware"], false);
+        assert_eq!(status["rpc_trust_private_proxy_headers"], false);
+        assert_eq!(status["rpc_trusted_proxy_count"], 0);
         assert_eq!(status["admin_rpc_enabled"], false);
         assert_eq!(
             status["max_mempool_transactions"],
@@ -7036,6 +7394,11 @@ mod tests {
             dispatch_json_rpc_method(&state, "nebula_status", json!({})).unwrap()
                 ["sync_max_snapshot_response_bytes"],
             DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
+        );
+        assert_eq!(
+            dispatch_json_rpc_method(&state, "nebula_status", json!({})).unwrap()
+                ["rpc_client_identity_mode"],
+            "tcp-peer"
         );
         assert_eq!(
             dispatch_json_rpc_method(&state, "nebula_status", json!({})).unwrap()
@@ -7124,6 +7487,48 @@ mod tests {
     }
 
     #[test]
+    fn runtime_ops_status_requires_proxy_aware_public_client_identity() {
+        let dir = std::env::temp_dir().join(format!("nebula-runtime-proxy-identity-{}", unix_ms()));
+        let storage = RuntimeStorage::from_data_dir(&dir);
+        let mut runtime =
+            NebulaRuntime::new(runtime_config_with_launch_binding_and_disabled_nbla_faucet())
+                .unwrap();
+        rotate_runtime_off_default_dev_key(&mut runtime);
+        runtime.produce_block();
+        let snapshot = runtime.export_snapshot();
+        storage.save_snapshot(&snapshot).unwrap();
+        let mut state = test_rpc_state_with_limits(
+            runtime,
+            DEFAULT_MAX_REQUEST_BYTES,
+            DEFAULT_MAX_REQUESTS_PER_MINUTE,
+        );
+        state.storage = Some(storage);
+        state.admin_token = Some("admin".to_string());
+        state.admin_rpc_private_listener = true;
+
+        let ops = state.ops_status().unwrap();
+        assert!(!ops.public_ops_ready);
+        assert_eq!(ops.rpc_client_identity_mode, "tcp-peer");
+        assert!(!ops.rpc_client_identity_proxy_aware);
+        assert!(ops
+            .blocking_gaps
+            .contains(&"public-rpc-client-identity-not-proxy-aware".to_string()));
+
+        state
+            .client_identity
+            .trusted_proxy_ips
+            .push(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        let ops = state.ops_status().unwrap();
+        assert!(ops.public_ops_ready, "{:?}", ops.blocking_gaps);
+        assert_eq!(ops.rpc_client_identity_mode, "trusted-proxy");
+        assert!(ops.rpc_client_identity_proxy_aware);
+        assert!(!ops.rpc_trust_private_proxy_headers);
+        assert_eq!(ops.rpc_trusted_proxy_count, 1);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn runtime_ops_status_follower_requires_successful_peer_sync_evidence() {
         let sequencer_config = runtime_config_with_launch_binding_and_disabled_nbla_faucet();
         let mut sequencer = NebulaRuntime::new(sequencer_config.clone()).unwrap();
@@ -7148,6 +7553,10 @@ mod tests {
             sync_peer_urls: vec!["http://127.0.0.1:9945/snapshot".to_string()],
             sync_peer_quorum: DEFAULT_SYNC_PEER_QUORUM,
         };
+        state
+            .client_identity
+            .trusted_proxy_ips
+            .push(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
         let ops = state.ops_status().unwrap();
         assert!(!ops.public_ops_ready);
@@ -7335,6 +7744,10 @@ mod tests {
             ops.sync_max_snapshot_response_bytes,
             DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
         );
+        assert_eq!(ops.rpc_client_identity_mode, "trusted-proxy");
+        assert!(ops.rpc_client_identity_proxy_aware);
+        assert!(!ops.rpc_trust_private_proxy_headers);
+        assert_eq!(ops.rpc_trusted_proxy_count, 1);
         assert!(ops.admin_rpc_enabled);
         assert!(ops.admin_rpc_private_listener);
         assert!(!ops.public_rpc_admin_methods_enabled);
@@ -7376,6 +7789,10 @@ mod tests {
             manifest.sync_max_snapshot_response_bytes,
             DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
         );
+        assert_eq!(manifest.rpc_client_identity_mode, "trusted-proxy");
+        assert!(manifest.rpc_client_identity_proxy_aware);
+        assert!(!manifest.rpc_trust_private_proxy_headers);
+        assert_eq!(manifest.rpc_trusted_proxy_count, 1);
         assert!(manifest.admin_rpc_enabled);
         assert!(manifest.admin_rpc_private_listener);
         assert!(!manifest.public_rpc_admin_methods_enabled);
@@ -7416,6 +7833,8 @@ mod tests {
             rpc_ops["sync_max_snapshot_response_bytes"],
             DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
         );
+        assert_eq!(rpc_ops["rpc_client_identity_mode"], "trusted-proxy");
+        assert_eq!(rpc_ops["rpc_client_identity_proxy_aware"], true);
         let rpc_backup =
             dispatch_json_rpc_method(&state, "nebula_backupManifest", json!({})).unwrap();
         assert_eq!(rpc_backup["backup_root"].as_str().unwrap().len(), 64);
@@ -7439,6 +7858,8 @@ mod tests {
             rpc_backup["sync_max_snapshot_response_bytes"],
             DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
         );
+        assert_eq!(rpc_backup["rpc_client_identity_mode"], "trusted-proxy");
+        assert_eq!(rpc_backup["rpc_client_identity_proxy_aware"], true);
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -7504,6 +7925,10 @@ mod tests {
             health["sync_max_snapshot_response_bytes"],
             DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
         );
+        assert_eq!(health["rpc_client_identity_mode"], "trusted-proxy");
+        assert_eq!(health["rpc_client_identity_proxy_aware"], true);
+        assert_eq!(health["rpc_trust_private_proxy_headers"], false);
+        assert_eq!(health["rpc_trusted_proxy_count"], 1);
         assert_eq!(health["snapshot_persisted"], true);
         assert_eq!(health["storage_snapshot_matches_runtime"], true);
         assert_eq!(health["sync_peer_count"], status["sync_peer_count"]);
@@ -7747,6 +8172,9 @@ mod tests {
         assert!(metrics.contains(&format!(
             "nebula_sync_max_snapshot_response_bytes {DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES}"
         )));
+        assert!(metrics.contains("nebula_rpc_client_identity_proxy_aware 0"));
+        assert!(metrics.contains("nebula_rpc_trust_private_proxy_headers 0"));
+        assert!(metrics.contains("nebula_rpc_trusted_proxy_count 0"));
         assert!(metrics.contains("nebula_sync_peer_count 0"));
         assert!(metrics.contains("nebula_sync_peer_quorum 1"));
         assert!(metrics.contains("nebula_sync_quorum_met 0"));
