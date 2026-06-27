@@ -6937,6 +6937,8 @@ mod tests {
         let evidence = crate::build_runtime_surface_evidence_json_pretty(
             crate::RuntimeSurfaceEvidenceBuildInput {
                 endpoint_url: "https://public.testnet.nebula.example/status".to_string(),
+                capture_mode: crate::RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT
+                    .to_string(),
                 captured_at_unix_ms: unix_ms(),
                 health_json: health.to_string(),
                 status_json: status.to_string(),
@@ -7012,6 +7014,8 @@ mod tests {
         let error = crate::build_runtime_surface_evidence_json_pretty(
             crate::RuntimeSurfaceEvidenceBuildInput {
                 endpoint_url: "https://public.testnet.nebula.example/status".to_string(),
+                capture_mode: crate::RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT
+                    .to_string(),
                 captured_at_unix_ms: unix_ms(),
                 health_json: health.to_string(),
                 status_json: status.to_string(),

@@ -176,6 +176,8 @@ fn main() {
         build_public_testnet_launch_certificate(&args, wants_json);
     } else if let Some(path) = arg_value(&args, "--verify-public-testnet-launch-certificate") {
         verify_public_testnet_launch_certificate(path, &args, wants_json);
+    } else if let Some(path) = arg_value(&args, "--verify-public-testnet-launch-readiness") {
+        verify_public_testnet_launch_readiness(path, &args, wants_json);
     } else if wants_json || wants_readiness {
         println!("{}", nebula_testnet::readiness_json_pretty());
     } else {
@@ -702,6 +704,8 @@ fn build_runtime_surface_evidence(args: &[String], wants_json: bool) {
     };
     let input = nebula_testnet::RuntimeSurfaceEvidenceBuildInput {
         endpoint_url: endpoint_url.to_string(),
+        capture_mode: nebula_testnet::RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT
+            .to_string(),
         captured_at_unix_ms: parse_u128_arg(args, "--captured-at-unix-ms", current_unix_ms()),
         health_json: read_required_runtime_surface_input(args, "--health", wants_json),
         status_json: read_required_runtime_surface_input(args, "--status", wants_json),
@@ -2184,6 +2188,64 @@ fn verify_public_testnet_launch_certificate(path: &str, args: &[String], wants_j
     }
 }
 
+fn verify_public_testnet_launch_readiness(path: &str, args: &[String], wants_json: bool) {
+    let certificate_input = match read_text_file(path) {
+        Ok(input) => input,
+        Err(error) => {
+            print_public_testnet_launch_readiness_error(wants_json, &[error]);
+            process::exit(1);
+        }
+    };
+    let public_observer_confirmation_input =
+        read_public_observer_confirmation_input(args, wants_json);
+    let runtime_surface_evidence_input = read_runtime_surface_evidence_input(args, wants_json);
+    let operator_join_confirmation_input = read_operator_join_confirmation_input(args, wants_json);
+    let join_input = read_validator_join_input(args, wants_json);
+    let activation_input = read_validator_activation_input(args, wants_json);
+    let bundle_input = read_launch_package_bundle_input(args, wants_json);
+    let inputs = read_launch_package_inputs(args, wants_json);
+
+    match nebula_testnet::verify_public_testnet_launch_readiness_jsons(
+        &certificate_input,
+        &public_observer_confirmation_input,
+        &runtime_surface_evidence_input,
+        &operator_join_confirmation_input,
+        &join_input,
+        &activation_input,
+        &bundle_input,
+        &inputs.deployment_input,
+        &inputs.public_status_input,
+        &inputs.public_probe_input,
+        &inputs.validator_set_input,
+        &inputs.operator_handoff_input,
+        &inputs.operator_acceptance_input,
+        &inputs.genesis_input,
+    ) {
+        Ok(report) => {
+            if wants_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report)
+                        .expect("public testnet launch readiness report serializes")
+                );
+            } else {
+                println!(
+                    "Public testnet launch readiness verified at {}.",
+                    report.public_launch_readiness_root
+                );
+            }
+        }
+        Err(nebula_testnet::AttestationError::MalformedJson(error)) => {
+            print_public_testnet_launch_readiness_error(wants_json, &[error]);
+            process::exit(1);
+        }
+        Err(nebula_testnet::AttestationError::Invalid(errors)) => {
+            print_public_testnet_launch_readiness_error(wants_json, &errors);
+            process::exit(1);
+        }
+    }
+}
+
 fn build_genesis_manifest(args: &[String], wants_json: bool) {
     let Some(deployment_path) = arg_value(args, "--deployment-attestation") else {
         print_genesis_manifest_error(
@@ -2880,6 +2942,24 @@ fn print_public_testnet_launch_certificate_error(wants_json: bool, errors: &[Str
     }
 }
 
+fn print_public_testnet_launch_readiness_error(wants_json: bool, errors: &[String]) {
+    if wants_json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "public_launch_ready": false,
+                "level": "public-testnet-launch-readiness-rejected",
+                "errors": errors,
+            })
+        );
+    } else {
+        eprintln!("Public testnet launch readiness rejected:");
+        for error in errors {
+            eprintln!("- {error}");
+        }
+    }
+}
+
 fn print_help() {
     println!(
         "nebula-testnet\n\nUSAGE:\n    nebula-testnet [--mainnet-readiness] [--json]\n    nebula-testnet --prove-local-public-testnet [--json]\n    nebula-testnet --prove-live-rpc-devnet [--json]\n    nebula-testnet --run-rpc [--sequencer|--follower] [--rpc-bind <addr:port>] [--admin-rpc-bind <addr:port>] [--block-ms <ms>] [--validator-id <id>] [--sequencer-public-key <hex>] [--sequencer-secret-key <hex>] [--admin-token <token>] [--data-dir <path>] [--bootstrap-rpc <url>] [--sync-rpc <url>]... [--sync-peer-quorum <count>] [--max-mempool-transactions <count>] [--max-request-bytes <bytes>] [--max-requests-per-minute <count>]\n    nebula-testnet --build-public-status --endpoint-url <url> [--artifact-sha3-256 <hex>] [--cargo-lock-sha3-256 <hex>]\n    nebula-testnet --build-public-probe --endpoint-url <url> [--artifact-sha3-256 <hex>] [--cargo-lock-sha3-256 <hex>]\n    nebula-testnet --build-runtime-surface-evidence --endpoint-url <url> --health <path> --status <path> --snapshot <path> --ops <path> --backup <path> --rpc-status <path> --rpc-ops-status <path> --rpc-backup-manifest <path> --metrics <path> [--captured-at-unix-ms <ms>]\n    nebula-testnet --verify-runtime-surface-evidence <path> [--json]\n    nebula-testnet --build-deployment-attestation --public-status <path> --public-probe <path> --preflight-receipt <path> --runbook-receipt <path> --tls-pin <cert_sha256,public_key_sha256,not_after_unix_ms>... --bootstrap-node <node_id,operator_id,region,endpoint>... --operator <operator_id,region,public_key>... --observer <observer_id,region,public_key>... --rollback-plan-sha3-256 <hex> --rollback-recovery-root <hex> [--rollback-last-drill-unix-ms <ms>] [--generated-at-unix-ms <ms>] [--expires-at-unix-ms <ms>] [--artifact-sha3-256 <hex>] [--cargo-lock-sha3-256 <hex>]\n    nebula-testnet --sample-public-status\n    nebula-testnet --verify-public-status <path> [--json]\n    nebula-testnet --sample-public-probe\n    nebula-testnet --verify-public-probe <path> [--json]\n    nebula-testnet --sample-preflight-receipt\n    nebula-testnet --verify-preflight-receipt <path> [--json]\n    nebula-testnet --sample-runbook-receipt\n    nebula-testnet --verify-runbook-receipt <path> [--json]\n    nebula-testnet --sample-deployment-attestation\n    nebula-testnet --verify-deployment-attestation <path> [--json]\n    nebula-testnet --sample-validator-set\n    nebula-testnet --verify-validator-set <path> [--json]\n    nebula-testnet --sample-operator-handoff\n    nebula-testnet --build-operator-handoff --deployment-attestation <path> --validator-set <path>\n    nebula-testnet --verify-operator-handoff <path> --deployment-attestation <path> --validator-set <path> [--json]\n    nebula-testnet --sample-operator-acceptance\n    nebula-testnet --build-operator-acceptance --operator-handoff <path> --deployment-attestation <path> --validator-set <path>\n    nebula-testnet --verify-operator-acceptance <path> --operator-handoff <path> --deployment-attestation <path> --validator-set <path> [--json]\n    nebula-testnet --sample-genesis-manifest\n    nebula-testnet --build-genesis-manifest --deployment-attestation <path> --validator-set <path>\n    nebula-testnet --verify-genesis-manifest <path> [--json]\n    nebula-testnet --verify-launch-package --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]\n    nebula-testnet --build-launch-package-bundle --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>\n    nebula-testnet --verify-launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]\n    nebula-testnet --build-validator-activation --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>\n    nebula-testnet --verify-validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]
@@ -2896,6 +2976,13 @@ fn print_help() {
     nebula-testnet --verify-public-observer-confirmation <path> --operator-join-confirmation <path> --validator-join <path> --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]
     nebula-testnet --build-public-testnet-launch-certificate --public-observer-confirmation <path> --runtime-surface-evidence <path> --operator-join-confirmation <path> --validator-join <path> --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>
     nebula-testnet --verify-public-testnet-launch-certificate <path> --public-observer-confirmation <path> --runtime-surface-evidence <path> --operator-join-confirmation <path> --validator-join <path> --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]
+    nebula-testnet --verify-public-testnet-launch-readiness <path> --public-observer-confirmation <path> --runtime-surface-evidence <path> --operator-join-confirmation <path> --validator-join <path> --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]
+
+FINAL PUBLIC LAUNCH READINESS:
+    --verify-public-testnet-launch-readiness is the only artifact-bound gate
+    that emits public_launch_ready=true. It requires the final launch
+    certificate plus external-public runtime-surface evidence captured from the
+    advertised endpoint.
 
 LOCAL PUBLIC TESTNET REHEARSAL:
     --prove-local-public-testnet builds and verifies a coherent local launch

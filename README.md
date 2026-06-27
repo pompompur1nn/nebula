@@ -262,14 +262,19 @@ evidence is absent or stale.
     status, public probe, runtime-surface evidence, validator set, genesis,
     endpoint URL, and validator, operator, observer, and region counts into one
     candidate root.
-21. Open the public launch gate only after the signed launch package, verified
+21. Verify final public launch readiness with external-public runtime-surface
+    evidence captured from the advertised endpoint. This is the only
+    artifact-bound command allowed to emit `public_launch_ready=true`; loopback
+    devnet runtime-surface evidence remains a rehearsal/certificate input and is
+    rejected by the final readiness gate.
+22. Open the public launch gate only after the signed launch package, verified
     launch-package bundle, Base-style sequencer/follower rehearsal evidence,
     verified snapshots, and launch-candidate certificate all bind to the same
     deployment, public-surface, validator, genesis, and fee-policy roots.
-22. Run the economics trial with `NBLA` gas, `nXMR` gas, nXMR-funded NBLA
+23. Run the economics trial with `NBLA` gas, `nXMR` gas, nXMR-funded NBLA
     buybacks, NBLA backing, and validator-reward accounting at `0.001 XMR` per
     `NBLA`, while live-value policy stays disabled.
-23. Publish the remaining blocking evidence list. If any deployment, operator,
+24. Publish the remaining blocking evidence list. If any deployment, operator,
     validator, observer, sequencer/follower, snapshot, ops/backup, bridge
     custody, key-rotation/accountability, certificate, or economics evidence is
     missing, mismatched, unsigned, signed by an unexpected sequencer key, or
@@ -527,6 +532,10 @@ cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet 
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-runtime-surface-evidence /tmp/nebula-runtime-surface.json --json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-public-testnet-launch-certificate --public-observer-confirmation /tmp/nebula-public-observer-confirmation.json --runtime-surface-evidence /tmp/nebula-runtime-surface.json --operator-join-confirmation /tmp/nebula-operator-join-confirmation.json --validator-join /tmp/nebula-validator-join.json --validator-activation /tmp/nebula-validator-activation.json --launch-package-bundle /tmp/nebula-launch-package-bundle.json --deployment-attestation /tmp/nebula-attestation.json --public-status /tmp/nebula-public-status.json --public-probe /tmp/nebula-public-probe.json --validator-set /tmp/nebula-validator-set.json --operator-handoff /tmp/nebula-operator-handoff.json --operator-acceptance /tmp/nebula-operator-acceptance.json --genesis-manifest /tmp/nebula-genesis.json > /tmp/nebula-public-testnet-launch-certificate.json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-testnet-launch-certificate /tmp/nebula-public-testnet-launch-certificate.json --public-observer-confirmation /tmp/nebula-public-observer-confirmation.json --runtime-surface-evidence /tmp/nebula-runtime-surface.json --operator-join-confirmation /tmp/nebula-operator-join-confirmation.json --validator-join /tmp/nebula-validator-join.json --validator-activation /tmp/nebula-validator-activation.json --launch-package-bundle /tmp/nebula-launch-package-bundle.json --deployment-attestation /tmp/nebula-attestation.json --public-status /tmp/nebula-public-status.json --public-probe /tmp/nebula-public-probe.json --validator-set /tmp/nebula-validator-set.json --operator-handoff /tmp/nebula-operator-handoff.json --operator-acceptance /tmp/nebula-operator-acceptance.json --genesis-manifest /tmp/nebula-genesis.json --json
+# Real public launch only: first rebuild /tmp/nebula-public-testnet-launch-certificate.json
+# with --runtime-surface-evidence /tmp/nebula-external-runtime-surface.json, then verify
+# the final ready gate. Loopback devnet evidence is expected to fail this gate.
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-testnet-launch-readiness /tmp/nebula-public-testnet-launch-certificate.json --public-observer-confirmation /tmp/nebula-public-observer-confirmation.json --runtime-surface-evidence /tmp/nebula-external-runtime-surface.json --operator-join-confirmation /tmp/nebula-operator-join-confirmation.json --validator-join /tmp/nebula-validator-join.json --validator-activation /tmp/nebula-validator-activation.json --launch-package-bundle /tmp/nebula-launch-package-bundle.json --deployment-attestation /tmp/nebula-attestation.json --public-status /tmp/nebula-public-status.json --public-probe /tmp/nebula-public-probe.json --validator-set /tmp/nebula-validator-set.json --operator-handoff /tmp/nebula-operator-handoff.json --operator-acceptance /tmp/nebula-operator-acceptance.json --genesis-manifest /tmp/nebula-genesis.json --json
 cmp docs/NEBULA_LAYER2.md README.md
 ```
 
@@ -1075,6 +1084,10 @@ cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet 
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-runtime-surface-evidence /tmp/nebula-runtime-surface.json --json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-public-testnet-launch-certificate --public-observer-confirmation /tmp/nebula-public-observer-confirmation.json --runtime-surface-evidence /tmp/nebula-runtime-surface.json --operator-join-confirmation /tmp/nebula-operator-join-confirmation.json --validator-join /tmp/nebula-validator-join.json --validator-activation /tmp/nebula-validator-activation.json --launch-package-bundle /tmp/nebula-launch-package-bundle.json --deployment-attestation /tmp/nebula-attestation.json --public-status /tmp/nebula-public-status.json --public-probe /tmp/nebula-public-probe.json --validator-set /tmp/nebula-validator-set.json --operator-handoff /tmp/nebula-operator-handoff.json --operator-acceptance /tmp/nebula-operator-acceptance.json --genesis-manifest /tmp/nebula-genesis.json > /tmp/nebula-public-testnet-launch-certificate.json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-testnet-launch-certificate /tmp/nebula-public-testnet-launch-certificate.json --public-observer-confirmation /tmp/nebula-public-observer-confirmation.json --runtime-surface-evidence /tmp/nebula-runtime-surface.json --operator-join-confirmation /tmp/nebula-operator-join-confirmation.json --validator-join /tmp/nebula-validator-join.json --validator-activation /tmp/nebula-validator-activation.json --launch-package-bundle /tmp/nebula-launch-package-bundle.json --deployment-attestation /tmp/nebula-attestation.json --public-status /tmp/nebula-public-status.json --public-probe /tmp/nebula-public-probe.json --validator-set /tmp/nebula-validator-set.json --operator-handoff /tmp/nebula-operator-handoff.json --operator-acceptance /tmp/nebula-operator-acceptance.json --genesis-manifest /tmp/nebula-genesis.json --json
+# Real public launch only: first rebuild /tmp/nebula-public-testnet-launch-certificate.json
+# with --runtime-surface-evidence /tmp/nebula-external-runtime-surface.json, then verify
+# the final ready gate. Loopback devnet evidence is expected to fail this gate.
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-testnet-launch-readiness /tmp/nebula-public-testnet-launch-certificate.json --public-observer-confirmation /tmp/nebula-public-observer-confirmation.json --runtime-surface-evidence /tmp/nebula-external-runtime-surface.json --operator-join-confirmation /tmp/nebula-operator-join-confirmation.json --validator-join /tmp/nebula-validator-join.json --validator-activation /tmp/nebula-validator-activation.json --launch-package-bundle /tmp/nebula-launch-package-bundle.json --deployment-attestation /tmp/nebula-attestation.json --public-status /tmp/nebula-public-status.json --public-probe /tmp/nebula-public-probe.json --validator-set /tmp/nebula-validator-set.json --operator-handoff /tmp/nebula-operator-handoff.json --operator-acceptance /tmp/nebula-operator-acceptance.json --genesis-manifest /tmp/nebula-genesis.json --json
 ```
 
 ## License

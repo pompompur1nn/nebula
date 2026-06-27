@@ -14,7 +14,7 @@ use nebula_testnet::{
     sample_deployment_attestation_json_pretty, sample_public_probe_json_pretty,
     sample_public_status_manifest_json_pretty, sample_validator_set_json_pretty,
     verify_runtime_surface_evidence_json, AttestationError, RuntimeSurfaceEvidenceBuildInput,
-    CHAIN_ID, NBLA_SYMBOL, NXMR_SYMBOL,
+    CHAIN_ID, NBLA_SYMBOL, NXMR_SYMBOL, RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET,
 };
 use serde_json::{json, Value};
 use std::{
@@ -778,6 +778,7 @@ fn capture_runtime_surface_evidence(rpc_addr: &str, endpoint_url: &str) -> Resul
 
     let evidence = build_runtime_surface_evidence_json_pretty(RuntimeSurfaceEvidenceBuildInput {
         endpoint_url: endpoint_url.to_string(),
+        capture_mode: RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET.to_string(),
         captured_at_unix_ms: current_unix_ms(),
         health_json: health.to_string(),
         status_json: status.to_string(),

@@ -17,6 +17,8 @@ pub const VERSION: &str = "nebula-testnet-runner/0.2.0";
 pub const CHAIN_ID: &str = "nebula-private-l2-testnet";
 pub const PUBLIC_LAUNCH_BLOCKER: &str = "public-launch-deployment-attestation";
 pub const PUBLIC_TESTNET_BUNDLE_ID: &str = "nebula-public-testnet-bundle-1";
+pub const RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT: &str = "external-public-endpoint";
+pub const RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET: &str = "loopback-devnet";
 pub const NBLA_SYMBOL: &str = "NBLA";
 pub const NXMR_SYMBOL: &str = "nXMR";
 pub const NEBULAI_UNIT: &str = "nebulai";
@@ -299,6 +301,7 @@ pub struct DeploymentAttestationReport {
     pub public_launch_ready: bool,
     pub level: &'static str,
     pub evidence_root: String,
+    pub endpoint_url: String,
     pub witness_evidence_root: String,
     pub public_surface_root: String,
     pub operator_approval_root: String,
@@ -719,6 +722,7 @@ pub struct PublicTestnetLaunchCertificateReport {
     pub level: &'static str,
     pub public_testnet_launch_certificate_root: String,
     pub launch_package_bundle_root: String,
+    pub launch_package_root: String,
     pub validator_activation_root: String,
     pub validator_join_root: String,
     pub operator_join_confirmation_root: String,
@@ -726,12 +730,44 @@ pub struct PublicTestnetLaunchCertificateReport {
     pub public_status_manifest_root: String,
     pub public_probe_root: String,
     pub runtime_surface_root: String,
+    pub validator_set_root: String,
+    pub genesis_root: String,
     pub endpoint_url: String,
     pub validator_count: usize,
     pub operator_count: usize,
     pub observer_count: usize,
     pub region_count: usize,
     pub certified_at_unix_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PublicTestnetLaunchReadinessReport {
+    pub public_launch_ready: bool,
+    pub level: &'static str,
+    pub blocking_gaps: Vec<String>,
+    pub satisfied_attestation: &'static str,
+    pub public_launch_readiness_root: String,
+    pub public_testnet_launch_certificate_root: String,
+    pub deployment_attestation_root: String,
+    pub launch_package_bundle_root: String,
+    pub launch_package_root: String,
+    pub validator_activation_root: String,
+    pub validator_join_root: String,
+    pub operator_join_confirmation_root: String,
+    pub public_observer_confirmation_root: String,
+    pub public_status_manifest_root: String,
+    pub public_probe_root: String,
+    pub runtime_surface_root: String,
+    pub runtime_surface_capture_mode: String,
+    pub validator_set_root: String,
+    pub genesis_root: String,
+    pub endpoint_url: String,
+    pub validator_count: usize,
+    pub operator_count: usize,
+    pub observer_count: usize,
+    pub region_count: usize,
+    pub certified_at_unix_ms: u128,
+    pub generated_at_unix_ms: u128,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -908,6 +944,7 @@ pub struct RuntimeSurfaceEvidence {
     pub chain_id: String,
     pub runtime_version: String,
     pub endpoint_url: String,
+    pub capture_mode: String,
     pub captured_at_unix_ms: u128,
     pub health: Value,
     pub status: Value,
@@ -924,6 +961,7 @@ pub struct RuntimeSurfaceEvidence {
 #[derive(Debug, Clone)]
 pub struct RuntimeSurfaceEvidenceBuildInput {
     pub endpoint_url: String,
+    pub capture_mode: String,
     pub captured_at_unix_ms: u128,
     pub health_json: String,
     pub status_json: String,
@@ -942,6 +980,7 @@ pub struct RuntimeSurfaceEvidenceReport {
     pub level: &'static str,
     pub runtime_surface_root: String,
     pub endpoint_url: String,
+    pub capture_mode: String,
     pub chain_id: String,
     pub runtime_version: String,
     pub launch_package_bundle_root: String,
@@ -2698,6 +2737,7 @@ pub fn build_runtime_surface_evidence_json_pretty(
         chain_id,
         runtime_version,
         endpoint_url: input.endpoint_url,
+        capture_mode: input.capture_mode,
         captured_at_unix_ms: input.captured_at_unix_ms,
         health: parse_json_value(&input.health_json, "health")?,
         status,
@@ -2751,6 +2791,13 @@ fn verify_runtime_surface_evidence(
         &evidence.runtime_version,
         VERSION,
     );
+    match evidence.capture_mode.as_str() {
+        RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT
+        | RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET => {}
+        _ => errors.push(format!(
+            "runtime_surface.capture_mode must be {RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT} or {RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET}"
+        )),
+    }
     if let Some(launch_endpoint_url) = evidence
         .status
         .get("launch_endpoint_url")
@@ -2921,6 +2968,7 @@ fn verify_runtime_surface_evidence(
         level: "runtime-surface-attested",
         runtime_surface_root: evidence.root.clone(),
         endpoint_url: evidence.endpoint_url.clone(),
+        capture_mode: evidence.capture_mode.clone(),
         chain_id: evidence.chain_id.clone(),
         runtime_version: evidence.runtime_version.clone(),
         launch_package_bundle_root: launch_package_bundle_root
@@ -5502,6 +5550,7 @@ pub fn verify_public_testnet_launch_certificate_jsons(
         level: "public-testnet-launch-candidate-certified",
         public_testnet_launch_certificate_root: certificate.root,
         launch_package_bundle_root: certificate.launch_package_bundle_root,
+        launch_package_root: certificate.launch_package_root,
         validator_activation_root: certificate.validator_activation_root,
         validator_join_root: certificate.validator_join_root,
         operator_join_confirmation_root: certificate.operator_join_confirmation_root,
@@ -5509,6 +5558,8 @@ pub fn verify_public_testnet_launch_certificate_jsons(
         public_status_manifest_root: certificate.public_status_manifest_root,
         public_probe_root: certificate.public_probe_root,
         runtime_surface_root: certificate.runtime_surface_root,
+        validator_set_root: certificate.validator_set_root,
+        genesis_root: certificate.genesis_root,
         endpoint_url: certificate.endpoint_url,
         validator_count: certificate.validator_count,
         operator_count: certificate.operator_count,
@@ -5516,6 +5567,115 @@ pub fn verify_public_testnet_launch_certificate_jsons(
         region_count: certificate.region_count,
         certified_at_unix_ms: certificate.certified_at_unix_ms,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn verify_public_testnet_launch_readiness_jsons(
+    public_testnet_launch_certificate_json: &str,
+    public_observer_confirmation_json: &str,
+    runtime_surface_evidence_json: &str,
+    operator_join_confirmation_json: &str,
+    validator_join_receipt_json: &str,
+    validator_activation_json: &str,
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<PublicTestnetLaunchReadinessReport, AttestationError> {
+    let certificate = verify_public_testnet_launch_certificate_jsons(
+        public_testnet_launch_certificate_json,
+        public_observer_confirmation_json,
+        runtime_surface_evidence_json,
+        operator_join_confirmation_json,
+        validator_join_receipt_json,
+        validator_activation_json,
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let runtime_surface = verify_runtime_surface_evidence_json(runtime_surface_evidence_json)?;
+    let deployment = verify_deployment_attestation_json(deployment_attestation_json)?;
+    let mut errors = Vec::new();
+
+    if !certificate.public_testnet_launch_certificate_ready {
+        errors.push("public testnet launch certificate is not ready".to_string());
+    }
+    if !deployment.public_launch_ready {
+        errors.push("deployment attestation is not public-launch ready".to_string());
+    }
+    require_eq(
+        &mut errors,
+        "deployment.endpoint_url",
+        &certificate.endpoint_url,
+        &deployment.endpoint_url,
+    );
+    require_eq(
+        &mut errors,
+        "runtime_surface.capture_mode",
+        &runtime_surface.capture_mode,
+        RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT,
+    );
+    if certificate.operator_count < MIN_PUBLIC_TESTNET_OPERATORS {
+        errors.push(format!(
+            "operator_count must be at least {MIN_PUBLIC_TESTNET_OPERATORS}"
+        ));
+    }
+    if certificate.observer_count < MIN_PUBLIC_TESTNET_OBSERVERS {
+        errors.push(format!(
+            "observer_count must be at least {MIN_PUBLIC_TESTNET_OBSERVERS}"
+        ));
+    }
+    if certificate.region_count < MIN_PUBLIC_TESTNET_REGIONS {
+        errors.push(format!(
+            "region_count must be at least {MIN_PUBLIC_TESTNET_REGIONS}"
+        ));
+    }
+
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    let mut report = PublicTestnetLaunchReadinessReport {
+        public_launch_ready: true,
+        level: "public-testnet-launch-ready",
+        blocking_gaps: Vec::new(),
+        satisfied_attestation:
+            "operator-signed public endpoint, runtime surface, observer, rollback, and launch certificate evidence",
+        public_launch_readiness_root: String::new(),
+        public_testnet_launch_certificate_root: certificate.public_testnet_launch_certificate_root,
+        deployment_attestation_root: deployment.evidence_root,
+        launch_package_bundle_root: certificate.launch_package_bundle_root,
+        launch_package_root: certificate.launch_package_root,
+        validator_activation_root: certificate.validator_activation_root,
+        validator_join_root: certificate.validator_join_root,
+        operator_join_confirmation_root: certificate.operator_join_confirmation_root,
+        public_observer_confirmation_root: certificate.public_observer_confirmation_root,
+        public_status_manifest_root: certificate.public_status_manifest_root,
+        public_probe_root: certificate.public_probe_root,
+        runtime_surface_root: certificate.runtime_surface_root,
+        runtime_surface_capture_mode: runtime_surface.capture_mode,
+        validator_set_root: certificate.validator_set_root,
+        genesis_root: certificate.genesis_root,
+        endpoint_url: certificate.endpoint_url,
+        validator_count: certificate.validator_count,
+        operator_count: certificate.operator_count,
+        observer_count: certificate.observer_count,
+        region_count: certificate.region_count,
+        certified_at_unix_ms: certificate.certified_at_unix_ms,
+        generated_at_unix_ms: unix_ms(),
+    };
+    report.public_launch_readiness_root = public_testnet_launch_readiness_root(&report);
+
+    Ok(report)
 }
 
 pub fn verify_deployment_attestation_json(
@@ -5661,6 +5821,7 @@ pub fn verify_deployment_attestation_json(
         public_launch_ready: true,
         level: "public-launch-attested",
         evidence_root: stable_root(&value),
+        endpoint_url: attestation.public_endpoint.url.clone(),
         witness_evidence_root,
         public_surface_root: deployment_public_surface_root(&attestation),
         operator_approval_root: deployment_operator_approval_root(&attestation),
@@ -5899,6 +6060,7 @@ fn live_capture_runtime_surface_evidence(
     let evidence_json =
         build_runtime_surface_evidence_json_pretty(RuntimeSurfaceEvidenceBuildInput {
             endpoint_url: endpoint_url.to_string(),
+            capture_mode: RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET.to_string(),
             captured_at_unix_ms: unix_ms(),
             health_json: health.to_string(),
             status_json: status.to_string(),
@@ -6613,6 +6775,7 @@ fn runtime_surface_evidence_root(evidence: &RuntimeSurfaceEvidence) -> String {
         "chain_id": evidence.chain_id,
         "runtime_version": evidence.runtime_version,
         "endpoint_url": evidence.endpoint_url,
+        "capture_mode": evidence.capture_mode,
         "captured_at_unix_ms": evidence.captured_at_unix_ms,
         "health": evidence.health,
         "status": evidence.status,
@@ -10107,6 +10270,37 @@ fn public_testnet_launch_certificate_root(certificate: &PublicTestnetLaunchCerti
     }))
 }
 
+fn public_testnet_launch_readiness_root(report: &PublicTestnetLaunchReadinessReport) -> String {
+    stable_root(&json!({
+        "launch_readiness_domain": "nebula-public-testnet-launch-readiness-v1",
+        "level": report.level,
+        "public_launch_ready": report.public_launch_ready,
+        "blocking_gaps": report.blocking_gaps,
+        "satisfied_attestation": report.satisfied_attestation,
+        "public_testnet_launch_certificate_root": report.public_testnet_launch_certificate_root,
+        "deployment_attestation_root": report.deployment_attestation_root,
+        "launch_package_bundle_root": report.launch_package_bundle_root,
+        "launch_package_root": report.launch_package_root,
+        "validator_activation_root": report.validator_activation_root,
+        "validator_join_root": report.validator_join_root,
+        "operator_join_confirmation_root": report.operator_join_confirmation_root,
+        "public_observer_confirmation_root": report.public_observer_confirmation_root,
+        "public_status_manifest_root": report.public_status_manifest_root,
+        "public_probe_root": report.public_probe_root,
+        "runtime_surface_root": report.runtime_surface_root,
+        "runtime_surface_capture_mode": report.runtime_surface_capture_mode,
+        "validator_set_root": report.validator_set_root,
+        "genesis_root": report.genesis_root,
+        "endpoint_url": report.endpoint_url,
+        "validator_count": report.validator_count,
+        "operator_count": report.operator_count,
+        "observer_count": report.observer_count,
+        "region_count": report.region_count,
+        "certified_at_unix_ms": report.certified_at_unix_ms,
+        "generated_at_unix_ms": report.generated_at_unix_ms,
+    }))
+}
+
 fn genesis_manifest_root(manifest: &GenesisManifest) -> String {
     stable_root(&json!({
         "chain_id": manifest.chain_id,
@@ -10353,6 +10547,26 @@ fn unix_ms() -> u128 {
 #[cfg(test)]
 mod public_launch {
     use super::*;
+
+    fn external_public_runtime_surface_from(runtime_surface_json: &str) -> String {
+        let evidence = serde_json::from_str::<RuntimeSurfaceEvidence>(runtime_surface_json)
+            .expect("runtime surface evidence parses");
+        build_runtime_surface_evidence_json_pretty(RuntimeSurfaceEvidenceBuildInput {
+            endpoint_url: evidence.endpoint_url,
+            capture_mode: RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT.to_string(),
+            captured_at_unix_ms: unix_ms(),
+            health_json: evidence.health.to_string(),
+            status_json: evidence.status.to_string(),
+            snapshot_json: evidence.snapshot.to_string(),
+            ops_json: evidence.ops.to_string(),
+            backup_json: evidence.backup.to_string(),
+            rpc_status_json: evidence.rpc_status.to_string(),
+            rpc_ops_status_json: evidence.rpc_ops_status.to_string(),
+            rpc_backup_manifest_json: evidence.rpc_backup_manifest.to_string(),
+            metrics_text: evidence.metrics_text,
+        })
+        .expect("external public runtime surface evidence builds")
+    }
 
     #[test]
     fn public_launch_blocks_without_deployment_attestation() {
@@ -13585,6 +13799,96 @@ mod public_launch {
         assert_eq!(report.observer_count, 2);
         assert_eq!(report.region_count, 2);
         assert_eq!(report.endpoint_url, "https://testnet.nebula.example/status");
+
+        let loopback_ready_error = verify_public_testnet_launch_readiness_jsons(
+            &certificate,
+            &observer_confirmation,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+        match loopback_ready_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error
+                    == "runtime_surface.capture_mode expected external-public-endpoint but got loopback-devnet"
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let external_runtime_surface = external_public_runtime_surface_from(&runtime_surface);
+        let external_certificate = build_public_testnet_launch_certificate_json_pretty(
+            &observer_confirmation,
+            &external_runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let readiness = verify_public_testnet_launch_readiness_jsons(
+            &external_certificate,
+            &observer_confirmation,
+            &external_runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+
+        assert!(readiness.public_launch_ready);
+        assert_eq!(readiness.level, "public-testnet-launch-ready");
+        assert!(readiness.blocking_gaps.is_empty());
+        assert_eq!(
+            readiness.runtime_surface_capture_mode,
+            RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT
+        );
+        assert_eq!(readiness.public_launch_readiness_root.len(), 64);
+        assert_eq!(
+            readiness.public_testnet_launch_certificate_root,
+            verify_public_testnet_launch_certificate_jsons(
+                &external_certificate,
+                &observer_confirmation,
+                &external_runtime_surface,
+                &join_confirmation,
+                &join,
+                &activation,
+                &bundle,
+                &deployment,
+                &public_status,
+                &public_probe,
+                &validators,
+                &handoff,
+                &acceptance,
+                &genesis,
+            )
+            .unwrap()
+            .public_testnet_launch_certificate_root
+        );
     }
 
     #[test]

@@ -237,7 +237,18 @@ jobs:
           join_confirmation="$(mktemp)"
           observer_confirmation="$(mktemp)"
           runtime_surface="$(mktemp)"
+          external_runtime_surface="$(mktemp)"
+          external_launch_certificate="$(mktemp)"
           launch_certificate="$(mktemp)"
+          runtime_health="$(mktemp)"
+          runtime_status="$(mktemp)"
+          runtime_snapshot="$(mktemp)"
+          runtime_ops="$(mktemp)"
+          runtime_backup="$(mktemp)"
+          runtime_rpc_status="$(mktemp)"
+          runtime_rpc_ops_status="$(mktemp)"
+          runtime_rpc_backup_manifest="$(mktemp)"
+          runtime_metrics="$(mktemp)"
           cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-deployment-attestation > "$attestation"
           cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-status > "$public_status"
           cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-probe > "$public_probe"
@@ -258,9 +269,34 @@ jobs:
           observer_output="$(cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-observer-confirmation "$observer_confirmation" --operator-join-confirmation "$join_confirmation" --validator-join "$join_receipt" --validator-activation "$activation" --launch-package-bundle "$bundle" --deployment-attestation "$attestation" --public-status "$public_status" --public-probe "$public_probe" --validator-set "$validators" --operator-handoff "$handoff" --operator-acceptance "$acceptance" --genesis-manifest "$genesis" --json)"
           cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-live-rpc-devnet-runtime-surface --launch-package-bundle "$bundle" --deployment-attestation "$attestation" --public-status "$public_status" --public-probe "$public_probe" --validator-set "$validators" --operator-handoff "$handoff" --operator-acceptance "$acceptance" --genesis-manifest "$genesis" > "$runtime_surface"
           runtime_surface_output="$(cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-runtime-surface-evidence "$runtime_surface" --json)"
+          NEBULA_RUNTIME_SURFACE_FILE="$runtime_surface" NEBULA_RUNTIME_HEALTH_FILE="$runtime_health" NEBULA_RUNTIME_STATUS_FILE="$runtime_status" NEBULA_RUNTIME_SNAPSHOT_FILE="$runtime_snapshot" NEBULA_RUNTIME_OPS_FILE="$runtime_ops" NEBULA_RUNTIME_BACKUP_FILE="$runtime_backup" NEBULA_RUNTIME_RPC_STATUS_FILE="$runtime_rpc_status" NEBULA_RUNTIME_RPC_OPS_STATUS_FILE="$runtime_rpc_ops_status" NEBULA_RUNTIME_RPC_BACKUP_MANIFEST_FILE="$runtime_rpc_backup_manifest" NEBULA_RUNTIME_METRICS_FILE="$runtime_metrics" python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["NEBULA_RUNTIME_SURFACE_FILE"], encoding="utf-8") as handle:
+              evidence = json.load(handle)
+          for env_name, key in [
+              ("NEBULA_RUNTIME_HEALTH_FILE", "health"),
+              ("NEBULA_RUNTIME_STATUS_FILE", "status"),
+              ("NEBULA_RUNTIME_SNAPSHOT_FILE", "snapshot"),
+              ("NEBULA_RUNTIME_OPS_FILE", "ops"),
+              ("NEBULA_RUNTIME_BACKUP_FILE", "backup"),
+              ("NEBULA_RUNTIME_RPC_STATUS_FILE", "rpc_status"),
+              ("NEBULA_RUNTIME_RPC_OPS_STATUS_FILE", "rpc_ops_status"),
+              ("NEBULA_RUNTIME_RPC_BACKUP_MANIFEST_FILE", "rpc_backup_manifest"),
+          ]:
+              with open(os.environ[env_name], "w", encoding="utf-8") as handle:
+                  json.dump(evidence[key], handle, separators=(",", ":"))
+          with open(os.environ["NEBULA_RUNTIME_METRICS_FILE"], "w", encoding="utf-8") as handle:
+              handle.write(evidence["metrics_text"])
+          PY
+          cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-runtime-surface-evidence --endpoint-url "https://testnet.nebula.example/status" --health "$runtime_health" --status "$runtime_status" --snapshot "$runtime_snapshot" --ops "$runtime_ops" --backup "$runtime_backup" --rpc-status "$runtime_rpc_status" --rpc-ops-status "$runtime_rpc_ops_status" --rpc-backup-manifest "$runtime_rpc_backup_manifest" --metrics "$runtime_metrics" > "$external_runtime_surface"
+          external_runtime_surface_output="$(cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-runtime-surface-evidence "$external_runtime_surface" --json)"
           cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-public-testnet-launch-certificate --public-observer-confirmation "$observer_confirmation" --runtime-surface-evidence "$runtime_surface" --operator-join-confirmation "$join_confirmation" --validator-join "$join_receipt" --validator-activation "$activation" --launch-package-bundle "$bundle" --deployment-attestation "$attestation" --public-status "$public_status" --public-probe "$public_probe" --validator-set "$validators" --operator-handoff "$handoff" --operator-acceptance "$acceptance" --genesis-manifest "$genesis" > "$launch_certificate"
           certificate_output="$(cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-testnet-launch-certificate "$launch_certificate" --public-observer-confirmation "$observer_confirmation" --runtime-surface-evidence "$runtime_surface" --operator-join-confirmation "$join_confirmation" --validator-join "$join_receipt" --validator-activation "$activation" --launch-package-bundle "$bundle" --deployment-attestation "$attestation" --public-status "$public_status" --public-probe "$public_probe" --validator-set "$validators" --operator-handoff "$handoff" --operator-acceptance "$acceptance" --genesis-manifest "$genesis" --json)"
-          NEBULA_LAUNCH_PACKAGE_JSON="$output" NEBULA_LAUNCH_PACKAGE_BUNDLE_JSON="$bundle_output" NEBULA_VALIDATOR_ACTIVATION_JSON="$activation_output" NEBULA_VALIDATOR_JOIN_JSON="$join_output" NEBULA_OPERATOR_JOIN_CONFIRMATION_JSON="$confirmation_output" NEBULA_PUBLIC_OBSERVER_CONFIRMATION_JSON="$observer_output" NEBULA_RUNTIME_SURFACE_JSON="$runtime_surface_output" NEBULA_PUBLIC_TESTNET_LAUNCH_CERTIFICATE_JSON="$certificate_output" python3 - <<'PY'
+          cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-public-testnet-launch-certificate --public-observer-confirmation "$observer_confirmation" --runtime-surface-evidence "$external_runtime_surface" --operator-join-confirmation "$join_confirmation" --validator-join "$join_receipt" --validator-activation "$activation" --launch-package-bundle "$bundle" --deployment-attestation "$attestation" --public-status "$public_status" --public-probe "$public_probe" --validator-set "$validators" --operator-handoff "$handoff" --operator-acceptance "$acceptance" --genesis-manifest "$genesis" > "$external_launch_certificate"
+          readiness_output="$(cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-testnet-launch-readiness "$external_launch_certificate" --public-observer-confirmation "$observer_confirmation" --runtime-surface-evidence "$external_runtime_surface" --operator-join-confirmation "$join_confirmation" --validator-join "$join_receipt" --validator-activation "$activation" --launch-package-bundle "$bundle" --deployment-attestation "$attestation" --public-status "$public_status" --public-probe "$public_probe" --validator-set "$validators" --operator-handoff "$handoff" --operator-acceptance "$acceptance" --genesis-manifest "$genesis" --json)"
+          NEBULA_LAUNCH_PACKAGE_JSON="$output" NEBULA_LAUNCH_PACKAGE_BUNDLE_JSON="$bundle_output" NEBULA_VALIDATOR_ACTIVATION_JSON="$activation_output" NEBULA_VALIDATOR_JOIN_JSON="$join_output" NEBULA_OPERATOR_JOIN_CONFIRMATION_JSON="$confirmation_output" NEBULA_PUBLIC_OBSERVER_CONFIRMATION_JSON="$observer_output" NEBULA_RUNTIME_SURFACE_JSON="$runtime_surface_output" NEBULA_EXTERNAL_RUNTIME_SURFACE_JSON="$external_runtime_surface_output" NEBULA_PUBLIC_TESTNET_LAUNCH_CERTIFICATE_JSON="$certificate_output" NEBULA_PUBLIC_TESTNET_LAUNCH_READINESS_JSON="$readiness_output" python3 - <<'PY'
           import json
           import os
 
@@ -271,7 +307,9 @@ jobs:
           confirmation = json.loads(os.environ["NEBULA_OPERATOR_JOIN_CONFIRMATION_JSON"])
           observer = json.loads(os.environ["NEBULA_PUBLIC_OBSERVER_CONFIRMATION_JSON"])
           runtime_surface = json.loads(os.environ["NEBULA_RUNTIME_SURFACE_JSON"])
+          external_runtime_surface = json.loads(os.environ["NEBULA_EXTERNAL_RUNTIME_SURFACE_JSON"])
           certificate = json.loads(os.environ["NEBULA_PUBLIC_TESTNET_LAUNCH_CERTIFICATE_JSON"])
+          readiness = json.loads(os.environ["NEBULA_PUBLIC_TESTNET_LAUNCH_READINESS_JSON"])
           assert payload["launch_package_ready"] is True
           assert payload["level"] == "launch-package-attested"
           assert len(payload["deployment_attestation_root"]) == 64
@@ -333,11 +371,21 @@ jobs:
           assert observer["confirmed_region_count"] >= 2
           assert runtime_surface["runtime_surface_ready"] is True
           assert runtime_surface["level"] == "runtime-surface-attested"
+          assert runtime_surface["capture_mode"] == "loopback-devnet"
           assert len(runtime_surface["runtime_surface_root"]) == 64
           assert runtime_surface["endpoint_url"] == payload["endpoint_url"]
           assert runtime_surface["launch_package_bundle_root"] == bundle["launch_package_bundle_root"]
           assert runtime_surface["validator_set_root"] == payload["validator_set_root"]
           assert runtime_surface["genesis_root"] == payload["genesis_root"]
+          assert external_runtime_surface["runtime_surface_ready"] is True
+          assert external_runtime_surface["level"] == "runtime-surface-attested"
+          assert external_runtime_surface["capture_mode"] == "external-public-endpoint"
+          assert len(external_runtime_surface["runtime_surface_root"]) == 64
+          assert external_runtime_surface["runtime_surface_root"] != runtime_surface["runtime_surface_root"]
+          assert external_runtime_surface["endpoint_url"] == payload["endpoint_url"]
+          assert external_runtime_surface["launch_package_bundle_root"] == bundle["launch_package_bundle_root"]
+          assert external_runtime_surface["validator_set_root"] == payload["validator_set_root"]
+          assert external_runtime_surface["genesis_root"] == payload["genesis_root"]
           assert certificate["public_testnet_launch_certificate_ready"] is True
           assert certificate["level"] == "public-testnet-launch-candidate-certified"
           assert len(certificate["public_testnet_launch_certificate_root"]) == 64
@@ -354,6 +402,22 @@ jobs:
           assert certificate["operator_count"] == payload["matched_operator_count"]
           assert certificate["observer_count"] >= 2
           assert certificate["region_count"] >= 2
+          assert readiness["public_launch_ready"] is True
+          assert readiness["level"] == "public-testnet-launch-ready"
+          assert readiness["blocking_gaps"] == []
+          assert len(readiness["public_launch_readiness_root"]) == 64
+          assert readiness["runtime_surface_root"] == external_runtime_surface["runtime_surface_root"]
+          assert readiness["runtime_surface_capture_mode"] == "external-public-endpoint"
+          assert readiness["launch_package_bundle_root"] == bundle["launch_package_bundle_root"]
+          assert readiness["validator_activation_root"] == activation["validator_activation_root"]
+          assert readiness["validator_join_root"] == join["validator_join_root"]
+          assert readiness["operator_join_confirmation_root"] == confirmation["operator_join_confirmation_root"]
+          assert readiness["public_observer_confirmation_root"] == observer["public_observer_confirmation_root"]
+          assert readiness["endpoint_url"] == payload["endpoint_url"]
+          assert readiness["validator_count"] == payload["validator_count"]
+          assert readiness["operator_count"] == payload["matched_operator_count"]
+          assert readiness["observer_count"] >= 2
+          assert readiness["region_count"] >= 2
           PY
 
       - name: Verify Nebula guide mirror
