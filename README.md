@@ -704,6 +704,10 @@ Nebula testnet uses a hybrid fee policy:
   `HybridFeePolicy`; launch bindings, `/health`, `/status`, `/ops`, `/backup`,
   JSON-RPC mirrors, snapshots, runtime-surface evidence, and the launch
   certificate must all agree on it.
+- The canonical hybrid policy also carries `minimum_gas_price_nebulai`.
+  Launch-bound runtimes must configure `gas_price_nebulai` to that minimum,
+  fee quotes and transaction admission reject below-minimum gas prices, and
+  live runtime surfaces plus `/metrics` expose the configured value.
 
 Public testnet rewards are non-transferable validator points. Points mirror the
 validator reward ledger in `nebulai` so validators can prove uptime, attestation

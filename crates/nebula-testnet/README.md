@@ -151,7 +151,8 @@ The public launch sequence for this crate is:
    RPC request-size, sync snapshot-response, and rate-limit policy, admin RPC
    private-listener state,
    public-admin isolation, non-dev sequencer-key status, `fee_policy_root`,
-   bridge policy root, backup manifest root, and public ops readiness gauges.
+   `gas_price_nebulai`, bridge policy root, backup manifest root, and public
+   ops readiness gauges.
    Build and verify runtime-surface evidence from captured `/health`,
    `/status`, `/snapshot`, `/ops`, `/backup`, `nebula_status`,
    `nebula_opsStatus`, `nebula_backupManifest`, and `/metrics` files before
@@ -309,8 +310,9 @@ freshness, latest height/hash, state root, snapshot root, persisted snapshot
 path and presence, configured sync peer count/quorum, sync quorum
 height/hash/state root, mempool cap/remaining capacity, full/admission rejection
 counts, RPC max-request/rate-limit policy, admin RPC private-listener state,
-public-admin isolation, non-dev sequencer-key status, bridge policy root, bridge custody reconciliation, and backup manifest
-root. `--build-runtime-surface-evidence` binds those captured files, JSON-RPC
+public-admin isolation, non-dev sequencer-key status, fee policy root,
+configured gas price, bridge policy root, bridge custody reconciliation, and
+backup manifest root. `--build-runtime-surface-evidence` binds those captured files, JSON-RPC
 mirror responses, and `/metrics` text into one root; the verifier rejects stale
 captures, split durable `/status` versus JSON-RPC views, invalid snapshot roots,
 mismatched ops/backup roots, missing public ops readiness, and durable metrics
@@ -326,13 +328,15 @@ observed TLS tuple into the `external-public-endpoint` evidence root. Manual
 `--runtime-surface-tls-pin`; final launch readiness rejects external runtime
 surface evidence whose TLS observation does not match the deployment
 attestation.
-The metrics scrape must expose matching block freshness, mempool pressure, RPC
-limit, peer count/quorum, sync quorum, bridge counter, storage snapshot, accountability, bridge
-custody, and public ops readiness gauges.
+The metrics scrape must expose matching block freshness, configured gas price,
+mempool pressure, RPC limit, peer count/quorum, sync quorum, bridge counter,
+storage snapshot, accountability, bridge custody, and public ops readiness
+gauges.
 Backup manifests must bind the node role, validator ID, latest chain head,
 state/snapshot roots, persisted snapshot location, sync peer coverage and
 quorum evidence, mempool capacity policy, full/admission rejection counters, RPC limit policy, admin RPC private-listener state,
-public-admin isolation, non-dev sequencer-key status, bridge policy root, and nXMR custody reconciliation without exporting
+public-admin isolation, non-dev sequencer-key status, fee policy root,
+configured gas price, bridge policy root, and nXMR custody reconciliation without exporting
 sequencer secret key material. Snapshots imported by followers must have a state
 root that matches the latest signed block state root; wait for the next
 sub-second block after direct bridge/faucet/withdrawal mutations before using a

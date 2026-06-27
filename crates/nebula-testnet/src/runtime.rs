@@ -1,6 +1,7 @@
 use crate::{
-    fee_policy_root, quote_hybrid_fee, FeeAsset, HybridFeeQuote, CHAIN_ID, NBLA_SYMBOL,
-    NEBULAI_PER_NBLA, NXMR_SYMBOL, TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT, VERSION,
+    fee_policy_root, hybrid_fee_policy, quote_hybrid_fee, FeeAsset, HybridFeeQuote, CHAIN_ID,
+    MINIMUM_GAS_PRICE_NEBULAI, NBLA_SYMBOL, NEBULAI_PER_NBLA, NXMR_SYMBOL,
+    TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT, VERSION,
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -22,7 +23,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const DEFAULT_RPC_BIND_ADDR: &str = "127.0.0.1:9944";
 pub const DEFAULT_SUBSECOND_BLOCK_MS: u64 = 250;
 pub const MAX_PUBLIC_TESTNET_BLOCK_MS: u64 = 999;
-pub const DEFAULT_GAS_PRICE_NEBULAI: u128 = 1;
+pub const DEFAULT_GAS_PRICE_NEBULAI: u128 = MINIMUM_GAS_PRICE_NEBULAI;
 pub const DEFAULT_MAX_BLOCK_TRANSACTIONS: usize = 512;
 pub const DEFAULT_MAX_MEMPOOL_TRANSACTIONS: usize = 10_000;
 pub const DEFAULT_FAUCET_NBLA: u128 = 10_000 * NEBULAI_PER_NBLA;
@@ -246,6 +247,13 @@ impl RuntimeLaunchBinding {
             return Err(format!(
                 "launch binding runtime_version {} does not match runtime_version {}",
                 self.runtime_version, config.runtime_version
+            ));
+        }
+        let fee_policy = hybrid_fee_policy();
+        if config.gas_price_nebulai != fee_policy.minimum_gas_price_nebulai {
+            return Err(format!(
+                "launch binding gas_price_nebulai {} does not match canonical minimum_gas_price_nebulai {}",
+                config.gas_price_nebulai, fee_policy.minimum_gas_price_nebulai
             ));
         }
         parse_https_url(&self.endpoint_url)
@@ -586,6 +594,7 @@ pub struct RuntimeStatus {
     pub current_state_root: String,
     pub block_target_ms: u64,
     pub sub_second_blocks: bool,
+    pub gas_price_nebulai: u128,
     pub block_production_enabled: bool,
     pub node_role: String,
     pub sequencer_public_key_hex: String,
@@ -668,6 +677,7 @@ pub struct RuntimeOpsStatus {
     pub latest_block_age_ms: u128,
     pub block_target_ms: u64,
     pub sub_second_blocks: bool,
+    pub gas_price_nebulai: u128,
     pub block_production_enabled: bool,
     pub snapshot_version: u32,
     pub snapshot_root: String,
@@ -768,6 +778,7 @@ pub struct RuntimeBackupManifest {
     pub snapshot_root: String,
     pub state_root: String,
     pub current_state_root: String,
+    pub gas_price_nebulai: u128,
     pub snapshot_path: Option<String>,
     pub snapshot_persisted: bool,
     pub storage_snapshot_root: Option<String>,
@@ -1814,6 +1825,7 @@ impl RuntimeRpcState {
             latest_block_age_ms,
             block_target_ms: status.block_target_ms,
             sub_second_blocks: status.sub_second_blocks,
+            gas_price_nebulai: status.gas_price_nebulai,
             block_production_enabled: status.block_production_enabled,
             snapshot_version: snapshot.snapshot_version,
             snapshot_root: snapshot.root.clone(),
@@ -1919,6 +1931,7 @@ impl RuntimeRpcState {
             snapshot_root: ops_status.snapshot_root,
             state_root: ops_status.state_root,
             current_state_root: ops_status.current_state_root,
+            gas_price_nebulai: ops_status.gas_price_nebulai,
             snapshot_path: ops_status.storage_snapshot_path,
             snapshot_persisted: ops_status.storage_snapshot_present,
             storage_snapshot_root: ops_status.storage_snapshot_root,
@@ -2018,6 +2031,7 @@ impl RuntimeRpcState {
             "current_state_root": status["current_state_root"],
             "block_target_ms": status["block_target_ms"],
             "sub_second_blocks": status["sub_second_blocks"],
+            "gas_price_nebulai": status["gas_price_nebulai"],
             "block_production_enabled": status["block_production_enabled"],
             "snapshot_version": ops_status.snapshot_version,
             "snapshot_root": ops_status.snapshot_root,
@@ -2132,6 +2146,12 @@ impl RuntimeRpcState {
             "nebula_block_target_ms",
             "Configured block target in milliseconds.",
             status.block_target_ms,
+        );
+        push_metric(
+            &mut output,
+            "nebula_gas_price_nebulai",
+            "Configured minimum gas price in nebulai.",
+            status.gas_price_nebulai,
         );
         push_metric_bool(
             &mut output,
@@ -2877,6 +2897,7 @@ impl NebulaRuntime {
             current_state_root: self.state_root(),
             block_target_ms: self.config.block_target_ms,
             sub_second_blocks: self.config.block_target_ms <= MAX_PUBLIC_TESTNET_BLOCK_MS,
+            gas_price_nebulai: self.config.gas_price_nebulai,
             block_production_enabled: self.config.produce_blocks,
             node_role: if self.config.produce_blocks {
                 "sequencer".to_string()
@@ -3393,10 +3414,17 @@ impl NebulaRuntime {
         gas_price_nebulai: Option<u128>,
     ) -> Result<HybridFeeQuote, String> {
         let asset = parse_fee_asset(fee_asset)?;
+        let gas_price_nebulai = gas_price_nebulai.unwrap_or(self.config.gas_price_nebulai);
+        if gas_price_nebulai < self.config.gas_price_nebulai {
+            return Err(format!(
+                "gas_price_nebulai {gas_price_nebulai} is below configured minimum {}",
+                self.config.gas_price_nebulai
+            ));
+        }
         quote_hybrid_fee(
             asset,
             gas_units,
-            gas_price_nebulai.unwrap_or(self.config.gas_price_nebulai),
+            gas_price_nebulai,
             Some(TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT),
         )
         .map_err(|error| format!("{error:?}"))
@@ -3566,6 +3594,12 @@ impl NebulaRuntime {
         tx: &RuntimeTransaction,
     ) -> Result<RuntimeTransactionExecutionPlan, String> {
         validate_transaction_shape(tx)?;
+        if tx.gas_price_nebulai < self.config.gas_price_nebulai {
+            return Err(format!(
+                "gas_price_nebulai {} is below configured minimum {}",
+                tx.gas_price_nebulai, self.config.gas_price_nebulai
+            ));
+        }
         let asset = tx.fee_asset_kind()?;
         let quote = quote_hybrid_fee(
             asset,
@@ -6355,6 +6389,7 @@ fn ops_status_root(report: &RuntimeOpsStatus) -> String {
         "latest_block_age_ms": report.latest_block_age_ms,
         "block_target_ms": report.block_target_ms,
         "sub_second_blocks": report.sub_second_blocks,
+        "gas_price_nebulai": report.gas_price_nebulai,
         "block_production_enabled": report.block_production_enabled,
         "snapshot_version": report.snapshot_version,
         "snapshot_root": report.snapshot_root,
@@ -6456,6 +6491,7 @@ fn backup_manifest_root(manifest: &RuntimeBackupManifest) -> String {
         "snapshot_root": manifest.snapshot_root,
         "state_root": manifest.state_root,
         "current_state_root": manifest.current_state_root,
+        "gas_price_nebulai": manifest.gas_price_nebulai,
         "snapshot_path": manifest.snapshot_path,
         "snapshot_persisted": manifest.snapshot_persisted,
         "storage_snapshot_root": manifest.storage_snapshot_root,
@@ -6873,6 +6909,17 @@ mod tests {
         assert!(error.contains("fee_policy_root"));
     }
 
+    #[test]
+    fn launch_binding_rejects_mismatched_gas_price_policy() {
+        let mut config = RuntimeConfig::public_testnet_default();
+        config.launch_binding = Some(test_launch_binding());
+        config.gas_price_nebulai = DEFAULT_GAS_PRICE_NEBULAI + 1;
+
+        let error = config.validate().unwrap_err();
+
+        assert!(error.contains("gas_price_nebulai"));
+    }
+
     fn runtime_config_with_launch_binding_and_disabled_nbla_faucet() -> RuntimeConfig {
         let mut config = runtime_config_with_launch_binding();
         config.faucet_nbla_nebulai = 0;
@@ -7173,6 +7220,45 @@ mod tests {
         assert!(NebulaRuntime::new(config)
             .unwrap_err()
             .contains("faucet_nxmr_units"));
+    }
+
+    #[test]
+    fn runtime_rejects_gas_price_below_configured_minimum() {
+        let mut config = RuntimeConfig::public_testnet_default();
+        config.gas_price_nebulai = 5;
+        let mut runtime = NebulaRuntime::new(config).unwrap();
+
+        assert!(runtime
+            .quote_fee(NBLA_SYMBOL, 5, Some(4))
+            .unwrap_err()
+            .contains("below configured minimum"));
+        assert_eq!(
+            runtime
+                .quote_fee(NBLA_SYMBOL, 5, None)
+                .unwrap()
+                .gas_price_nebulai,
+            5
+        );
+
+        let account = test_account_id();
+        runtime.faucet(&account).unwrap();
+        let tx = sign_test_transaction(RuntimeTransaction {
+            from: account,
+            to: "below-minimum-gas".to_string(),
+            amount_nebulai: 10,
+            gas_units: 5,
+            gas_price_nebulai: 4,
+            fee_asset: NBLA_SYMBOL.to_string(),
+            nonce: 0,
+            signature: String::new(),
+            memo: None,
+        });
+
+        let error = runtime.submit_transaction(tx).unwrap_err();
+
+        assert!(error.contains("below configured minimum"));
+        assert_eq!(runtime.status().mempool_admission_rejection_count, 1);
+        assert_eq!(runtime.status().mempool_size, 0);
     }
 
     #[test]
@@ -7543,6 +7629,10 @@ mod tests {
         );
         assert_eq!(status["mempool_full_rejection_count"], 0);
         assert_eq!(status["mempool_admission_rejection_count"], 0);
+        assert_eq!(
+            status["gas_price_nebulai"],
+            json!(DEFAULT_GAS_PRICE_NEBULAI)
+        );
         assert_eq!(status["faucet_nxmr_units"], 0);
         assert_eq!(status["bridge_only_nxmr"], true);
         assert_eq!(status["bridge_custody_reconciled"], true);
@@ -7976,6 +8066,7 @@ mod tests {
             DEFAULT_MAX_MEMPOOL_TRANSACTIONS
         );
         assert_eq!(ops.mempool_admission_rejection_count, 0);
+        assert_eq!(ops.gas_price_nebulai, DEFAULT_GAS_PRICE_NEBULAI);
         assert_eq!(ops.faucet_nxmr_units, 0);
         assert!(ops.bridge_only_nxmr);
         assert!(ops.bridge_custody_reconciled);
@@ -8020,6 +8111,7 @@ mod tests {
             DEFAULT_MAX_MEMPOOL_TRANSACTIONS
         );
         assert_eq!(manifest.mempool_admission_rejection_count, 0);
+        assert_eq!(manifest.gas_price_nebulai, DEFAULT_GAS_PRICE_NEBULAI);
         assert_eq!(manifest.faucet_nxmr_units, 0);
         assert!(manifest.bridge_only_nxmr);
         assert!(manifest.bridge_custody_reconciled);
@@ -8034,6 +8126,10 @@ mod tests {
             binding.launch_package_bundle_root
         );
         assert_eq!(rpc_ops["fee_policy_root"], binding.fee_policy_root);
+        assert_eq!(
+            rpc_ops["gas_price_nebulai"],
+            json!(DEFAULT_GAS_PRICE_NEBULAI)
+        );
         assert_eq!(rpc_ops["mempool_admission_rejection_count"], 0);
         assert_eq!(rpc_ops["faucet_nxmr_units"], 0);
         assert_eq!(rpc_ops["bridge_only_nxmr"], true);
@@ -8060,6 +8156,10 @@ mod tests {
         assert_eq!(rpc_backup["snapshot_persisted"], true);
         assert_eq!(rpc_backup["launch_binding_present"], true);
         assert_eq!(rpc_backup["fee_policy_root"], binding.fee_policy_root);
+        assert_eq!(
+            rpc_backup["gas_price_nebulai"],
+            json!(DEFAULT_GAS_PRICE_NEBULAI)
+        );
         assert_eq!(rpc_backup["mempool_admission_rejection_count"], 0);
         assert_eq!(rpc_backup["faucet_nxmr_units"], 0);
         assert_eq!(rpc_backup["bridge_only_nxmr"], true);
@@ -8118,6 +8218,10 @@ mod tests {
             binding.launch_package_bundle_root
         );
         assert_eq!(health["fee_policy_root"], binding.fee_policy_root);
+        assert_eq!(
+            health["gas_price_nebulai"],
+            json!(DEFAULT_GAS_PRICE_NEBULAI)
+        );
         assert_eq!(health["launch_validator_count"], binding.validator_count);
         assert_eq!(health["launch_operator_count"], binding.operator_count);
         assert_eq!(health["launch_region_count"], binding.region_count);
@@ -8261,6 +8365,7 @@ mod tests {
         assert_eq!(report.ops_root.len(), 64);
         assert_eq!(report.backup_root.len(), 64);
         assert_eq!(report.fee_policy_root, crate::fee_policy_root());
+        assert_eq!(report.gas_price_nebulai, DEFAULT_GAS_PRICE_NEBULAI);
         assert!(report.blocking_gaps.is_empty());
 
         let _ = fs::remove_dir_all(dir);
@@ -8466,6 +8571,9 @@ mod tests {
 
         assert!(metrics.contains("# HELP nebula_latest_height"));
         assert!(metrics.contains("nebula_sub_second_blocks 1"));
+        assert!(metrics.contains(&format!(
+            "nebula_gas_price_nebulai {DEFAULT_GAS_PRICE_NEBULAI}"
+        )));
         assert!(metrics.contains("nebula_rpc_max_request_bytes 2048"));
         assert!(metrics.contains("nebula_rpc_max_requests_per_minute 7"));
         assert!(metrics.contains(&format!(

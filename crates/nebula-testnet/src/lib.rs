@@ -28,6 +28,7 @@ pub const NBLA_TARGET_NXMR_DENOMINATOR: u128 = 1_000;
 pub const TARGET_NXMR_BASE_UNITS_PER_NXMR: u128 =
     NEBULAI_PER_NBLA * NBLA_TARGET_NXMR_DENOMINATOR / NBLA_TARGET_NXMR_NUMERATOR;
 pub const TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT: u128 = 1;
+pub const MINIMUM_GAS_PRICE_NEBULAI: u128 = 1;
 pub const FEE_BASIS_POINTS: u128 = 10_000;
 pub const NXMR_BUYBACK_BPS: u128 = FEE_BASIS_POINTS;
 pub const NXMR_RESERVE_BACKING_BPS: u128 = 0;
@@ -102,6 +103,7 @@ pub struct HybridFeePolicy {
     pub target_nxmr_per_nbla_denominator: u128,
     pub target_nxmr_base_units_per_nxmr: u128,
     pub target_nxmr_to_nbla_rate_nebulai_per_unit: u128,
+    pub minimum_gas_price_nebulai: u128,
     pub bridged_fee_conversion: &'static str,
     pub nxmr_buyback_bps: u128,
     pub nxmr_reserve_backing_bps: u128,
@@ -1000,6 +1002,7 @@ pub struct RuntimeSurfaceEvidenceReport {
     pub launch_package_bundle_root: String,
     pub launch_package_root: String,
     pub fee_policy_root: String,
+    pub gas_price_nebulai: u128,
     pub validator_set_root: String,
     pub genesis_root: String,
     pub latest_height: u64,
@@ -1115,6 +1118,7 @@ pub fn hybrid_fee_policy() -> HybridFeePolicy {
         target_nxmr_per_nbla_denominator: NBLA_TARGET_NXMR_DENOMINATOR,
         target_nxmr_base_units_per_nxmr: TARGET_NXMR_BASE_UNITS_PER_NXMR,
         target_nxmr_to_nbla_rate_nebulai_per_unit: TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT,
+        minimum_gas_price_nebulai: MINIMUM_GAS_PRICE_NEBULAI,
         bridged_fee_conversion:
             "nXMR fees fund NBLA buybacks at the target rate, and bought NBLA rewards validators",
         nxmr_buyback_bps: NXMR_BUYBACK_BPS,
@@ -3098,6 +3102,8 @@ fn verify_runtime_surface_evidence(
         json_string_field(&evidence.status, "status.launch_package_root").ok();
     let runtime_fee_policy_root =
         json_string_field(&evidence.status, "status.fee_policy_root").ok();
+    let runtime_gas_price_nebulai =
+        json_u128_field(&evidence.status, "status.gas_price_nebulai").ok();
     let validator_set_root = json_string_field(&evidence.status, "status.validator_set_root").ok();
     let genesis_root = json_string_field(&evidence.status, "status.genesis_root").ok();
     match &launch_package_bundle_root {
@@ -3117,6 +3123,14 @@ fn verify_runtime_surface_evidence(
             &expected_fee_policy_root,
         ),
         None => errors.push("status.fee_policy_root must be a string".to_string()),
+    }
+    let expected_gas_price_nebulai = hybrid_fee_policy().minimum_gas_price_nebulai;
+    match runtime_gas_price_nebulai {
+        Some(gas_price_nebulai) if gas_price_nebulai == expected_gas_price_nebulai => {}
+        Some(gas_price_nebulai) => errors.push(format!(
+            "status.gas_price_nebulai expected {expected_gas_price_nebulai} but got {gas_price_nebulai}"
+        )),
+        None => errors.push("status.gas_price_nebulai must be a u128".to_string()),
     }
     match &validator_set_root {
         Some(root) => require_hex_root(&mut errors, "status.validator_set_root", root),
@@ -3164,6 +3178,8 @@ fn verify_runtime_surface_evidence(
             .expect("launch package root was parsed when no errors were recorded"),
         fee_policy_root: runtime_fee_policy_root
             .expect("fee policy root was parsed when no errors were recorded"),
+        gas_price_nebulai: runtime_gas_price_nebulai
+            .expect("gas price was parsed when no errors were recorded"),
         validator_set_root: validator_set_root
             .expect("validator set root was parsed when no errors were recorded"),
         genesis_root: genesis_root.expect("genesis root was parsed when no errors were recorded"),
@@ -6837,6 +6853,7 @@ const RUNTIME_STATUS_DURABLE_FIELDS: &[&str] = &[
     "current_state_root",
     "block_target_ms",
     "sub_second_blocks",
+    "gas_price_nebulai",
     "block_production_enabled",
     "sequencer_public_key_hex",
     "sequencer_key_history_root",
@@ -6920,6 +6937,7 @@ const RUNTIME_OPS_DURABLE_FIELDS: &[&str] = &[
     "latest_hash",
     "block_target_ms",
     "sub_second_blocks",
+    "gas_price_nebulai",
     "block_production_enabled",
     "snapshot_version",
     "snapshot_root",
@@ -7007,6 +7025,7 @@ const RUNTIME_BACKUP_DURABLE_FIELDS: &[&str] = &[
     "snapshot_root",
     "state_root",
     "current_state_root",
+    "gas_price_nebulai",
     "snapshot_path",
     "snapshot_persisted",
     "storage_snapshot_root",
@@ -7071,6 +7090,26 @@ fn json_string_field(value: &Value, label: &str) -> Result<String, AttestationEr
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| AttestationError::Invalid(vec![format!("{label} must be a string")]))
+}
+
+fn json_u128_field(value: &Value, label: &str) -> Result<u128, AttestationError> {
+    let field = label.rsplit('.').next().unwrap_or(label);
+    let Some(value) = value.get(field) else {
+        return Err(AttestationError::Invalid(vec![format!(
+            "{label} must be a u128"
+        )]));
+    };
+    if let Some(number) = value.as_u64() {
+        return Ok(u128::from(number));
+    }
+    if let Some(text) = value.as_str() {
+        return text.parse::<u128>().map_err(|error| {
+            AttestationError::Invalid(vec![format!("{label} must be a u128: {error}")])
+        });
+    }
+    Err(AttestationError::Invalid(vec![format!(
+        "{label} must be a u128"
+    )]))
 }
 
 fn runtime_surface_evidence_root(evidence: &RuntimeSurfaceEvidence) -> String {
@@ -7205,6 +7244,7 @@ fn require_health_status_agreement(errors: &mut Vec<String>, health: &Value, sta
         "current_state_root",
         "block_target_ms",
         "sub_second_blocks",
+        "gas_price_nebulai",
         "block_production_enabled",
         "sequencer_public_key_hex",
         "sequencer_key_history_root",
@@ -7285,6 +7325,14 @@ fn require_ops_backup_snapshot_agreement(
         "snapshot.config.launch_binding_present",
         &snapshot_launch_binding_present,
         status.get("launch_binding_present").unwrap_or(&Value::Null),
+    );
+    require_value_eq(
+        errors,
+        "snapshot.config.gas_price_nebulai",
+        snapshot
+            .pointer("/config/gas_price_nebulai")
+            .unwrap_or(&Value::Null),
+        status.get("gas_price_nebulai").unwrap_or(&Value::Null),
     );
     if let Some(launch_binding) = snapshot
         .pointer("/config/launch_binding")
@@ -7392,6 +7440,7 @@ fn require_ops_backup_snapshot_agreement(
         "admin_rpc_private_listener",
         "public_rpc_admin_methods_enabled",
         "default_dev_sequencer_key",
+        "gas_price_nebulai",
         "mempool_capacity_remaining",
         "bridge_policy_root",
         "bridge_custody_reconciled",
@@ -7455,6 +7504,13 @@ fn require_metrics_agreement(
         metrics_text,
         "nebula_sub_second_blocks",
         u8::from(json_bool(status, "sub_second_blocks").unwrap_or(false)),
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_gas_price_nebulai",
+        status,
+        "gas_price_nebulai",
     );
     require_metric_value(
         errors,
