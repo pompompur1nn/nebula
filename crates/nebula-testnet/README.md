@@ -100,9 +100,11 @@ consensus/network key domains must be disjoint.
 The genesis manifest builder binds verified deployment evidence and validator
 admission into the root artifact used to start a public testnet at activation
 height `1` with validator-set epoch `0`. Genesis deployment, validator-set,
-fee-policy, and validator-admission roots must be disjoint. Genesis manifests
-older than `24` hours are rejected. The final launch-package check requires the
-genesis timestamp to fall inside the deployment attestation validity window.
+fee-policy, and validator-admission roots must be disjoint, and initial
+validator, operator, and region counts must match the verified validator set.
+Genesis manifests older than `24` hours are rejected. The final launch-package
+check requires the genesis timestamp to fall inside the deployment attestation
+validity window.
 
 The launch-package verifier checks that the deployment, public surface,
 validator set, and genesis artifacts all agree before operators advance to a

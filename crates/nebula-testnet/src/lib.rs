@@ -356,6 +356,8 @@ pub struct GenesisManifest {
     pub fee_policy_root: String,
     pub validator_admission_root: String,
     pub initial_validator_count: usize,
+    pub initial_operator_count: usize,
+    pub initial_region_count: usize,
     pub initial_total_power: u64,
     pub native_fee_token: String,
     pub native_base_unit: String,
@@ -372,6 +374,8 @@ pub struct GenesisManifestReport {
     pub validator_set_root: String,
     pub validator_set_epoch: u64,
     pub initial_validator_count: usize,
+    pub initial_operator_count: usize,
+    pub initial_region_count: usize,
     pub initial_total_power: u64,
     pub activation_height: u64,
 }
@@ -391,6 +395,8 @@ pub struct LaunchPackageReport {
     pub validator_set_epoch: u64,
     pub genesis_root: String,
     pub matched_validator_count: usize,
+    pub matched_operator_count: usize,
+    pub matched_region_count: usize,
     pub deployment_operator_count: usize,
     pub bootstrap_node_count: usize,
     pub validator_count: usize,
@@ -646,6 +652,8 @@ pub fn readiness_report() -> NebulaReadiness {
                 "fee_policy_root_required": true,
                 "validator_admission_root_required": true,
                 "artifact_root_domains_disjoint": true,
+                "initial_operator_count_required": true,
+                "initial_region_count_required": true,
                 "genesis_time_max_age_ms": PUBLIC_ATTESTATION_MAX_AGE_MS,
                 "activation_height": PUBLIC_TESTNET_ACTIVATION_HEIGHT,
                 "native_fee_token": NBLA_SYMBOL,
@@ -714,6 +722,8 @@ pub fn readiness_report() -> NebulaReadiness {
                 "all_bootstrap_nodes_admitted": true,
                 "genesis_binds_deployment_attestation_root": true,
                 "genesis_binds_validator_set_root": true,
+                "genesis_binds_operator_count": true,
+                "genesis_binds_region_count": true,
                 "genesis_binds_validator_count": true,
                 "genesis_binds_total_power": true,
                 "genesis_time_within_deployment_window": true,
@@ -1233,6 +1243,8 @@ pub fn build_genesis_manifest_json_pretty(
         fee_policy_root,
         validator_admission_root,
         initial_validator_count: validator_set_report.validator_count,
+        initial_operator_count: validator_set_report.operator_count,
+        initial_region_count: validator_set_report.region_count,
         initial_total_power: validator_set_report.total_genesis_power,
         native_fee_token: NBLA_SYMBOL.to_string(),
         native_base_unit: NEBULAI_UNIT.to_string(),
@@ -1312,6 +1324,16 @@ pub fn verify_genesis_manifest_json(
             "initial_validator_count must be at least {MIN_PUBLIC_TESTNET_VALIDATORS}"
         ));
     }
+    if manifest.initial_operator_count < MIN_PUBLIC_TESTNET_OPERATORS {
+        errors.push(format!(
+            "initial_operator_count must be at least {MIN_PUBLIC_TESTNET_OPERATORS}"
+        ));
+    }
+    if manifest.initial_region_count < MIN_PUBLIC_TESTNET_REGIONS {
+        errors.push(format!(
+            "initial_region_count must be at least {MIN_PUBLIC_TESTNET_REGIONS}"
+        ));
+    }
     if manifest.initial_total_power == 0 {
         errors.push("initial_total_power must be greater than zero".to_string());
     }
@@ -1352,6 +1374,8 @@ pub fn verify_genesis_manifest_json(
         validator_set_root: manifest.validator_set_root,
         validator_set_epoch: manifest.validator_set_epoch,
         initial_validator_count: manifest.initial_validator_count,
+        initial_operator_count: manifest.initial_operator_count,
+        initial_region_count: manifest.initial_region_count,
         initial_total_power: manifest.initial_total_power,
         activation_height: manifest.activation_height,
     })
@@ -1474,6 +1498,18 @@ pub fn verify_launch_package_jsons(
             validator_set_report.validator_count, genesis_report.initial_validator_count
         ));
     }
+    if genesis_report.initial_operator_count != validator_set_report.operator_count {
+        errors.push(format!(
+            "genesis initial_operator_count expected {} but got {}",
+            validator_set_report.operator_count, genesis_report.initial_operator_count
+        ));
+    }
+    if genesis_report.initial_region_count != validator_set_report.region_count {
+        errors.push(format!(
+            "genesis initial_region_count expected {} but got {}",
+            validator_set_report.region_count, genesis_report.initial_region_count
+        ));
+    }
     if genesis_report.initial_total_power != validator_set_report.total_genesis_power {
         errors.push(format!(
             "genesis initial_total_power expected {} but got {}",
@@ -1511,6 +1547,8 @@ pub fn verify_launch_package_jsons(
         validator_set_epoch: genesis_report.validator_set_epoch,
         genesis_root: genesis_report.genesis_root,
         matched_validator_count: validator_set_manifest.validators.len(),
+        matched_operator_count: validator_set_report.operator_count,
+        matched_region_count: validator_set_report.region_count,
         deployment_operator_count: deployment_attestation.operators.len(),
         bootstrap_node_count: deployment_attestation.bootstrap_nodes.len(),
         validator_count: validator_set_report.validator_count,
@@ -3184,6 +3222,8 @@ fn genesis_manifest_root(manifest: &GenesisManifest) -> String {
         "fee_policy_root": manifest.fee_policy_root,
         "validator_admission_root": manifest.validator_admission_root,
         "initial_validator_count": manifest.initial_validator_count,
+        "initial_operator_count": manifest.initial_operator_count,
+        "initial_region_count": manifest.initial_region_count,
         "initial_total_power": manifest.initial_total_power,
         "native_fee_token": manifest.native_fee_token,
         "native_base_unit": manifest.native_base_unit,
@@ -5114,6 +5154,8 @@ mod public_launch {
         assert!(report.genesis_ready);
         assert_eq!(report.level, "genesis-manifest-attested");
         assert_eq!(report.initial_validator_count, 2);
+        assert_eq!(report.initial_operator_count, 2);
+        assert_eq!(report.initial_region_count, 2);
         assert_eq!(report.initial_total_power, 2);
         assert_eq!(report.activation_height, 1);
         assert_eq!(report.genesis_root.len(), 64);
@@ -5133,6 +5175,8 @@ mod public_launch {
 
         assert!(report.genesis_ready);
         assert_eq!(report.initial_validator_count, 2);
+        assert_eq!(report.initial_operator_count, 2);
+        assert_eq!(report.initial_region_count, 2);
         assert_eq!(report.validator_set_epoch, PUBLIC_TESTNET_GENESIS_EPOCH);
     }
 
@@ -5184,6 +5228,48 @@ mod public_launch {
                 assert!(errors
                     .iter()
                     .any(|error| error == "validator_set_epoch must be 0"));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn genesis_manifest_rejects_insufficient_operator_count() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_genesis_manifest_json_pretty()).unwrap();
+        value["initial_operator_count"] = json!(MIN_PUBLIC_TESTNET_OPERATORS - 1);
+        value["root"] = json!(genesis_manifest_root(
+            &serde_json::from_value::<GenesisManifest>(value.clone()).unwrap()
+        ));
+
+        let error = verify_genesis_manifest_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "initial_operator_count must be at least 2"));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn genesis_manifest_rejects_insufficient_region_count() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_genesis_manifest_json_pretty()).unwrap();
+        value["initial_region_count"] = json!(MIN_PUBLIC_TESTNET_REGIONS - 1);
+        value["root"] = json!(genesis_manifest_root(
+            &serde_json::from_value::<GenesisManifest>(value.clone()).unwrap()
+        ));
+
+        let error = verify_genesis_manifest_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "initial_region_count must be at least 2"));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
@@ -5263,6 +5349,8 @@ mod public_launch {
         assert_eq!(report.validator_set_epoch, PUBLIC_TESTNET_GENESIS_EPOCH);
         assert_eq!(report.genesis_root.len(), 64);
         assert_eq!(report.matched_validator_count, 2);
+        assert_eq!(report.matched_operator_count, 2);
+        assert_eq!(report.matched_region_count, 2);
         assert_eq!(report.deployment_operator_count, 2);
         assert_eq!(report.bootstrap_node_count, 2);
     }
@@ -5297,6 +5385,44 @@ mod public_launch {
                     .iter()
                     .any(|error| error
                         .starts_with("genesis deployment_attestation_root does not match")));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn launch_package_rejects_mismatched_genesis_operator_and_region_counts() {
+        let deployment = sample_deployment_attestation_json_pretty();
+        let public_status = sample_public_status_manifest_json_pretty();
+        let public_probe = sample_public_probe_json_pretty();
+        let validators = sample_validator_set_json_pretty();
+        let mut genesis = serde_json::from_str::<Value>(
+            &build_genesis_manifest_json_pretty(&deployment, &validators).unwrap(),
+        )
+        .unwrap();
+        genesis["initial_operator_count"] = json!(MIN_PUBLIC_TESTNET_OPERATORS + 1);
+        genesis["initial_region_count"] = json!(MIN_PUBLIC_TESTNET_REGIONS + 1);
+        genesis["root"] = json!(genesis_manifest_root(
+            &serde_json::from_value::<GenesisManifest>(genesis.clone()).unwrap()
+        ));
+
+        let error = verify_launch_package_jsons(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &genesis.to_string(),
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "genesis initial_operator_count expected 2 but got 3"));
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "genesis initial_region_count expected 2 but got 3"));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
