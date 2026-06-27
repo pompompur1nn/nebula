@@ -118,7 +118,7 @@ The public launch sequence for this crate is:
    agree with `/health`, `/status`, `/snapshot`, and `nebula_status` on block
    freshness, latest height/hash, state root, snapshot root, persisted snapshot
    path and presence, sync peer count/quorum, sync quorum height/hash/state
-   root, mempool cap/remaining capacity/full and admission rejection counts,
+   root, successful peer count, mempool cap/remaining capacity/full and admission rejection counts,
    RPC request-size and rate-limit policy, bridge policy root, backup manifest
    root, and public ops readiness gauges.
    Build and verify runtime-surface evidence from captured `/health`,
@@ -128,7 +128,9 @@ The public launch sequence for this crate is:
    Stale blocks, missing persisted snapshots, mismatched backup roots, missing
    bridge policy roots, full mempools, missing sync quorum evidence, unexpected
    admission-rejection spikes, or unexpected sync/RPC limit values keep the
-   public endpoint launch-blocked.
+   public endpoint launch-blocked. Fast-moving sync attempt/import counters
+   remain exposed as telemetry but are not durable equality fields across
+   separately captured live surfaces.
 11. Exercise sequencer key rotation and operator accountability. `/health`,
    `/status`, and `nebula_status` must expose the current sequencer public key,
    key-rotation history/root, accountability evidence root, equivocation
@@ -241,8 +243,10 @@ counts, RPC max-request/rate-limit policy, admin RPC
 state, bridge policy root, bridge custody reconciliation, and backup manifest
 root. `--build-runtime-surface-evidence` binds those captured files, JSON-RPC
 mirror responses, and `/metrics` text into one root; the verifier rejects stale
-captures, split `/status` versus JSON-RPC views, invalid snapshot roots,
-mismatched ops/backup roots, missing public ops readiness, and metrics drift.
+captures, split durable `/status` versus JSON-RPC views, invalid snapshot roots,
+mismatched ops/backup roots, missing public ops readiness, and durable metrics
+drift. Fast-moving sync attempt/import counters remain exposed as telemetry but
+are not durable equality fields across separately captured live surfaces.
 The metrics scrape must expose matching block freshness, mempool pressure, RPC
 limit, peer count/quorum, sync quorum, bridge counter, storage snapshot, accountability, bridge
 custody, and public ops readiness gauges.

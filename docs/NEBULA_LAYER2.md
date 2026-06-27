@@ -188,8 +188,7 @@ evidence is absent or stale.
     `nebula_status` on block freshness,
     latest height/hash, state root, snapshot root, persisted snapshot path and
     presence, sync peer count/quorum, sync quorum height/hash/state root,
-    successful peer count, sync attempt/success/failure/import and quorum rejection
-    counts, mempool cap/remaining capacity/full and admission rejection counts,
+    successful peer count, mempool cap/remaining capacity/full and admission rejection counts,
     RPC request-size and rate-limit policy, admin RPC state, bridge policy root,
     bridge custody reconciliation, backup
     manifest root, and public ops readiness gauges. `nebula-testnet
@@ -351,8 +350,10 @@ mempool cap/remaining capacity/full and admission rejection counts, RPC max-requ
 policy root, bridge custody reconciliation, and backup manifest root. The
 runtime-surface evidence builder turns those captured files plus JSON-RPC mirror
 responses and `/metrics` text into a single root; the verifier rejects stale
-captures, split `/status` versus JSON-RPC views, invalid snapshot roots,
-mismatched ops/backup roots, missing public ops readiness, and metrics drift.
+captures, split durable `/status` versus JSON-RPC views, invalid snapshot roots,
+mismatched ops/backup roots, missing public ops readiness, and durable metrics
+drift. Fast-moving sync attempt/import counters remain exposed as telemetry but
+are not durable equality fields across separately captured live surfaces.
 The `/metrics` scrape must expose the same block freshness, mempool pressure, RPC
 limit, peer count/quorum, sync quorum, bridge counter, storage snapshot, accountability, bridge
 custody, and public ops readiness gauges. A valid backup manifest must
@@ -685,10 +686,11 @@ The active GitHub Actions workflow is Nebula-owned:
 1. Install stable Rust.
 2. Check Rust formatting.
 3. Build `nebula-testnet`.
-4. Run the Nebula test suite.
-5. Assert the current readiness contract.
-6. Generate and verify public status and probe samples.
-7. Capture and verify runtime-surface evidence from live RPC surfaces.
+4. Smoke a launch-bound sequencer/follower RPC rehearsal and verify
+   runtime-surface evidence from the live follower.
+5. Run the Nebula test suite.
+6. Assert the current readiness contract.
+7. Generate and verify public status and probe samples.
 8. Generate and verify preflight and runbook receipt samples.
 9. Generate and verify a deployment attestation sample.
 10. Generate and verify a validator-set manifest sample.

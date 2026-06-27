@@ -2207,7 +2207,7 @@ impl NebulaRuntime {
         config.faucet_nbla_nebulai = snapshot.config.faucet_nbla_nebulai;
         config.faucet_nxmr_units = snapshot.config.faucet_nxmr_units;
 
-        let mut runtime = Self {
+        Ok(Self {
             config,
             sequencer_secret_key_hex,
             accounts: snapshot.accounts,
@@ -2223,12 +2223,7 @@ impl NebulaRuntime {
             mempool_admission_rejection_count: snapshot.mempool_admission_rejection_count,
             sequencer_key_rotations: snapshot.sequencer_key_rotations,
             accountability_reports: snapshot.accountability_reports,
-        };
-        runtime
-            .accounts
-            .entry(runtime.config.validator_reward_account())
-            .or_insert_with(RuntimeAccount::empty);
-        Ok(runtime)
+        })
     }
 
     pub fn config(&self) -> &RuntimeConfig {
@@ -7205,10 +7200,12 @@ mod tests {
             follower.config().validator_reward_account(),
             "validator:follower-a"
         );
+        assert!(follower.account("validator:follower-a").is_none());
         assert_eq!(
             follower.account("alice").unwrap().nbla_nebulai,
             DEFAULT_FAUCET_NBLA
         );
+        validate_snapshot(&follower.export_snapshot()).unwrap();
     }
 
     #[test]

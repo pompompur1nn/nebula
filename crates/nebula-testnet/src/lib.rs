@@ -1892,6 +1892,18 @@ fn verify_runtime_surface_evidence(
         &evidence.runtime_version,
         VERSION,
     );
+    if let Some(launch_endpoint_url) = evidence
+        .status
+        .get("launch_endpoint_url")
+        .and_then(Value::as_str)
+    {
+        require_eq(
+            &mut errors,
+            "runtime_surface.endpoint_url",
+            &evidence.endpoint_url,
+            launch_endpoint_url,
+        );
+    }
     if evidence.captured_at_unix_ms > now + FUTURE_CLOCK_SKEW_MS {
         errors.push(
             "runtime_surface.captured_at_unix_ms is more than five minutes in the future"
@@ -1916,11 +1928,13 @@ fn verify_runtime_surface_evidence(
         &evidence.rpc_backup_manifest,
     );
 
-    require_value_eq(
+    require_durable_field_set_eq(
         &mut errors,
         "rpc_status.result",
         rpc_status,
+        "status",
         &evidence.status,
+        RUNTIME_STATUS_DURABLE_FIELDS,
     );
     require_durable_field_set_eq(
         &mut errors,
@@ -4876,6 +4890,68 @@ fn parse_receipt_json(input: &str, label: &str) -> Result<Receipt, AttestationEr
         .map_err(|error| AttestationError::MalformedJson(format!("{label}: {error}")))
 }
 
+const RUNTIME_STATUS_DURABLE_FIELDS: &[&str] = &[
+    "chain_id",
+    "runtime_version",
+    "launch_binding_present",
+    "launch_endpoint_url",
+    "deployment_attestation_root",
+    "public_status_manifest_root",
+    "public_probe_root",
+    "validator_set_root",
+    "operator_handoff_root",
+    "operator_acceptance_root",
+    "genesis_root",
+    "launch_package_root",
+    "launch_package_bundle_root",
+    "launch_activation_height",
+    "launch_validator_count",
+    "launch_operator_count",
+    "launch_region_count",
+    "node_role",
+    "latest_height",
+    "latest_hash",
+    "latest_state_root",
+    "current_state_root",
+    "block_target_ms",
+    "sub_second_blocks",
+    "block_production_enabled",
+    "sequencer_public_key_hex",
+    "sequencer_key_history_root",
+    "accountability_report_count",
+    "accountability_root",
+    "sequencer_accountability_clean",
+    "sync_peer_count",
+    "sync_peer_quorum",
+    "sync_quorum_met",
+    "sync_quorum_peer_count",
+    "sync_quorum_height",
+    "sync_quorum_latest_hash",
+    "sync_quorum_state_root",
+    "sync_successful_peer_count",
+    "sync_failed_peer_count",
+    "rpc_max_request_bytes",
+    "rpc_max_requests_per_minute",
+    "admin_rpc_enabled",
+    "max_mempool_transactions",
+    "mempool_size",
+    "mempool_capacity_remaining",
+    "mempool_full_rejection_count",
+    "mempool_admission_rejection_count",
+    "faucet_nxmr_units",
+    "bridge_only_nxmr",
+    "bridge_custody_reconciled",
+    "nxmr_custody_deficit_units",
+    "bridge_policy_root",
+    "bridge_min_deposit_confirmations",
+    "bridge_deposit_observer_quorum",
+    "bridge_withdrawal_operator_quorum",
+    "bridge_live_value_enabled",
+    "bridge_deposit_count",
+    "withdrawal_request_count",
+    "finalized_withdrawal_count",
+];
+
 const RUNTIME_OPS_DURABLE_FIELDS: &[&str] = &[
     "service",
     "chain_id",
@@ -4919,16 +4995,6 @@ const RUNTIME_OPS_DURABLE_FIELDS: &[&str] = &[
     "sync_quorum_state_root",
     "sync_successful_peer_count",
     "sync_failed_peer_count",
-    "sync_attempt_count",
-    "sync_success_count",
-    "sync_failure_count",
-    "sync_stale_snapshot_count",
-    "sync_fork_rejection_count",
-    "sync_quorum_rejection_count",
-    "sync_import_count",
-    "sync_last_success_unix_ms",
-    "sync_last_import_height",
-    "sync_peer_telemetry",
     "rpc_max_request_bytes",
     "rpc_max_requests_per_minute",
     "admin_rpc_enabled",
@@ -5007,16 +5073,6 @@ const RUNTIME_BACKUP_DURABLE_FIELDS: &[&str] = &[
     "sync_quorum_state_root",
     "sync_successful_peer_count",
     "sync_failed_peer_count",
-    "sync_attempt_count",
-    "sync_success_count",
-    "sync_failure_count",
-    "sync_stale_snapshot_count",
-    "sync_fork_rejection_count",
-    "sync_quorum_rejection_count",
-    "sync_import_count",
-    "sync_last_success_unix_ms",
-    "sync_last_import_height",
-    "sync_peer_telemetry",
     "rpc_max_request_bytes",
     "rpc_max_requests_per_minute",
     "admin_rpc_enabled",
@@ -5160,11 +5216,6 @@ fn require_health_status_agreement(errors: &mut Vec<String>, health: &Value, sta
         "sync_quorum_latest_hash",
         "sync_quorum_state_root",
         "sync_successful_peer_count",
-        "sync_attempt_count",
-        "sync_success_count",
-        "sync_failure_count",
-        "sync_quorum_rejection_count",
-        "sync_import_count",
         "max_mempool_transactions",
         "mempool_size",
         "mempool_capacity_remaining",
@@ -5439,20 +5490,6 @@ fn require_metrics_agreement(
         "nebula_sync_successful_peer_count",
         status,
         "sync_successful_peer_count",
-    );
-    require_metric_from_json(
-        errors,
-        metrics_text,
-        "nebula_sync_attempt_count",
-        status,
-        "sync_attempt_count",
-    );
-    require_metric_from_json(
-        errors,
-        metrics_text,
-        "nebula_sync_quorum_rejection_count",
-        status,
-        "sync_quorum_rejection_count",
     );
     require_metric_from_json(
         errors,

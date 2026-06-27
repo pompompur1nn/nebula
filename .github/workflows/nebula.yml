@@ -30,93 +30,12 @@ jobs:
       - name: Build Nebula testnet binary
         run: cargo build --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet
 
-      - name: Smoke test sub-second RPC node
-        shell: bash
-        run: |
-          set -euo pipefail
-          data_a="$(mktemp -d)"
-          data_b="$(mktemp -d)"
-          node_b_pid=""
-          cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --rpc-bind 127.0.0.1:9955 --block-ms 250 --validator-id ci-validator --data-dir "$data_a" &
-          node_pid="$!"
-          trap 'kill "$node_pid" "$node_b_pid" 2>/dev/null || true' EXIT
-          for attempt in {1..40}; do
-            if curl -fsS http://127.0.0.1:9955/status > /tmp/nebula-runtime-status.json; then
-              break
-            fi
-            sleep 0.25
-          done
-          test -s /tmp/nebula-runtime-status.json
-          curl -fsS -X POST http://127.0.0.1:9955/rpc \
-            -H 'Content-Type: application/json' \
-            -d '{"jsonrpc":"2.0","id":1,"method":"nebula_observeBridgeDeposit","params":{"deposit":{"monero_tx_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","account":"alice","amount_nxmr_units":5000,"confirmations":10,"observer_id":"observer-a","proof_root":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","observed_at_unix_ms":1}}}' \
-            > /tmp/nebula-runtime-deposit.json
-          curl -fsS -X POST http://127.0.0.1:9955/rpc \
-            -H 'Content-Type: application/json' \
-            -d '{"jsonrpc":"2.0","id":2,"method":"nebula_requestWithdrawal","params":{"account":"alice","monero_address":"9xTestnetMoneroAddressForNebulaWithdrawals","amount_nxmr_units":2000}}' \
-            > /tmp/nebula-runtime-withdrawal.json
-          test -s "$data_a/nebula-runtime-snapshot.json"
-          curl -fsS http://127.0.0.1:9955/snapshot > /tmp/nebula-runtime-snapshot.json
-          cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9956 --block-ms 250 --validator-id ci-validator-b --data-dir "$data_b" --bootstrap-rpc http://127.0.0.1:9955/snapshot --sync-rpc http://127.0.0.1:9955/snapshot &
-          node_b_pid="$!"
-          for attempt in {1..40}; do
-            if curl -fsS http://127.0.0.1:9956/status > /tmp/nebula-runtime-status-b.json; then
-              break
-            fi
-            sleep 0.25
-          done
-          test -s "$data_b/nebula-runtime-snapshot.json"
-          sleep 1
-          curl -fsS http://127.0.0.1:9955/status > /tmp/nebula-runtime-status-after-sync.json
-          curl -fsS http://127.0.0.1:9956/status > /tmp/nebula-runtime-status-b-after-sync.json
-          python3 - <<'PY'
-          import json
-
-          with open("/tmp/nebula-runtime-status.json", "r", encoding="utf-8") as handle:
-              status = json.load(handle)
-          with open("/tmp/nebula-runtime-status-b.json", "r", encoding="utf-8") as handle:
-              status_b = json.load(handle)
-          with open("/tmp/nebula-runtime-status-after-sync.json", "r", encoding="utf-8") as handle:
-              status_after = json.load(handle)
-          with open("/tmp/nebula-runtime-status-b-after-sync.json", "r", encoding="utf-8") as handle:
-              status_b_after = json.load(handle)
-          with open("/tmp/nebula-runtime-snapshot.json", "r", encoding="utf-8") as handle:
-              snapshot = json.load(handle)
-          with open("/tmp/nebula-runtime-deposit.json", "r", encoding="utf-8") as handle:
-              deposit = json.load(handle)["result"]
-          with open("/tmp/nebula-runtime-withdrawal.json", "r", encoding="utf-8") as handle:
-              withdrawal = json.load(handle)["result"]
-          assert status["block_target_ms"] == 250
-          assert status["sub_second_blocks"] is True
-          assert status["latest_height"] >= 0
-          assert status["validator_reward_account"] == "validator:ci-validator"
-          assert len(status["sequencer_public_key_hex"]) == 64
-          assert len(status["current_state_root"]) == 64
-          assert status["rpc_max_request_bytes"] == 1048576
-          assert status["rpc_max_requests_per_minute"] == 600
-          assert snapshot["snapshot_version"] == 2
-          assert len(snapshot["root"]) == 64
-          assert snapshot["config"]["sequencer_public_key_hex"] == status["sequencer_public_key_hex"]
-          assert "sequencer_secret_key_hex" not in json.dumps(snapshot)
-          for block in snapshot["blocks"]:
-              assert block["producer_public_key"] == status["sequencer_public_key_hex"]
-              assert len(block["signature"]) == 128
-              assert len(block["block_hash"]) == 64
-          assert deposit["credited"] is True
-          assert deposit["account_state"]["nxmr_units"] == 5000
-          assert withdrawal["accepted"] is True
-          assert withdrawal["account_state"]["nxmr_units"] == 3000
-          assert status_b["block_target_ms"] == 250
-          assert status_b["sub_second_blocks"] is True
-          assert status_b["validator_reward_account"] == "validator:ci-validator-b"
-          assert status_b["node_role"] == "follower"
-          assert status_b["block_production_enabled"] is False
-          assert status_b["sequencer_public_key_hex"] == status["sequencer_public_key_hex"]
-          assert status_b["rpc_max_request_bytes"] == 1048576
-          assert status_b["rpc_max_requests_per_minute"] == 600
-          assert status_b["latest_height"] >= snapshot["blocks"][-1]["height"]
-          assert status_b_after["latest_height"] >= status_after["latest_height"] - 2
-          PY
+      - name: Smoke launch-bound follower runtime evidence
+        run: >
+          cargo test --manifest-path crates/nebula-testnet/Cargo.toml
+          --test public_admin_rpc_separation
+          launch_bound_follower_exports_verifiable_runtime_surface_evidence
+          -- --exact --nocapture
 
       - name: Run Nebula test suite
         run: cargo test --manifest-path crates/nebula-testnet/Cargo.toml -- --test-threads=1

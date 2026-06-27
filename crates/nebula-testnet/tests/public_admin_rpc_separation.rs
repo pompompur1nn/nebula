@@ -1,17 +1,25 @@
 use ed25519_dalek::{Signer, SigningKey};
 use nebula_testnet::{
+    build_genesis_manifest_json_pretty, build_launch_package_bundle_json_pretty,
+    build_operator_acceptance_json_pretty, build_operator_handoff_json_pretty,
+    build_runtime_launch_binding_from_jsons, build_runtime_surface_evidence_json_pretty,
     runtime::{
         serve_runtime_rpc_with_options, withdrawal_authorization_root, RuntimeConfig,
-        RuntimeNodeOptions, RuntimeTransaction, MIN_BRIDGE_CONFIRMATIONS,
+        RuntimeLaunchBinding, RuntimeNodeOptions, RuntimeTransaction, MIN_BRIDGE_CONFIRMATIONS,
     },
-    NBLA_SYMBOL,
+    sample_deployment_attestation_json_pretty, sample_public_probe_json_pretty,
+    sample_public_status_manifest_json_pretty, sample_validator_set_json_pretty,
+    verify_runtime_surface_evidence_json, AttestationError, RuntimeSurfaceEvidenceBuildInput,
+    CHAIN_ID, NBLA_SYMBOL,
 };
 use serde_json::{json, Value};
 use std::{
+    env,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
+    path::PathBuf,
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 const ADMIN_TOKEN: &str = "testnet-admin-token";
@@ -210,6 +218,97 @@ fn health_endpoint_exposes_chain_root_ops_and_backup_evidence() {
 }
 
 #[test]
+fn launch_bound_follower_exports_verifiable_runtime_surface_evidence() {
+    let (sequencer_binding, follower_binding) = verified_launch_bindings();
+    let endpoint_url = sequencer_binding.endpoint_url.clone();
+
+    let mut sequencer_config = RuntimeConfig::public_testnet_default();
+    sequencer_config.block_target_ms = 999;
+    sequencer_config.validator_id = "validator-a".to_string();
+    sequencer_config.launch_binding = Some(sequencer_binding.clone());
+    let sequencer_addr = start_rpc_server_with_config(
+        sequencer_config,
+        RuntimeNodeOptions {
+            admin_token: Some(ADMIN_TOKEN.to_string()),
+            data_dir: Some(temp_data_dir("sequencer")),
+            max_requests_per_minute: 10_000,
+            ..RuntimeNodeOptions::default()
+        },
+    );
+
+    wait_for_json_condition(
+        &sequencer_addr,
+        "/ops",
+        "sequencer public ops ready",
+        |ops| ops["public_ops_ready"] == true && ops["latest_height"].as_u64().unwrap_or(0) > 0,
+    );
+
+    let snapshot_url = format!("http://{sequencer_addr}/snapshot");
+    let mut follower_config = RuntimeConfig::public_testnet_default();
+    follower_config.block_target_ms = 999;
+    follower_config.validator_id = "validator-b".to_string();
+    follower_config.produce_blocks = false;
+    follower_config.launch_binding = Some(follower_binding.clone());
+    let follower_addr = start_rpc_server_with_config(
+        follower_config,
+        RuntimeNodeOptions {
+            data_dir: Some(temp_data_dir("follower")),
+            bootstrap_rpc_url: Some(snapshot_url.clone()),
+            sync_rpc_url: Some(snapshot_url),
+            sync_peer_quorum: 1,
+            max_requests_per_minute: 10_000,
+            ..RuntimeNodeOptions::default()
+        },
+    );
+
+    let ops = wait_for_json_condition(&follower_addr, "/ops", "follower public ops ready", |ops| {
+        ops["public_ops_ready"] == true
+            && ops["node_role"] == "follower"
+            && ops["sync_quorum_met"] == true
+            && ops["sync_successful_peer_count"].as_u64().unwrap_or(0) >= 1
+            && ops["latest_height"].as_u64().unwrap_or(0) > 0
+    });
+    assert_eq!(ops["launch_binding_present"], true);
+    assert_eq!(ops["launch_endpoint_url"], endpoint_url);
+    assert_eq!(
+        ops["launch_package_bundle_root"],
+        follower_binding.launch_package_bundle_root
+    );
+    assert!(ops["blocking_gaps"].as_array().unwrap().is_empty());
+
+    let evidence = wait_for_runtime_surface_evidence(&follower_addr, &endpoint_url);
+    let report = verify_runtime_surface_evidence_json(&evidence.to_string())
+        .expect("live follower evidence verifies");
+
+    assert!(report.runtime_surface_ready);
+    assert_eq!(report.level, "runtime-surface-attested");
+    assert_eq!(report.endpoint_url, endpoint_url);
+    assert_eq!(report.chain_id, CHAIN_ID);
+    assert!(report.latest_height > 0);
+    assert!(report.blocking_gaps.is_empty());
+    assert_eq!(evidence["status"]["node_role"], "follower");
+    assert_eq!(evidence["status"]["block_target_ms"], 999);
+    assert_eq!(evidence["status"]["sub_second_blocks"], true);
+    assert_eq!(evidence["status"]["launch_binding_present"], true);
+    assert_eq!(evidence["status"]["launch_endpoint_url"], endpoint_url);
+    assert_eq!(evidence["health"]["public_ops_ready"], true);
+    assert_eq!(evidence["health"]["sync_quorum_met"], true);
+    assert_eq!(
+        evidence["snapshot"]["config"]["launch_binding"]["endpoint_url"],
+        endpoint_url
+    );
+    assert_eq!(
+        evidence["snapshot"]["config"]["launch_binding"]["launch_package_bundle_root"],
+        follower_binding.launch_package_bundle_root
+    );
+    assert_eq!(evidence["rpc_status"]["result"]["node_role"], "follower");
+    assert_eq!(
+        evidence["rpc_status"]["result"]["launch_package_bundle_root"],
+        follower_binding.launch_package_bundle_root
+    );
+}
+
+#[test]
 fn accountability_evidence_closes_admin_producer_mutations_but_remains_visible() {
     let rpc_addr = start_rpc_server(Some(ADMIN_TOKEN));
 
@@ -276,6 +375,20 @@ fn accountability_evidence_closes_admin_producer_mutations_but_remains_visible()
 }
 
 fn start_rpc_server(admin_token: Option<&str>) -> String {
+    let mut config = RuntimeConfig::public_testnet_default();
+    config.block_target_ms = 999;
+
+    start_rpc_server_with_config(
+        config,
+        RuntimeNodeOptions {
+            admin_token: admin_token.map(str::to_string),
+            max_requests_per_minute: 10_000,
+            ..RuntimeNodeOptions::default()
+        },
+    )
+}
+
+fn start_rpc_server_with_config(config: RuntimeConfig, options: RuntimeNodeOptions) -> String {
     let reserved = TcpListener::bind("127.0.0.1:0").expect("reserve local RPC port");
     let bind_addr = reserved
         .local_addr()
@@ -283,14 +396,6 @@ fn start_rpc_server(admin_token: Option<&str>) -> String {
         .to_string();
     drop(reserved);
 
-    let mut config = RuntimeConfig::public_testnet_default();
-    config.block_target_ms = 999;
-
-    let options = RuntimeNodeOptions {
-        admin_token: admin_token.map(str::to_string),
-        max_requests_per_minute: 10_000,
-        ..RuntimeNodeOptions::default()
-    };
     let server_addr = bind_addr.clone();
     thread::spawn(move || {
         serve_runtime_rpc_with_options(&server_addr, config, options)
@@ -299,6 +404,88 @@ fn start_rpc_server(admin_token: Option<&str>) -> String {
 
     wait_for_rpc(&bind_addr);
     bind_addr
+}
+
+fn wait_for_json_condition(
+    rpc_addr: &str,
+    path: &str,
+    label: &str,
+    predicate: impl Fn(&Value) -> bool,
+) -> Value {
+    let mut last = Value::Null;
+    for _ in 0..200 {
+        if let Ok(response) = http_json(rpc_addr, "GET", path, None) {
+            if predicate(&response) {
+                return response;
+            }
+            last = response;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("{label} did not become true at {rpc_addr}{path}; last response: {last}");
+}
+
+fn wait_for_runtime_surface_evidence(rpc_addr: &str, endpoint_url: &str) -> Value {
+    let mut last = Value::Null;
+    for _ in 0..10 {
+        match capture_runtime_surface_evidence(rpc_addr, endpoint_url) {
+            Ok(evidence) => return evidence,
+            Err(error) => {
+                last = json!({ "capture_error": error });
+                thread::sleep(Duration::from_millis(25));
+            }
+        }
+    }
+    panic!("runtime surface evidence did not verify at {rpc_addr}; last response: {last}");
+}
+
+fn capture_runtime_surface_evidence(rpc_addr: &str, endpoint_url: &str) -> Result<Value, String> {
+    let health = http_json(rpc_addr, "GET", "/health", None)?;
+    let status = http_json(rpc_addr, "GET", "/status", None)?;
+    let rpc_status = rpc_request_value(rpc_addr, "nebula_status", json!({}))?;
+    let snapshot = http_json(rpc_addr, "GET", "/snapshot", None)?;
+    let ops = http_json(rpc_addr, "GET", "/ops", None)?;
+    let rpc_ops_status = rpc_request_value(rpc_addr, "nebula_opsStatus", json!({}))?;
+    let backup = http_json(rpc_addr, "GET", "/backup", None)?;
+    let rpc_backup_manifest = rpc_request_value(rpc_addr, "nebula_backupManifest", json!({}))?;
+    let (_, metrics_text) = http_text(rpc_addr, "GET", "/metrics", None)?;
+
+    let evidence = build_runtime_surface_evidence_json_pretty(RuntimeSurfaceEvidenceBuildInput {
+        endpoint_url: endpoint_url.to_string(),
+        captured_at_unix_ms: current_unix_ms(),
+        health_json: health.to_string(),
+        status_json: status.to_string(),
+        snapshot_json: snapshot.to_string(),
+        ops_json: ops.to_string(),
+        backup_json: backup.to_string(),
+        rpc_status_json: rpc_status.to_string(),
+        rpc_ops_status_json: rpc_ops_status.to_string(),
+        rpc_backup_manifest_json: rpc_backup_manifest.to_string(),
+        metrics_text,
+    })
+    .map_err(format_attestation_error)?;
+    serde_json::from_str(&evidence).map_err(|error| format!("evidence JSON parse failed: {error}"))
+}
+
+fn rpc_request_value(rpc_addr: &str, method: &str, params: Value) -> Result<Value, String> {
+    http_json(
+        rpc_addr,
+        "POST",
+        "/rpc",
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": method,
+            "method": method,
+            "params": params,
+        })),
+    )
+}
+
+fn format_attestation_error(error: AttestationError) -> String {
+    match error {
+        AttestationError::MalformedJson(error) => error,
+        AttestationError::Invalid(errors) => errors.join("; "),
+    }
 }
 
 fn wait_for_rpc(rpc_addr: &str) {
@@ -473,6 +660,75 @@ fn bridge_deposit(seed: u8, amount_nxmr_units: u128) -> Value {
         "observer_signature_roots": [hex_64("s45a"), hex_64("s45b")],
         "observed_at_unix_ms": 1,
     })
+}
+
+fn verified_launch_bindings() -> (RuntimeLaunchBinding, RuntimeLaunchBinding) {
+    let deployment_attestation = sample_deployment_attestation_json_pretty();
+    let public_status = sample_public_status_manifest_json_pretty();
+    let public_probe = sample_public_probe_json_pretty();
+    let validator_set = sample_validator_set_json_pretty();
+    let operator_handoff =
+        build_operator_handoff_json_pretty(&deployment_attestation, &validator_set)
+            .expect("operator handoff builds from sample launch artifacts");
+    let operator_acceptance = build_operator_acceptance_json_pretty(
+        &operator_handoff,
+        &deployment_attestation,
+        &validator_set,
+    )
+    .expect("operator acceptance builds from sample launch artifacts");
+    let genesis = build_genesis_manifest_json_pretty(&deployment_attestation, &validator_set)
+        .expect("genesis manifest builds from sample launch artifacts");
+    let launch_package_bundle = build_launch_package_bundle_json_pretty(
+        &deployment_attestation,
+        &public_status,
+        &public_probe,
+        &validator_set,
+        &operator_handoff,
+        &operator_acceptance,
+        &genesis,
+    )
+    .expect("launch package bundle builds from sample launch artifacts");
+
+    let sequencer_binding = build_runtime_launch_binding_from_jsons(
+        &deployment_attestation,
+        &public_status,
+        &public_probe,
+        &validator_set,
+        &operator_handoff,
+        &operator_acceptance,
+        &genesis,
+        &launch_package_bundle,
+        "validator-a",
+    )
+    .expect("validator-a is admitted in the sample validator set");
+    let follower_binding = build_runtime_launch_binding_from_jsons(
+        &deployment_attestation,
+        &public_status,
+        &public_probe,
+        &validator_set,
+        &operator_handoff,
+        &operator_acceptance,
+        &genesis,
+        &launch_package_bundle,
+        "validator-b",
+    )
+    .expect("validator-b is admitted in the sample validator set");
+
+    (sequencer_binding, follower_binding)
+}
+
+fn temp_data_dir(label: &str) -> String {
+    let nonce = current_unix_ms();
+    let mut path: PathBuf = env::temp_dir();
+    path.push(format!("nebula-public-rpc-{label}-{nonce}"));
+    path.display().to_string()
+}
+
+fn current_unix_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is after unix epoch")
+        .as_millis()
 }
 
 fn hex_64(label: &str) -> String {
