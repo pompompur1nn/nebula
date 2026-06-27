@@ -183,7 +183,7 @@ Public launch requires a filled deployment attestation. The verifier rejects:
 - duplicate bootstrap node IDs, bootstrap endpoints, operator IDs, operator
   keys, observer IDs, and observer keys
 - bootstrap node IDs that reuse operator IDs
-- observer IDs that reuse operator IDs
+- observer IDs that reuse bootstrap node IDs or operator IDs
 - bootstrap, operator, observer, and region labels containing whitespace
 - bootstrap node sets that do not cover at least two regions
 - bootstrap nodes whose region does not match the attested operator region

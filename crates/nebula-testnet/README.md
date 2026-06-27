@@ -41,8 +41,9 @@ pins, policy claim, and public probe. Operator and observer signature roots must
 bind their signer identity and that witness root. Bootstrap node IDs/endpoints,
 operator IDs/keys, observer IDs/keys, and TLS certificate/public-key pins must
 be unique. Bootstrap node IDs must not reuse operator IDs. TLS certificate pins
-and public-key pins must not reuse each other. Operator and observer public keys
-must be 64-character hex values, and observer keys must not reuse operator keys.
+and public-key pins must not reuse each other. Observer IDs must not reuse
+bootstrap node IDs or operator IDs. Operator and observer public keys must be
+64-character hex values, and observer keys must not reuse operator keys.
 Public status, probe, and bootstrap HTTPS endpoints must include a host and no
 userinfo/query/fragment components. Bootstrap
 nodes must match their attested operator region. Bootstrap
