@@ -27,6 +27,13 @@ Expected readiness contract:
 That blocked state is correct for an operator workspace that has not yet
 provided live public deployment evidence.
 
+Operators can prove the local launch mechanics in one pass with
+`nebula-testnet --prove-local-public-testnet --json`. That rehearsal builds and
+verifies a coherent public-status, probe, receipt, deployment-attestation,
+validator, handoff, acceptance, genesis, launch-package, activation, join,
+observer-confirmation, and launch-certificate chain while keeping
+`public_launch_ready` blocked on live deployment attestation.
+
 ## Target Public Testnet Architecture
 
 Nebula's public testnet target is a Monero Layer 2 that keeps Monero as the
@@ -475,6 +482,7 @@ cargo fmt --manifest-path crates/nebula-testnet/Cargo.toml -- --check
 cargo build --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet
 cargo test --manifest-path crates/nebula-testnet/Cargo.toml -- --test-threads=1
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --mainnet-readiness --json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --prove-local-public-testnet --json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-status > /tmp/nebula-public-status.json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-status /tmp/nebula-public-status.json --json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-probe > /tmp/nebula-public-probe.json

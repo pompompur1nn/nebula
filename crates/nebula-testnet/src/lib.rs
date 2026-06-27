@@ -728,6 +728,38 @@ pub struct PublicTestnetLaunchCertificateReport {
     pub certified_at_unix_ms: u128,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalPublicTestnetRehearsalArtifact {
+    pub name: &'static str,
+    pub level: &'static str,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalPublicTestnetRehearsalReport {
+    pub local_public_testnet_rehearsed: bool,
+    pub level: &'static str,
+    pub chain_id: String,
+    pub runtime_version: String,
+    pub public_launch_ready: bool,
+    pub public_launch_blocker: String,
+    pub verified_artifact_count: usize,
+    pub verified_artifacts: Vec<LocalPublicTestnetRehearsalArtifact>,
+    pub public_testnet_launch_certificate_root: String,
+    pub launch_package_bundle_root: String,
+    pub launch_package_root: String,
+    pub validator_activation_root: String,
+    pub validator_join_root: String,
+    pub operator_join_confirmation_root: String,
+    pub public_observer_confirmation_root: String,
+    pub validator_count: usize,
+    pub operator_count: usize,
+    pub observer_count: usize,
+    pub region_count: usize,
+    pub generated_at_unix_ms: u128,
+    pub rehearsal_root: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct OperatorHandoffManifest {
@@ -1440,6 +1472,399 @@ pub fn readiness_summary() -> String {
         "Nebula local testnet is ready. Public launch is blocked by: {}",
         report.public_launch_readiness.blocking_gaps.join(", ")
     )
+}
+
+pub fn prove_local_public_testnet_rehearsal_json_pretty() -> Result<String, AttestationError> {
+    let report = prove_local_public_testnet_rehearsal()?;
+    serde_json::to_string_pretty(&report)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+pub fn prove_local_public_testnet_rehearsal(
+) -> Result<LocalPublicTestnetRehearsalReport, AttestationError> {
+    let readiness = readiness_report();
+    let public_launch_blocker = readiness
+        .public_launch_readiness
+        .blocking_gaps
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "none".to_string());
+
+    let public_status_json = sample_public_status_manifest_json_pretty();
+    let public_status_report = verify_public_status_manifest_json(&public_status_json)?;
+    let public_probe_json = sample_public_probe_json_pretty();
+    let public_probe_report = verify_public_probe_json(&public_probe_json)?;
+    let preflight_receipt_json = sample_preflight_receipt_json_pretty();
+    let preflight_report = verify_preflight_receipt_json(&preflight_receipt_json)?;
+    let runbook_receipt_json = sample_runbook_receipt_json_pretty();
+    let runbook_report = verify_runbook_receipt_json(&runbook_receipt_json)?;
+
+    let generated_at_unix_ms = unix_ms();
+    let deployment_attestation_json =
+        build_deployment_attestation_json_pretty(DeploymentAttestationBuildInput {
+            public_status_json: public_status_json.clone(),
+            public_probe_json: public_probe_json.clone(),
+            preflight_receipt_json: preflight_receipt_json.clone(),
+            runbook_receipt_json: runbook_receipt_json.clone(),
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+            generated_at_unix_ms,
+            expires_at_unix_ms: generated_at_unix_ms + PUBLIC_ATTESTATION_MAX_AGE_MS,
+            tls_pins: vec![
+                TlsEndpointPin {
+                    cert_sha256: hex_64("tls-cert-a"),
+                    public_key_sha256: hex_64("tls-key-a"),
+                    not_after_unix_ms: generated_at_unix_ms + 2_592_000_000,
+                },
+                TlsEndpointPin {
+                    cert_sha256: hex_64("tls-cert-b"),
+                    public_key_sha256: hex_64("tls-key-b"),
+                    not_after_unix_ms: generated_at_unix_ms + 2_592_000_000,
+                },
+            ],
+            bootstrap_nodes: vec![
+                BootstrapNodeBuildInput {
+                    node_id: "bootstrap-us-east-1".to_string(),
+                    operator_id: "operator-a".to_string(),
+                    region: "us-east".to_string(),
+                    endpoint: "https://bootstrap-a.testnet.nebula.example".to_string(),
+                },
+                BootstrapNodeBuildInput {
+                    node_id: "bootstrap-eu-west-1".to_string(),
+                    operator_id: "operator-b".to_string(),
+                    region: "eu-west".to_string(),
+                    endpoint: "https://bootstrap-b.testnet.nebula.example".to_string(),
+                },
+            ],
+            operators: vec![
+                OperatorBuildInput {
+                    operator_id: "operator-a".to_string(),
+                    region: "us-east".to_string(),
+                    public_key: sample_ed25519_public_key_hex(0xa1),
+                },
+                OperatorBuildInput {
+                    operator_id: "operator-b".to_string(),
+                    region: "eu-west".to_string(),
+                    public_key: sample_ed25519_public_key_hex(0xa2),
+                },
+            ],
+            observers: vec![
+                ObserverBuildInput {
+                    observer_id: "observer-us-east-1".to_string(),
+                    region: "us-east".to_string(),
+                    public_key: sample_ed25519_public_key_hex(0xb1),
+                },
+                ObserverBuildInput {
+                    observer_id: "observer-eu-west-1".to_string(),
+                    region: "eu-west".to_string(),
+                    public_key: sample_ed25519_public_key_hex(0xb2),
+                },
+            ],
+            rollback_plan_sha3_256: hex_64("rollback-plan"),
+            rollback_last_drill_unix_ms: generated_at_unix_ms,
+            rollback_recovery_point_root: hex_64("rollback-recovery-point"),
+        })?;
+    let deployment_report = verify_deployment_attestation_json(&deployment_attestation_json)?;
+
+    let validator_set_json = sample_validator_set_json_pretty();
+    let validator_set_report = verify_validator_set_json(&validator_set_json)?;
+    let operator_handoff_json =
+        build_operator_handoff_json_pretty(&deployment_attestation_json, &validator_set_json)?;
+    let operator_handoff_report = verify_operator_handoff_jsons(
+        &operator_handoff_json,
+        &deployment_attestation_json,
+        &validator_set_json,
+    )?;
+    let operator_acceptance_json = build_operator_acceptance_json_pretty(
+        &operator_handoff_json,
+        &deployment_attestation_json,
+        &validator_set_json,
+    )?;
+    let operator_acceptance_report = verify_operator_acceptance_jsons(
+        &operator_acceptance_json,
+        &operator_handoff_json,
+        &deployment_attestation_json,
+        &validator_set_json,
+    )?;
+    let genesis_manifest_json =
+        build_genesis_manifest_json_pretty(&deployment_attestation_json, &validator_set_json)?;
+    let genesis_report = verify_genesis_manifest_json(&genesis_manifest_json)?;
+    let launch_package_report = verify_launch_package_with_operator_acceptance_jsons(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let launch_package_bundle_json = build_launch_package_bundle_json_pretty(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let launch_package_bundle_report = verify_launch_package_bundle_jsons(
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let validator_activation_json = build_validator_activation_json_pretty(
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let validator_activation_report = verify_validator_activation_jsons(
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let validator_join_json = build_validator_join_receipt_json_pretty(
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let validator_join_report = verify_validator_join_receipt_jsons(
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let operator_join_confirmation_json = build_operator_join_confirmation_json_pretty(
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let operator_join_confirmation_report = verify_operator_join_confirmation_jsons(
+        &operator_join_confirmation_json,
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let public_observer_confirmation_json = build_public_observer_confirmation_json_pretty(
+        &operator_join_confirmation_json,
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let public_observer_confirmation_report = verify_public_observer_confirmation_jsons(
+        &public_observer_confirmation_json,
+        &operator_join_confirmation_json,
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let public_testnet_launch_certificate_json =
+        build_public_testnet_launch_certificate_json_pretty(
+            &public_observer_confirmation_json,
+            &operator_join_confirmation_json,
+            &validator_join_json,
+            &validator_activation_json,
+            &launch_package_bundle_json,
+            &deployment_attestation_json,
+            &public_status_json,
+            &public_probe_json,
+            &validator_set_json,
+            &operator_handoff_json,
+            &operator_acceptance_json,
+            &genesis_manifest_json,
+        )?;
+    let public_testnet_launch_certificate_report = verify_public_testnet_launch_certificate_jsons(
+        &public_testnet_launch_certificate_json,
+        &public_observer_confirmation_json,
+        &operator_join_confirmation_json,
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+
+    let verified_artifacts = vec![
+        local_rehearsal_artifact(
+            "public_status",
+            public_status_report.level,
+            public_status_report.public_status_manifest_root,
+        ),
+        local_rehearsal_artifact(
+            "public_probe",
+            public_probe_report.level,
+            public_probe_report.public_probe_root,
+        ),
+        local_rehearsal_artifact(
+            "preflight_receipt",
+            preflight_report.level,
+            preflight_report.receipt_root,
+        ),
+        local_rehearsal_artifact(
+            "runbook_receipt",
+            runbook_report.level,
+            runbook_report.receipt_root,
+        ),
+        local_rehearsal_artifact(
+            "deployment_attestation",
+            deployment_report.level,
+            deployment_report.evidence_root,
+        ),
+        local_rehearsal_artifact(
+            "validator_set",
+            validator_set_report.level,
+            validator_set_report.validator_set_root,
+        ),
+        local_rehearsal_artifact(
+            "operator_handoff",
+            operator_handoff_report.level,
+            operator_handoff_report.operator_handoff_root,
+        ),
+        local_rehearsal_artifact(
+            "operator_acceptance",
+            operator_acceptance_report.level,
+            operator_acceptance_report.operator_acceptance_root,
+        ),
+        local_rehearsal_artifact(
+            "genesis_manifest",
+            genesis_report.level,
+            genesis_report.genesis_root,
+        ),
+        local_rehearsal_artifact(
+            "launch_package",
+            launch_package_report.level,
+            launch_package_bundle_report.launch_package_root.clone(),
+        ),
+        local_rehearsal_artifact(
+            "launch_package_bundle",
+            launch_package_bundle_report.level,
+            launch_package_bundle_report
+                .launch_package_bundle_root
+                .clone(),
+        ),
+        local_rehearsal_artifact(
+            "validator_activation",
+            validator_activation_report.level,
+            validator_activation_report
+                .validator_activation_root
+                .clone(),
+        ),
+        local_rehearsal_artifact(
+            "validator_join",
+            validator_join_report.level,
+            validator_join_report.validator_join_root.clone(),
+        ),
+        local_rehearsal_artifact(
+            "operator_join_confirmation",
+            operator_join_confirmation_report.level,
+            operator_join_confirmation_report
+                .operator_join_confirmation_root
+                .clone(),
+        ),
+        local_rehearsal_artifact(
+            "public_observer_confirmation",
+            public_observer_confirmation_report.level,
+            public_observer_confirmation_report
+                .public_observer_confirmation_root
+                .clone(),
+        ),
+        local_rehearsal_artifact(
+            "public_testnet_launch_certificate",
+            public_testnet_launch_certificate_report.level,
+            public_testnet_launch_certificate_report
+                .public_testnet_launch_certificate_root
+                .clone(),
+        ),
+    ];
+
+    let mut report = LocalPublicTestnetRehearsalReport {
+        local_public_testnet_rehearsed: true,
+        level: "local-public-testnet-rehearsal-ready",
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        public_launch_ready: readiness.public_launch_readiness.public_launch_ready,
+        public_launch_blocker,
+        verified_artifact_count: verified_artifacts.len(),
+        verified_artifacts,
+        public_testnet_launch_certificate_root: public_testnet_launch_certificate_report
+            .public_testnet_launch_certificate_root,
+        launch_package_bundle_root: launch_package_bundle_report.launch_package_bundle_root,
+        launch_package_root: launch_package_bundle_report.launch_package_root,
+        validator_activation_root: validator_activation_report.validator_activation_root,
+        validator_join_root: validator_join_report.validator_join_root,
+        operator_join_confirmation_root: operator_join_confirmation_report
+            .operator_join_confirmation_root,
+        public_observer_confirmation_root: public_observer_confirmation_report
+            .public_observer_confirmation_root,
+        validator_count: public_testnet_launch_certificate_report.validator_count,
+        operator_count: public_testnet_launch_certificate_report.operator_count,
+        observer_count: public_testnet_launch_certificate_report.observer_count,
+        region_count: public_testnet_launch_certificate_report.region_count,
+        generated_at_unix_ms: unix_ms(),
+        rehearsal_root: String::new(),
+    };
+    report.rehearsal_root = local_public_testnet_rehearsal_root(&report);
+    Ok(report)
 }
 
 pub fn sample_deployment_attestation_json_pretty() -> String {
@@ -4789,6 +5214,40 @@ fn sample_package_identity() -> PackageIdentity {
     };
     package_identity.root = package_identity_root(&package_identity);
     package_identity
+}
+
+fn local_rehearsal_artifact(
+    name: &'static str,
+    level: &'static str,
+    root: String,
+) -> LocalPublicTestnetRehearsalArtifact {
+    LocalPublicTestnetRehearsalArtifact { name, level, root }
+}
+
+fn local_public_testnet_rehearsal_root(report: &LocalPublicTestnetRehearsalReport) -> String {
+    stable_root(&json!({
+        "local_public_testnet_rehearsal_domain": "nebula-local-public-testnet-rehearsal-v1",
+        "chain_id": report.chain_id,
+        "runtime_version": report.runtime_version,
+        "level": report.level,
+        "local_public_testnet_rehearsed": report.local_public_testnet_rehearsed,
+        "public_launch_ready": report.public_launch_ready,
+        "public_launch_blocker": report.public_launch_blocker,
+        "verified_artifact_count": report.verified_artifact_count,
+        "verified_artifacts": report.verified_artifacts,
+        "public_testnet_launch_certificate_root": report.public_testnet_launch_certificate_root,
+        "launch_package_bundle_root": report.launch_package_bundle_root,
+        "launch_package_root": report.launch_package_root,
+        "validator_activation_root": report.validator_activation_root,
+        "validator_join_root": report.validator_join_root,
+        "operator_join_confirmation_root": report.operator_join_confirmation_root,
+        "public_observer_confirmation_root": report.public_observer_confirmation_root,
+        "validator_count": report.validator_count,
+        "operator_count": report.operator_count,
+        "observer_count": report.observer_count,
+        "region_count": report.region_count,
+        "generated_at_unix_ms": report.generated_at_unix_ms,
+    }))
 }
 
 fn sample_launch_bundle(

@@ -63,6 +63,10 @@ The public launch sequence for this crate is:
    runbook, deployment, validator-set, operator handoff, operator acceptance,
    genesis, launch package, launch-package bundle, activation, join, observer,
    and launch-certificate gates.
+   The compact command is
+   `nebula-testnet --prove-local-public-testnet --json`; it verifies that full
+   local artifact chain in one pass while keeping the public launch gate blocked
+   on live deployment attestation.
 2. Publish and verify the public status and public probe surfaces over HTTPS,
    including the exact endpoint URL, probe body, endpoint policy, TLS
    certificate pin, TLS public-key pin, and launch-bundle identity.
