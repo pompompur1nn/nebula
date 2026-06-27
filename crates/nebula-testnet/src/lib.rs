@@ -609,6 +609,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "reward_unit": NEBULAI_UNIT,
                 "fee_policy_root_required": true,
                 "signed_admission_root_binds_validator_payload": true,
+                "validator_identity_whitespace_free": true,
                 "operator_contact_required": true,
                 "operator_contact_address_required": true,
                 "hex_consensus_key_required": true,
@@ -2561,12 +2562,27 @@ fn verify_validator_admission(
         &format!("validators[{index}].validator_id"),
         &validator.validator_id,
     );
+    require_no_whitespace(
+        errors,
+        &format!("validators[{index}].validator_id"),
+        &validator.validator_id,
+    );
     require_non_empty(
         errors,
         &format!("validators[{index}].operator_id"),
         &validator.operator_id,
     );
+    require_no_whitespace(
+        errors,
+        &format!("validators[{index}].operator_id"),
+        &validator.operator_id,
+    );
     require_non_empty(
+        errors,
+        &format!("validators[{index}].node_id"),
+        &validator.node_id,
+    );
+    require_no_whitespace(
         errors,
         &format!("validators[{index}].node_id"),
         &validator.node_id,
@@ -4067,6 +4083,27 @@ mod public_launch {
                 assert!(errors
                     .iter()
                     .any(|error| error == "validators[1].consensus_public_key must be unique"));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn validator_set_rejects_validator_id_with_whitespace() {
+        let mut value = serde_json::from_str::<Value>(&sample_validator_set_json_pretty()).unwrap();
+        value["validators"][0]["validator_id"] = json!("validator a");
+        refresh_validator_manifest_root(&mut value, 0);
+
+        let error = verify_validator_set_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error
+                            == "validators[0].validator_id must not contain whitespace")
+                );
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }

@@ -68,7 +68,8 @@ Fees and validator points are denominated in `nebulai`, where
 `1 NBLA = 0.001 nXMR`.
 
 The validator-set verifier requires at least two validators, two operators, and
-two regions. Validator IDs, node IDs, keys, reward accounts, and P2P endpoints
+two regions. Validator IDs, operator IDs, and node IDs must not contain
+whitespace. Validator IDs, node IDs, keys, reward accounts, and P2P endpoints
 must be unique. No single validator may hold more than `5000` basis points of
 total genesis power. Operator contacts must use `mailto:` or `https://`.
 `mailto:` contacts must include an email address, `https://` contacts must
