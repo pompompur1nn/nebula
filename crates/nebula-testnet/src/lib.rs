@@ -398,6 +398,8 @@ pub struct LaunchPackageReport {
     pub matched_operator_count: usize,
     pub matched_region_count: usize,
     pub deployment_operator_count: usize,
+    pub deployment_observer_count: usize,
+    pub deployment_region_count: usize,
     pub bootstrap_node_count: usize,
     pub validator_count: usize,
     pub total_genesis_power: u64,
@@ -708,6 +710,8 @@ pub fn readiness_report() -> NebulaReadiness {
                 "observer_region_spread_required": true,
                 "operator_signature_roots_verified": true,
                 "observer_signature_roots_verified": true,
+                "deployment_observer_count_reported": true,
+                "deployment_region_count_reported": true,
                 "public_status_surface_verified": true,
                 "public_probe_surface_verified": true,
                 "validator_set_verified": true,
@@ -1550,6 +1554,8 @@ pub fn verify_launch_package_jsons(
         matched_operator_count: validator_set_report.operator_count,
         matched_region_count: validator_set_report.region_count,
         deployment_operator_count: deployment_attestation.operators.len(),
+        deployment_observer_count: deployment_report.verified_observer_count,
+        deployment_region_count: deployment_report.verified_region_count,
         bootstrap_node_count: deployment_attestation.bootstrap_nodes.len(),
         validator_count: validator_set_report.validator_count,
         total_genesis_power: validator_set_report.total_genesis_power,
@@ -5352,6 +5358,8 @@ mod public_launch {
         assert_eq!(report.matched_operator_count, 2);
         assert_eq!(report.matched_region_count, 2);
         assert_eq!(report.deployment_operator_count, 2);
+        assert_eq!(report.deployment_observer_count, 2);
+        assert_eq!(report.deployment_region_count, 2);
         assert_eq!(report.bootstrap_node_count, 2);
     }
 

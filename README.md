@@ -113,6 +113,7 @@ The public launch suite covers:
 - genesis timestamp binding to the deployment attestation validity window
 - launch package coherence across deployment attestation, public surface,
   validator set, and genesis manifest artifacts
+- launch package reporting for deployment observer quorum and deployment regions
 - launch package binding between admitted validators, deployment operators, and
   bootstrap nodes
 - launch package binding between validator P2P hosts and attested bootstrap
@@ -310,7 +311,9 @@ validator consensus/network keys that reuse deployment witness keys,
 validator-set manifests whose admitted validators do not map to the attested
 deployment operators and bootstrap nodes, validator P2P hosts that do not match
 their attested bootstrap endpoint host, and deployment operators or bootstrap
-nodes that are not represented by an admitted validator.
+nodes that are not represented by an admitted validator. The launch-package
+report also exposes the deployment observer quorum count and deployment region
+count verified from the attestation.
 
 Operators can verify the full package with:
 
