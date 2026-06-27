@@ -29,6 +29,7 @@ pub const MIN_PUBLIC_TESTNET_OBSERVERS: usize = 2;
 pub const MIN_PUBLIC_TESTNET_REGIONS: usize = 2;
 pub const MAX_SINGLE_VALIDATOR_GENESIS_POWER_BPS: u128 = 5_000;
 pub const MAX_SINGLE_OPERATOR_GENESIS_POWER_BPS: u128 = 5_000;
+pub const PUBLIC_TESTNET_GENESIS_EPOCH: u64 = 0;
 pub const PUBLIC_TESTNET_ACTIVATION_HEIGHT: u64 = 1;
 pub const FUTURE_CLOCK_SKEW_MS: u128 = 300_000;
 pub const PUBLIC_ATTESTATION_MAX_AGE_MS: u128 = 86_400_000;
@@ -609,6 +610,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "minimum_validator_count": MIN_PUBLIC_TESTNET_VALIDATORS,
                 "minimum_operator_count": MIN_PUBLIC_TESTNET_OPERATORS,
                 "minimum_region_count": MIN_PUBLIC_TESTNET_REGIONS,
+                "genesis_epoch": PUBLIC_TESTNET_GENESIS_EPOCH,
                 "reward_unit": NEBULAI_UNIT,
                 "fee_policy_root_required": true,
                 "signed_admission_root_binds_validator_payload": true,
@@ -1058,7 +1060,7 @@ pub fn sample_validator_set_json_pretty() -> String {
     let mut manifest = ValidatorSetManifest {
         chain_id: CHAIN_ID.to_string(),
         runtime_version: VERSION.to_string(),
-        epoch: 0,
+        epoch: PUBLIC_TESTNET_GENESIS_EPOCH,
         reward_unit: NEBULAI_UNIT.to_string(),
         fee_policy_root: economics_root,
         minimum_validator_count: MIN_PUBLIC_TESTNET_VALIDATORS,
@@ -1091,6 +1093,9 @@ pub fn verify_validator_set_json(input: &str) -> Result<ValidatorSetReport, Atte
         &manifest.runtime_version,
         VERSION,
     );
+    if manifest.epoch != PUBLIC_TESTNET_GENESIS_EPOCH {
+        errors.push(format!("epoch must be {PUBLIC_TESTNET_GENESIS_EPOCH}"));
+    }
     require_eq(
         &mut errors,
         "reward_unit",
@@ -4646,6 +4651,24 @@ mod public_launch {
         let error = verify_validator_set_json(&value.to_string()).unwrap_err();
 
         assert!(matches!(error, AttestationError::MalformedJson(_)));
+    }
+
+    #[test]
+    fn validator_set_rejects_non_genesis_epoch() {
+        let mut value = serde_json::from_str::<Value>(&sample_validator_set_json_pretty()).unwrap();
+        value["epoch"] = json!(PUBLIC_TESTNET_GENESIS_EPOCH + 1);
+        value["root"] = json!(validator_set_root(
+            &serde_json::from_value::<ValidatorSetManifest>(value.clone()).unwrap()
+        ));
+
+        let error = verify_validator_set_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| error == "epoch must be 0"));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
     }
 
     #[test]

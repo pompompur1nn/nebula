@@ -103,8 +103,8 @@ The public launch suite covers:
 - preflight and runbook receipt exact-shape validation
 - bootstrap node/operator and observer attestation exact-shape validation
 - validator-set admission, whitespace-free and role-separated identity,
-  whitespace-free region, contact, reward-unit, uniqueness, operator power
-  concentration, and region-spread validation
+  fixed genesis epoch, whitespace-free region, contact, reward-unit,
+  uniqueness, operator power concentration, and region-spread validation
 - genesis manifest root binding across deployment evidence, validator set, and
   fee policy
 - genesis manifest artifact-root domain separation
@@ -249,8 +249,9 @@ cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet 
 ## Validator Set Gate
 
 Public testnet admission also requires a validator-set manifest. The verifier
-requires at least two validators, two operators, and two regions. Validator IDs,
-operator IDs, and node IDs must not contain whitespace or reuse each other.
+requires genesis epoch `0`, at least two validators, two operators, and two
+regions. Validator IDs, operator IDs, and node IDs must not contain whitespace
+or reuse each other.
 Operator IDs must be unique across admitted validators. Validator region labels
 must not contain whitespace. Validator IDs, node IDs, consensus keys, network
 keys, reward accounts, and P2P endpoints must be unique. Genesis power must be
