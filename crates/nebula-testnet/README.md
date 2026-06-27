@@ -38,7 +38,8 @@ before wrapping it in deployment evidence.
 Deployment evidence binds bootstrap nodes, operators, and observers to one
 shared witness root for the launch bundle, public status, endpoint/TLS pins,
 policy claim, and public probe. Operator and observer signature roots must bind
-their signer identity and that witness root.
+their signer identity and that witness root. Bootstrap node IDs/endpoints,
+operator IDs/keys, and observer IDs/keys must be unique.
 
 Preflight and runbook receipt verifiers let operators prove launch steps before
 wrapping those receipts in deployment evidence.

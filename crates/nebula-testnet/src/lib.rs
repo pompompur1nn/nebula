@@ -615,6 +615,12 @@ pub fn readiness_report() -> NebulaReadiness {
             "launch_package": stable_root(&json!({
                 "deployment_attestation_verified": true,
                 "deployment_witness_root_verified": true,
+                "unique_bootstrap_node_ids_required": true,
+                "unique_bootstrap_endpoints_required": true,
+                "unique_operator_ids_required": true,
+                "unique_operator_keys_required": true,
+                "unique_observer_ids_required": true,
+                "unique_observer_keys_required": true,
                 "operator_signature_roots_verified": true,
                 "observer_signature_roots_verified": true,
                 "public_status_surface_verified": true,
@@ -1938,11 +1944,6 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
         &attestation.public_probe,
     );
 
-    let operator_ids = attestation
-        .operators
-        .iter()
-        .map(|operator| operator.operator_id.as_str())
-        .collect::<BTreeSet<_>>();
     let regions = attestation
         .operators
         .iter()
@@ -1958,25 +1959,36 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
         errors.push("operators and observers must cover at least two regions".to_string());
     }
 
-    for (index, node) in attestation.bootstrap_nodes.iter().enumerate() {
-        if !operator_ids.contains(node.operator_id.as_str()) {
-            errors.push(format!(
-                "bootstrap_nodes[{index}].operator_id does not match an operator"
-            ));
-        }
-        require_hex_root(
-            errors,
-            &format!("bootstrap_nodes[{index}].attestation_root"),
-            &node.attestation_root,
-        );
-        require_root(
-            errors,
-            &format!("bootstrap_nodes[{index}].attestation_root"),
-            &node.attestation_root,
-            &bootstrap_node_root(node, &witness_evidence_root),
-        );
-    }
+    let mut operator_ids = BTreeSet::new();
+    let mut operator_keys = BTreeSet::new();
     for (index, operator) in attestation.operators.iter().enumerate() {
+        require_non_empty(
+            errors,
+            &format!("operators[{index}].operator_id"),
+            &operator.operator_id,
+        );
+        require_non_empty(
+            errors,
+            &format!("operators[{index}].region"),
+            &operator.region,
+        );
+        require_non_empty(
+            errors,
+            &format!("operators[{index}].public_key"),
+            &operator.public_key,
+        );
+        insert_unique(
+            errors,
+            &mut operator_ids,
+            &format!("operators[{index}].operator_id"),
+            &operator.operator_id,
+        );
+        insert_unique(
+            errors,
+            &mut operator_keys,
+            &format!("operators[{index}].public_key"),
+            &operator.public_key,
+        );
         require_hex_root(
             errors,
             &format!("operators[{index}].signed_evidence_root"),
@@ -2000,7 +2012,94 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &operator_signature_root(operator, &witness_evidence_root),
         );
     }
+    if operator_ids.len() < MIN_PUBLIC_TESTNET_OPERATORS {
+        errors.push(format!(
+            "operators must include at least {MIN_PUBLIC_TESTNET_OPERATORS} unique operator_id values"
+        ));
+    }
+
+    let mut bootstrap_node_ids = BTreeSet::new();
+    let mut bootstrap_endpoints = BTreeSet::new();
+    for (index, node) in attestation.bootstrap_nodes.iter().enumerate() {
+        require_non_empty(
+            errors,
+            &format!("bootstrap_nodes[{index}].node_id"),
+            &node.node_id,
+        );
+        require_non_empty(
+            errors,
+            &format!("bootstrap_nodes[{index}].operator_id"),
+            &node.operator_id,
+        );
+        require_non_empty(
+            errors,
+            &format!("bootstrap_nodes[{index}].region"),
+            &node.region,
+        );
+        require_non_empty(
+            errors,
+            &format!("bootstrap_nodes[{index}].endpoint"),
+            &node.endpoint,
+        );
+        if !node.endpoint.starts_with("https://") {
+            errors.push(format!(
+                "bootstrap_nodes[{index}].endpoint must use an https:// endpoint"
+            ));
+        }
+        insert_unique(
+            errors,
+            &mut bootstrap_node_ids,
+            &format!("bootstrap_nodes[{index}].node_id"),
+            &node.node_id,
+        );
+        insert_unique(
+            errors,
+            &mut bootstrap_endpoints,
+            &format!("bootstrap_nodes[{index}].endpoint"),
+            &node.endpoint,
+        );
+        if !operator_ids.contains(&node.operator_id) {
+            errors.push(format!(
+                "bootstrap_nodes[{index}].operator_id does not match an operator"
+            ));
+        }
+        require_hex_root(
+            errors,
+            &format!("bootstrap_nodes[{index}].attestation_root"),
+            &node.attestation_root,
+        );
+        require_root(
+            errors,
+            &format!("bootstrap_nodes[{index}].attestation_root"),
+            &node.attestation_root,
+            &bootstrap_node_root(node, &witness_evidence_root),
+        );
+    }
+    if bootstrap_node_ids.len() < MIN_PUBLIC_TESTNET_VALIDATORS {
+        errors.push(format!(
+            "bootstrap_nodes must include at least {MIN_PUBLIC_TESTNET_VALIDATORS} unique node_id values"
+        ));
+    }
+
+    let mut observer_ids = BTreeSet::new();
+    let mut observer_keys = BTreeSet::new();
     for (index, observer) in attestation.observers.iter().enumerate() {
+        require_non_empty(
+            errors,
+            &format!("observers[{index}].observer_id"),
+            &observer.observer_id,
+        );
+        require_non_empty(
+            errors,
+            &format!("observers[{index}].region"),
+            &observer.region,
+        );
+        insert_unique(
+            errors,
+            &mut observer_ids,
+            &format!("observers[{index}].observer_id"),
+            &observer.observer_id,
+        );
         require_eq(
             errors,
             &format!("observers[{index}].observed_endpoint"),
@@ -2034,6 +2133,12 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &format!("observers[{index}].signature.public_key"),
             &observer.signature.public_key,
         );
+        insert_unique(
+            errors,
+            &mut observer_keys,
+            &format!("observers[{index}].signature.public_key"),
+            &observer.signature.public_key,
+        );
         require_root(
             errors,
             &format!("observers[{index}].signature.signature_sha3_256"),
@@ -2045,6 +2150,11 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
                 "observers[{index}].signature.verified must be true"
             ));
         }
+    }
+    if observer_ids.len() < MIN_PUBLIC_TESTNET_OBSERVERS {
+        errors.push(format!(
+            "observers must include at least {MIN_PUBLIC_TESTNET_OBSERVERS} unique observer_id values"
+        ));
     }
 }
 
@@ -2695,6 +2805,48 @@ mod public_launch {
     }
 
     #[test]
+    fn deployment_attestation_rejects_duplicate_operator_id() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["operators"][1]["operator_id"] = value["operators"][0]["operator_id"].clone();
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "operators[1].operator_id must be unique"));
+                assert!(errors.iter().any(|error| {
+                    error == "operators must include at least 2 unique operator_id values"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_duplicate_bootstrap_node_id() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["bootstrap_nodes"][1]["node_id"] = value["bootstrap_nodes"][0]["node_id"].clone();
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "bootstrap_nodes[1].node_id must be unique"));
+                assert!(errors.iter().any(|error| {
+                    error == "bootstrap_nodes must include at least 2 unique node_id values"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
     fn deployment_attestation_rejects_observer_wrong_witness_root() {
         let mut value =
             serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
@@ -2726,6 +2878,46 @@ mod public_launch {
                 assert!(errors.iter().any(|error| {
                     error.starts_with("observers[0].signature.signature_sha3_256 does not match")
                 }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_duplicate_observer_id() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["observers"][1]["observer_id"] = value["observers"][0]["observer_id"].clone();
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "observers[1].observer_id must be unique"));
+                assert!(errors.iter().any(|error| {
+                    error == "observers must include at least 2 unique observer_id values"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_duplicate_observer_public_key() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["observers"][1]["signature"]["public_key"] =
+            value["observers"][0]["signature"]["public_key"].clone();
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| { error == "observers[1].signature.public_key must be unique" }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }

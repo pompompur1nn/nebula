@@ -77,6 +77,8 @@ The public launch suite covers:
   observers
 - deterministic operator, observer, and validator admission signature-root
   validation
+- unique bootstrap node, operator, observer, endpoint, and witness-key
+  validation
 - standalone preflight/runbook receipt exact-shape validation
 - policy claim and public probe body exact-shape validation
 - preflight and runbook receipt exact-shape validation
@@ -145,6 +147,8 @@ Public launch requires a filled deployment attestation. The verifier rejects:
 - bootstrap node attestation roots that do not bind the deployment witness root
 - operator, observer, and validator admission signature roots that do not bind
   the signed payload
+- duplicate bootstrap node IDs, bootstrap endpoints, operator IDs, operator
+  keys, observer IDs, and observer keys
 
 Until an operator provides fresh deployment evidence that satisfies those rules,
 `public_launch_ready` must remain `false`.
