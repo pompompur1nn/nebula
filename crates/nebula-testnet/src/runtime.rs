@@ -72,6 +72,8 @@ impl Default for RuntimeNodeOptions {
 pub struct RuntimeConfig {
     pub chain_id: String,
     pub runtime_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_binding: Option<RuntimeLaunchBinding>,
     pub validator_id: String,
     pub block_target_ms: u64,
     pub gas_price_nebulai: u128,
@@ -88,6 +90,7 @@ impl RuntimeConfig {
         Self {
             chain_id: CHAIN_ID.to_string(),
             runtime_version: VERSION.to_string(),
+            launch_binding: None,
             validator_id: "validator-a".to_string(),
             block_target_ms: DEFAULT_SUBSECOND_BLOCK_MS,
             gas_price_nebulai: DEFAULT_GAS_PRICE_NEBULAI,
@@ -135,11 +138,92 @@ impl RuntimeConfig {
             "sequencer_public_key_hex",
             64,
         )?;
+        if let Some(launch_binding) = &self.launch_binding {
+            launch_binding.validate_against_config(self)?;
+        }
         Ok(())
     }
 
     pub fn validator_reward_account(&self) -> String {
         format!("{VALIDATOR_REWARD_ACCOUNT_PREFIX}{}", self.validator_id)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeLaunchBinding {
+    pub chain_id: String,
+    pub runtime_version: String,
+    pub endpoint_url: String,
+    pub deployment_attestation_root: String,
+    pub public_status_manifest_root: String,
+    pub public_probe_root: String,
+    pub validator_set_root: String,
+    pub operator_handoff_root: String,
+    pub operator_acceptance_root: String,
+    pub genesis_root: String,
+    pub launch_package_root: String,
+    pub launch_package_bundle_root: String,
+    pub activation_height: u64,
+    pub validator_count: usize,
+    pub operator_count: usize,
+    pub region_count: usize,
+}
+
+impl RuntimeLaunchBinding {
+    pub fn validate_against_config(&self, config: &RuntimeConfig) -> Result<(), String> {
+        if self.chain_id != config.chain_id {
+            return Err(format!(
+                "launch binding chain_id {} does not match runtime chain_id {}",
+                self.chain_id, config.chain_id
+            ));
+        }
+        if self.runtime_version != config.runtime_version {
+            return Err(format!(
+                "launch binding runtime_version {} does not match runtime_version {}",
+                self.runtime_version, config.runtime_version
+            ));
+        }
+        parse_https_url(&self.endpoint_url)
+            .map_err(|error| format!("launch binding endpoint_url: {error}"))?;
+        validate_fixed_hex(
+            &self.deployment_attestation_root,
+            "deployment_attestation_root",
+            64,
+        )?;
+        validate_fixed_hex(
+            &self.public_status_manifest_root,
+            "public_status_manifest_root",
+            64,
+        )?;
+        validate_fixed_hex(&self.public_probe_root, "public_probe_root", 64)?;
+        validate_fixed_hex(&self.validator_set_root, "validator_set_root", 64)?;
+        validate_fixed_hex(&self.operator_handoff_root, "operator_handoff_root", 64)?;
+        validate_fixed_hex(
+            &self.operator_acceptance_root,
+            "operator_acceptance_root",
+            64,
+        )?;
+        validate_fixed_hex(&self.genesis_root, "genesis_root", 64)?;
+        validate_fixed_hex(&self.launch_package_root, "launch_package_root", 64)?;
+        validate_fixed_hex(
+            &self.launch_package_bundle_root,
+            "launch_package_bundle_root",
+            64,
+        )?;
+        if self.activation_height == 0 {
+            return Err("launch binding activation_height must be greater than zero".to_string());
+        }
+        if self.validator_count == 0 {
+            return Err("launch binding validator_count must be greater than zero".to_string());
+        }
+        if self.operator_count == 0 {
+            return Err("launch binding operator_count must be greater than zero".to_string());
+        }
+        if self.region_count == 0 {
+            return Err("launch binding region_count must be greater than zero".to_string());
+        }
+        Ok(())
     }
 }
 
@@ -363,6 +447,21 @@ pub struct FaucetReport {
 pub struct RuntimeStatus {
     pub chain_id: String,
     pub runtime_version: String,
+    pub launch_binding_present: bool,
+    pub launch_endpoint_url: Option<String>,
+    pub deployment_attestation_root: Option<String>,
+    pub public_status_manifest_root: Option<String>,
+    pub public_probe_root: Option<String>,
+    pub validator_set_root: Option<String>,
+    pub operator_handoff_root: Option<String>,
+    pub operator_acceptance_root: Option<String>,
+    pub genesis_root: Option<String>,
+    pub launch_package_root: Option<String>,
+    pub launch_package_bundle_root: Option<String>,
+    pub launch_activation_height: Option<u64>,
+    pub launch_validator_count: Option<usize>,
+    pub launch_operator_count: Option<usize>,
+    pub launch_region_count: Option<usize>,
     pub latest_height: u64,
     pub latest_hash: String,
     pub latest_state_root: String,
@@ -427,6 +526,21 @@ pub struct RuntimeOpsStatus {
     pub generated_at_unix_ms: u128,
     pub chain_id: String,
     pub runtime_version: String,
+    pub launch_binding_present: bool,
+    pub launch_endpoint_url: Option<String>,
+    pub deployment_attestation_root: Option<String>,
+    pub public_status_manifest_root: Option<String>,
+    pub public_probe_root: Option<String>,
+    pub validator_set_root: Option<String>,
+    pub operator_handoff_root: Option<String>,
+    pub operator_acceptance_root: Option<String>,
+    pub genesis_root: Option<String>,
+    pub launch_package_root: Option<String>,
+    pub launch_package_bundle_root: Option<String>,
+    pub launch_activation_height: Option<u64>,
+    pub launch_validator_count: Option<usize>,
+    pub launch_operator_count: Option<usize>,
+    pub launch_region_count: Option<usize>,
     pub node_role: String,
     pub latest_height: u64,
     pub latest_hash: String,
@@ -501,6 +615,21 @@ pub struct RuntimeBackupManifest {
     pub generated_at_unix_ms: u128,
     pub chain_id: String,
     pub runtime_version: String,
+    pub launch_binding_present: bool,
+    pub launch_endpoint_url: Option<String>,
+    pub deployment_attestation_root: Option<String>,
+    pub public_status_manifest_root: Option<String>,
+    pub public_probe_root: Option<String>,
+    pub validator_set_root: Option<String>,
+    pub operator_handoff_root: Option<String>,
+    pub operator_acceptance_root: Option<String>,
+    pub genesis_root: Option<String>,
+    pub launch_package_root: Option<String>,
+    pub launch_package_bundle_root: Option<String>,
+    pub launch_activation_height: Option<u64>,
+    pub launch_validator_count: Option<usize>,
+    pub launch_operator_count: Option<usize>,
+    pub launch_region_count: Option<usize>,
     pub latest_height: u64,
     pub latest_hash: String,
     pub snapshot_version: u32,
@@ -1222,6 +1351,9 @@ impl RuntimeRpcState {
         if status.latest_height == 0 {
             blocking_gaps.push("no-produced-blocks-observed".to_string());
         }
+        if !status.launch_binding_present {
+            blocking_gaps.push("missing-launch-package-binding".to_string());
+        }
         let max_acceptable_age_ms = u128::from(status.block_target_ms)
             .saturating_mul(20)
             .max(5_000);
@@ -1273,6 +1405,21 @@ impl RuntimeRpcState {
             generated_at_unix_ms,
             chain_id: status.chain_id,
             runtime_version: status.runtime_version,
+            launch_binding_present: status.launch_binding_present,
+            launch_endpoint_url: status.launch_endpoint_url,
+            deployment_attestation_root: status.deployment_attestation_root,
+            public_status_manifest_root: status.public_status_manifest_root,
+            public_probe_root: status.public_probe_root,
+            validator_set_root: status.validator_set_root,
+            operator_handoff_root: status.operator_handoff_root,
+            operator_acceptance_root: status.operator_acceptance_root,
+            genesis_root: status.genesis_root,
+            launch_package_root: status.launch_package_root,
+            launch_package_bundle_root: status.launch_package_bundle_root,
+            launch_activation_height: status.launch_activation_height,
+            launch_validator_count: status.launch_validator_count,
+            launch_operator_count: status.launch_operator_count,
+            launch_region_count: status.launch_region_count,
             node_role: status.node_role,
             latest_height: status.latest_height,
             latest_hash: status.latest_hash,
@@ -1352,6 +1499,21 @@ impl RuntimeRpcState {
             generated_at_unix_ms: ops_status.generated_at_unix_ms,
             chain_id: ops_status.chain_id,
             runtime_version: ops_status.runtime_version,
+            launch_binding_present: ops_status.launch_binding_present,
+            launch_endpoint_url: ops_status.launch_endpoint_url,
+            deployment_attestation_root: ops_status.deployment_attestation_root,
+            public_status_manifest_root: ops_status.public_status_manifest_root,
+            public_probe_root: ops_status.public_probe_root,
+            validator_set_root: ops_status.validator_set_root,
+            operator_handoff_root: ops_status.operator_handoff_root,
+            operator_acceptance_root: ops_status.operator_acceptance_root,
+            genesis_root: ops_status.genesis_root,
+            launch_package_root: ops_status.launch_package_root,
+            launch_package_bundle_root: ops_status.launch_package_bundle_root,
+            launch_activation_height: ops_status.launch_activation_height,
+            launch_validator_count: ops_status.launch_validator_count,
+            launch_operator_count: ops_status.launch_operator_count,
+            launch_region_count: ops_status.launch_region_count,
             latest_height: ops_status.latest_height,
             latest_hash: ops_status.latest_hash,
             snapshot_version: ops_status.snapshot_version,
@@ -1424,6 +1586,21 @@ impl RuntimeRpcState {
             "service": "nebula-testnet-rpc",
             "chain_id": status["chain_id"],
             "runtime_version": status["runtime_version"],
+            "launch_binding_present": status["launch_binding_present"],
+            "launch_endpoint_url": status["launch_endpoint_url"],
+            "deployment_attestation_root": status["deployment_attestation_root"],
+            "public_status_manifest_root": status["public_status_manifest_root"],
+            "public_probe_root": status["public_probe_root"],
+            "validator_set_root": status["validator_set_root"],
+            "operator_handoff_root": status["operator_handoff_root"],
+            "operator_acceptance_root": status["operator_acceptance_root"],
+            "genesis_root": status["genesis_root"],
+            "launch_package_root": status["launch_package_root"],
+            "launch_package_bundle_root": status["launch_package_bundle_root"],
+            "launch_activation_height": status["launch_activation_height"],
+            "launch_validator_count": status["launch_validator_count"],
+            "launch_operator_count": status["launch_operator_count"],
+            "launch_region_count": status["launch_region_count"],
             "node_role": status["node_role"],
             "latest_height": status["latest_height"],
             "latest_hash": status["latest_hash"],
@@ -1544,6 +1721,30 @@ impl RuntimeRpcState {
             "nebula_block_production_enabled",
             "Whether this node is configured to produce blocks.",
             status.block_production_enabled,
+        );
+        push_metric_bool(
+            &mut output,
+            "nebula_launch_binding_present",
+            "Whether this node is bound to verified public launch artifacts.",
+            ops_status.launch_binding_present,
+        );
+        push_metric(
+            &mut output,
+            "nebula_launch_validator_count",
+            "Validators bound by the verified launch package.",
+            ops_status.launch_validator_count.unwrap_or(0),
+        );
+        push_metric(
+            &mut output,
+            "nebula_launch_operator_count",
+            "Operators bound by the verified launch package.",
+            ops_status.launch_operator_count.unwrap_or(0),
+        );
+        push_metric(
+            &mut output,
+            "nebula_launch_region_count",
+            "Regions bound by the verified launch package.",
+            ops_status.launch_region_count.unwrap_or(0),
         );
         push_metric(
             &mut output,
@@ -1963,6 +2164,19 @@ impl NebulaRuntime {
                 snapshot.config.runtime_version, config.runtime_version
             ));
         }
+        if let Some(local_binding) = &config.launch_binding {
+            match &snapshot.config.launch_binding {
+                Some(snapshot_binding) if snapshot_binding == local_binding => {}
+                Some(_) => {
+                    return Err(
+                        "snapshot launch binding does not match local launch binding".to_string(),
+                    );
+                }
+                None => {
+                    return Err("snapshot is missing the required local launch binding".to_string());
+                }
+            }
+        }
         let local_sequencer_public_key_hex = config.sequencer_public_key_hex.clone();
         if !snapshot_accepts_local_sequencer_key(&config, &snapshot) {
             return Err(format!(
@@ -2070,9 +2284,30 @@ impl NebulaRuntime {
             self.total_nxmr_fees_units,
         )
         .expect("runtime nXMR custody reconciliation remains valid");
+        let launch_binding = self.config.launch_binding.as_ref();
         RuntimeStatus {
             chain_id: self.config.chain_id.clone(),
             runtime_version: self.config.runtime_version.clone(),
+            launch_binding_present: launch_binding.is_some(),
+            launch_endpoint_url: launch_binding.map(|binding| binding.endpoint_url.clone()),
+            deployment_attestation_root: launch_binding
+                .map(|binding| binding.deployment_attestation_root.clone()),
+            public_status_manifest_root: launch_binding
+                .map(|binding| binding.public_status_manifest_root.clone()),
+            public_probe_root: launch_binding.map(|binding| binding.public_probe_root.clone()),
+            validator_set_root: launch_binding.map(|binding| binding.validator_set_root.clone()),
+            operator_handoff_root: launch_binding
+                .map(|binding| binding.operator_handoff_root.clone()),
+            operator_acceptance_root: launch_binding
+                .map(|binding| binding.operator_acceptance_root.clone()),
+            genesis_root: launch_binding.map(|binding| binding.genesis_root.clone()),
+            launch_package_root: launch_binding.map(|binding| binding.launch_package_root.clone()),
+            launch_package_bundle_root: launch_binding
+                .map(|binding| binding.launch_package_bundle_root.clone()),
+            launch_activation_height: launch_binding.map(|binding| binding.activation_height),
+            launch_validator_count: launch_binding.map(|binding| binding.validator_count),
+            launch_operator_count: launch_binding.map(|binding| binding.operator_count),
+            launch_region_count: launch_binding.map(|binding| binding.region_count),
             latest_height: latest.height,
             latest_hash: latest.block_hash.clone(),
             latest_state_root: latest.state_root.clone(),
@@ -2990,6 +3225,15 @@ fn snapshot_matches_config(
             snapshot.config.runtime_version, config.runtime_version
         ));
     }
+    if let Some(local_binding) = &config.launch_binding {
+        match &snapshot.config.launch_binding {
+            Some(snapshot_binding) if snapshot_binding == local_binding => {}
+            Some(_) => {
+                return Err("launch binding does not match local launch binding".to_string());
+            }
+            None => return Err("snapshot is missing local launch binding".to_string()),
+        }
+    }
     if !snapshot_accepts_local_sequencer_key(config, snapshot) {
         return Err(format!(
             "sequencer_public_key_hex {} does not match local sequencer_public_key_hex {}",
@@ -3033,6 +3277,10 @@ fn select_best_extending_snapshot(
         if snapshot.latest_height() <= local.latest_height() {
             continue;
         }
+        if let Err(error) = snapshot_matches_config(&local.config, &snapshot) {
+            rejected.push(format!("{url}: {error}"));
+            continue;
+        }
         if !snapshot_extends(local, &snapshot) {
             rejected.push(format!(
                 "{url}: height {} does not extend local height {}",
@@ -3069,6 +3317,11 @@ fn select_best_extending_snapshot_with_telemetry(
     for (url, snapshot) in peer_snapshots {
         if snapshot.latest_height() <= local.latest_height() {
             state.record_sync_peer_stale(&url)?;
+            continue;
+        }
+        if let Err(error) = snapshot_matches_config(&local.config, &snapshot) {
+            state.record_sync_peer_fork(&url, error.clone())?;
+            rejected.push(format!("{url}: {error}"));
             continue;
         }
         if !snapshot_extends(local, &snapshot) {
@@ -3249,6 +3502,27 @@ fn parse_http_url(url: &str) -> Result<(String, String), String> {
         return Err("bootstrap_rpc_url must include a host".to_string());
     }
     Ok((host.to_string(), path))
+}
+
+fn parse_https_url(url: &str) -> Result<(), String> {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return Err("must use https://".to_string());
+    };
+    let host = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if host.is_empty() {
+        return Err("must include a host".to_string());
+    }
+    if host.contains('@') {
+        return Err("must not include userinfo".to_string());
+    }
+    if host.contains(char::is_whitespace) {
+        return Err("host must not contain whitespace".to_string());
+    }
+    Ok(())
 }
 
 fn handle_http_connection(mut stream: TcpStream, state: RuntimeRpcState) -> std::io::Result<()> {
@@ -4561,6 +4835,21 @@ fn ops_status_root(report: &RuntimeOpsStatus) -> String {
         "generated_at_unix_ms": report.generated_at_unix_ms,
         "chain_id": report.chain_id,
         "runtime_version": report.runtime_version,
+        "launch_binding_present": report.launch_binding_present,
+        "launch_endpoint_url": report.launch_endpoint_url,
+        "deployment_attestation_root": report.deployment_attestation_root,
+        "public_status_manifest_root": report.public_status_manifest_root,
+        "public_probe_root": report.public_probe_root,
+        "validator_set_root": report.validator_set_root,
+        "operator_handoff_root": report.operator_handoff_root,
+        "operator_acceptance_root": report.operator_acceptance_root,
+        "genesis_root": report.genesis_root,
+        "launch_package_root": report.launch_package_root,
+        "launch_package_bundle_root": report.launch_package_bundle_root,
+        "launch_activation_height": report.launch_activation_height,
+        "launch_validator_count": report.launch_validator_count,
+        "launch_operator_count": report.launch_operator_count,
+        "launch_region_count": report.launch_region_count,
         "node_role": report.node_role,
         "latest_height": report.latest_height,
         "latest_hash": report.latest_hash,
@@ -4636,6 +4925,21 @@ fn backup_manifest_root(manifest: &RuntimeBackupManifest) -> String {
         "generated_at_unix_ms": manifest.generated_at_unix_ms,
         "chain_id": manifest.chain_id,
         "runtime_version": manifest.runtime_version,
+        "launch_binding_present": manifest.launch_binding_present,
+        "launch_endpoint_url": manifest.launch_endpoint_url,
+        "deployment_attestation_root": manifest.deployment_attestation_root,
+        "public_status_manifest_root": manifest.public_status_manifest_root,
+        "public_probe_root": manifest.public_probe_root,
+        "validator_set_root": manifest.validator_set_root,
+        "operator_handoff_root": manifest.operator_handoff_root,
+        "operator_acceptance_root": manifest.operator_acceptance_root,
+        "genesis_root": manifest.genesis_root,
+        "launch_package_root": manifest.launch_package_root,
+        "launch_package_bundle_root": manifest.launch_package_bundle_root,
+        "launch_activation_height": manifest.launch_activation_height,
+        "launch_validator_count": manifest.launch_validator_count,
+        "launch_operator_count": manifest.launch_operator_count,
+        "launch_region_count": manifest.launch_region_count,
         "latest_height": manifest.latest_height,
         "latest_hash": manifest.latest_hash,
         "snapshot_version": manifest.snapshot_version,
@@ -4881,6 +5185,33 @@ mod tests {
             admin_token: None,
             rate_limits: Arc::new(Mutex::new(BTreeMap::new())),
         }
+    }
+
+    fn test_launch_binding() -> RuntimeLaunchBinding {
+        RuntimeLaunchBinding {
+            chain_id: CHAIN_ID.to_string(),
+            runtime_version: VERSION.to_string(),
+            endpoint_url: "https://public.testnet.nebula.example/status".to_string(),
+            deployment_attestation_root: "1".repeat(64),
+            public_status_manifest_root: "2".repeat(64),
+            public_probe_root: "3".repeat(64),
+            validator_set_root: "4".repeat(64),
+            operator_handoff_root: "5".repeat(64),
+            operator_acceptance_root: "6".repeat(64),
+            genesis_root: "7".repeat(64),
+            launch_package_root: "8".repeat(64),
+            launch_package_bundle_root: "9".repeat(64),
+            activation_height: 1,
+            validator_count: 3,
+            operator_count: 2,
+            region_count: 2,
+        }
+    }
+
+    fn runtime_config_with_launch_binding() -> RuntimeConfig {
+        let mut config = RuntimeConfig::public_testnet_default();
+        config.launch_binding = Some(test_launch_binding());
+        config
     }
 
     fn test_account_secret_key_hex() -> String {
@@ -5254,16 +5585,48 @@ mod tests {
         assert!(ops
             .blocking_gaps
             .contains(&"no-produced-blocks-observed".to_string()));
+        assert!(ops
+            .blocking_gaps
+            .contains(&"missing-launch-package-binding".to_string()));
+        assert!(!ops.launch_binding_present);
         assert!(!ops.storage_snapshot_present);
         assert_eq!(ops.ops_root.len(), 64);
     }
 
     #[test]
+    fn runtime_ops_status_requires_launch_package_binding() {
+        let dir = std::env::temp_dir().join(format!("nebula-runtime-missing-launch-{}", unix_ms()));
+        let storage = RuntimeStorage::from_data_dir(&dir);
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        runtime.faucet("alice").unwrap();
+        runtime.produce_block();
+        let snapshot = runtime.export_snapshot();
+        storage.save_snapshot(&snapshot).unwrap();
+        let mut state = test_rpc_state_with_limits(
+            runtime,
+            DEFAULT_MAX_REQUEST_BYTES,
+            DEFAULT_MAX_REQUESTS_PER_MINUTE,
+        );
+        state.storage = Some(storage);
+
+        let ops = state.ops_status().unwrap();
+        assert!(!ops.public_ops_ready);
+        assert_eq!(
+            ops.blocking_gaps,
+            vec!["missing-launch-package-binding".to_string()]
+        );
+        assert!(!ops.launch_binding_present);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn runtime_ops_status_follower_requires_successful_peer_sync_evidence() {
-        let mut sequencer = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let sequencer_config = runtime_config_with_launch_binding();
+        let mut sequencer = NebulaRuntime::new(sequencer_config.clone()).unwrap();
         sequencer.produce_block();
         let snapshot = sequencer.export_snapshot();
-        let mut follower_config = RuntimeConfig::public_testnet_default();
+        let mut follower_config = sequencer_config;
         follower_config.produce_blocks = false;
         let follower = NebulaRuntime::from_snapshot(follower_config, snapshot.clone()).unwrap();
         let dir =
@@ -5318,10 +5681,11 @@ mod tests {
 
     #[test]
     fn runtime_ops_status_follower_requires_sync_quorum_evidence() {
-        let mut sequencer = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let sequencer_config = runtime_config_with_launch_binding();
+        let mut sequencer = NebulaRuntime::new(sequencer_config.clone()).unwrap();
         sequencer.produce_block();
         let snapshot = sequencer.export_snapshot();
-        let mut follower_config = RuntimeConfig::public_testnet_default();
+        let mut follower_config = sequencer_config;
         follower_config.produce_blocks = false;
         let follower = NebulaRuntime::from_snapshot(follower_config, snapshot.clone()).unwrap();
         let dir =
@@ -5376,7 +5740,8 @@ mod tests {
     fn runtime_ops_status_and_backup_manifest_bind_persisted_snapshot() {
         let dir = std::env::temp_dir().join(format!("nebula-runtime-ops-test-{}", unix_ms()));
         let storage = RuntimeStorage::from_data_dir(&dir);
-        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let binding = test_launch_binding();
+        let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
         runtime.faucet("alice").unwrap();
         runtime.produce_block();
         let snapshot = runtime.export_snapshot();
@@ -5390,6 +5755,14 @@ mod tests {
 
         let ops = state.ops_status().unwrap();
         assert!(ops.public_ops_ready, "{:?}", ops.blocking_gaps);
+        assert!(ops.launch_binding_present);
+        assert_eq!(
+            ops.launch_package_bundle_root.as_deref(),
+            Some(binding.launch_package_bundle_root.as_str())
+        );
+        assert_eq!(ops.launch_validator_count, Some(binding.validator_count));
+        assert_eq!(ops.launch_operator_count, Some(binding.operator_count));
+        assert_eq!(ops.launch_region_count, Some(binding.region_count));
         assert_eq!(ops.snapshot_root.len(), 64);
         assert_eq!(
             ops.storage_snapshot_root.as_ref().map(String::len),
@@ -5419,6 +5792,11 @@ mod tests {
         assert_eq!(ops.ops_root.len(), 64);
 
         let manifest = state.backup_manifest().unwrap();
+        assert!(manifest.launch_binding_present);
+        assert_eq!(
+            manifest.launch_package_bundle_root.as_deref(),
+            Some(binding.launch_package_bundle_root.as_str())
+        );
         assert_eq!(manifest.snapshot_root.len(), 64);
         assert!(manifest.snapshot_persisted);
         assert!(manifest.storage_snapshot_matches_runtime);
@@ -5436,6 +5814,11 @@ mod tests {
         let rpc_ops = dispatch_json_rpc_method(&state, "nebula_opsStatus", json!({})).unwrap();
         assert_eq!(rpc_ops["ops_root"].as_str().unwrap().len(), 64);
         assert_eq!(rpc_ops["public_ops_ready"], true);
+        assert_eq!(rpc_ops["launch_binding_present"], true);
+        assert_eq!(
+            rpc_ops["launch_package_bundle_root"],
+            binding.launch_package_bundle_root
+        );
         assert_eq!(rpc_ops["mempool_admission_rejection_count"], 0);
         assert_eq!(rpc_ops["faucet_nxmr_units"], 0);
         assert_eq!(rpc_ops["bridge_only_nxmr"], true);
@@ -5446,6 +5829,7 @@ mod tests {
             dispatch_json_rpc_method(&state, "nebula_backupManifest", json!({})).unwrap();
         assert_eq!(rpc_backup["backup_root"].as_str().unwrap().len(), 64);
         assert_eq!(rpc_backup["snapshot_persisted"], true);
+        assert_eq!(rpc_backup["launch_binding_present"], true);
         assert_eq!(rpc_backup["mempool_admission_rejection_count"], 0);
         assert_eq!(rpc_backup["faucet_nxmr_units"], 0);
         assert_eq!(rpc_backup["bridge_only_nxmr"], true);
@@ -5460,7 +5844,8 @@ mod tests {
     fn runtime_health_surface_binds_chain_roots_and_ops_evidence() {
         let dir = std::env::temp_dir().join(format!("nebula-runtime-health-test-{}", unix_ms()));
         let storage = RuntimeStorage::from_data_dir(&dir);
-        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let binding = test_launch_binding();
+        let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
         runtime.faucet("alice").unwrap();
         runtime.produce_block();
         let snapshot = runtime.export_snapshot();
@@ -5480,6 +5865,14 @@ mod tests {
         assert_eq!(health["ok"], true);
         assert_eq!(health["chain_id"], status["chain_id"]);
         assert_eq!(health["runtime_version"], status["runtime_version"]);
+        assert_eq!(health["launch_binding_present"], true);
+        assert_eq!(
+            health["launch_package_bundle_root"],
+            binding.launch_package_bundle_root
+        );
+        assert_eq!(health["launch_validator_count"], binding.validator_count);
+        assert_eq!(health["launch_operator_count"], binding.operator_count);
+        assert_eq!(health["launch_region_count"], binding.region_count);
         assert_eq!(health["node_role"], status["node_role"]);
         assert_eq!(health["latest_height"], status["latest_height"]);
         assert_eq!(health["latest_hash"], status["latest_hash"]);
@@ -5528,7 +5921,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("nebula-runtime-surface-evidence-{}", unix_ms()));
         let storage = RuntimeStorage::from_data_dir(&dir);
-        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
         runtime.faucet("alice").unwrap();
         runtime.produce_block();
         let snapshot = runtime.export_snapshot();
@@ -5601,7 +5994,7 @@ mod tests {
             unix_ms()
         ));
         let storage = RuntimeStorage::from_data_dir(&dir);
-        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
         runtime.faucet("alice").unwrap();
         runtime.produce_block();
         let snapshot = runtime.export_snapshot();
@@ -5714,6 +6107,10 @@ mod tests {
         assert!(metrics.contains("nebula_sync_failure_count 0"));
         assert!(metrics.contains("nebula_sync_import_count 0"));
         assert!(metrics.contains("nebula_sync_quorum_rejection_count 0"));
+        assert!(metrics.contains("nebula_launch_binding_present 0"));
+        assert!(metrics.contains("nebula_launch_validator_count 0"));
+        assert!(metrics.contains("nebula_launch_operator_count 0"));
+        assert!(metrics.contains("nebula_launch_region_count 0"));
         assert!(metrics.contains("nebula_admin_rpc_enabled 0"));
         assert!(metrics.contains("nebula_mempool_admission_rejection_count 0"));
         assert!(metrics.contains("nebula_faucet_nxmr_units 0"));
@@ -5998,6 +6395,33 @@ mod tests {
                 .unwrap_err()
                 .contains("sequencer_public_key_hex")
         );
+    }
+
+    #[test]
+    fn follower_rejects_snapshot_with_mismatched_launch_binding() {
+        let local_config = runtime_config_with_launch_binding();
+        let mut peer_config = runtime_config_with_launch_binding();
+        peer_config
+            .launch_binding
+            .as_mut()
+            .unwrap()
+            .launch_package_bundle_root = "a".repeat(64);
+        let mut peer = NebulaRuntime::new(peer_config).unwrap();
+        peer.produce_block();
+
+        assert!(
+            NebulaRuntime::from_snapshot(local_config.clone(), peer.export_snapshot())
+                .unwrap_err()
+                .contains("launch binding")
+        );
+
+        let mut unbound_peer = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        unbound_peer.produce_block();
+        let mut local = NebulaRuntime::new(local_config).unwrap();
+        assert!(local
+            .import_snapshot(unbound_peer.export_snapshot())
+            .unwrap_err()
+            .contains("launch binding"));
     }
 
     #[test]

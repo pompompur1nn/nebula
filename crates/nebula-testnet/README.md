@@ -177,6 +177,16 @@ count, and quorum rejection count. Followers remain launch-blocked with
 returned a valid snapshot response and with `follower-sync-quorum-not-met` until
 the configured peer quorum agrees on the same chain-state tip.
 
+For a public RPC testnet candidate, start every sequencer and follower with the
+verified launch package artifacts: `--deployment-attestation`, `--public-status`,
+`--public-probe`, `--validator-set`, `--operator-handoff`,
+`--operator-acceptance`, `--genesis-manifest`, and `--launch-package-bundle`.
+`--run-rpc` verifies those artifacts, confirms `--validator-id` is admitted in
+the validator set, binds the live status/ops/backup surfaces to their roots, and
+rejects imported snapshots whose embedded launch binding differs. Nodes without
+this binding can still serve local rehearsal RPC, but `/health` and `/ops`
+report `missing-launch-package-binding` and public ops readiness stays false.
+
 Public RPC nodes enforce a bounded local mempool, maximum request body size, and
 per-client request rate limit before dispatching JSON-RPC work. Use
 `--max-mempool-transactions <count>`, `--max-request-bytes <bytes>`, and
@@ -289,7 +299,7 @@ cargo fmt --manifest-path crates/nebula-testnet/Cargo.toml -- --check
 cargo build --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet
 cargo test --manifest-path crates/nebula-testnet/Cargo.toml -- --test-threads=1
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --sequencer --rpc-bind 127.0.0.1:9944 --block-ms 250 --validator-id validator-a --data-dir /tmp/nebula-validator-a --admin-token <operator-token> --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9946 --block-ms 250 --validator-id validator-c --data-dir /tmp/nebula-validator-c --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9945/snapshot --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --follower --rpc-bind 127.0.0.1:9946 --block-ms 250 --validator-id validator-c --data-dir /tmp/nebula-validator-c --sequencer-public-key <sequencer-public-key-hex> --bootstrap-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9944/snapshot --sync-rpc http://127.0.0.1:9945/snapshot --sync-peer-quorum 2 --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --mainnet-readiness --json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-status > /tmp/nebula-public-status.json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-status /tmp/nebula-public-status.json --json

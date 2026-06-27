@@ -129,6 +129,10 @@ fn metrics_endpoint_exposes_public_rpc_operational_gauges() {
     assert!(body.contains("nebula_sync_attempt_count 0"));
     assert!(body.contains("nebula_sync_quorum_rejection_count 0"));
     assert!(body.contains("nebula_sync_import_count 0"));
+    assert!(body.contains("nebula_launch_binding_present 0"));
+    assert!(body.contains("nebula_launch_validator_count 0"));
+    assert!(body.contains("nebula_launch_operator_count 0"));
+    assert!(body.contains("nebula_launch_region_count 0"));
     assert!(body.contains("nebula_mempool_admission_rejection_count 0"));
     assert!(body.contains("nebula_faucet_nxmr_units 0"));
     assert!(body.contains("nebula_bridge_only_nxmr 1"));
@@ -151,6 +155,13 @@ fn health_endpoint_exposes_chain_root_ops_and_backup_evidence() {
     assert_eq!(health["service"], "nebula-testnet-rpc");
     assert_eq!(health["chain_id"], status["chain_id"]);
     assert_eq!(health["runtime_version"], status["runtime_version"]);
+    assert_eq!(health["launch_binding_present"], false);
+    assert_eq!(health["launch_endpoint_url"], serde_json::Value::Null);
+    assert_eq!(
+        health["launch_package_bundle_root"],
+        serde_json::Value::Null
+    );
+    assert_eq!(health["launch_validator_count"], serde_json::Value::Null);
     assert_eq!(health["node_role"], status["node_role"]);
     assert_eq!(health["block_target_ms"], status["block_target_ms"]);
     assert_eq!(health["sub_second_blocks"], true);

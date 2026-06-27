@@ -282,6 +282,16 @@ rehearsals should pass `--sequencer-public-key <hex>` to all nodes and pass the
 matching `--sequencer-secret-key <hex>` only to the sequencer. The secret key is
 kept in process memory and is never exported in `/snapshot`.
 
+For a public RPC testnet candidate, start every sequencer and follower with the
+verified launch package artifacts: `--deployment-attestation`, `--public-status`,
+`--public-probe`, `--validator-set`, `--operator-handoff`,
+`--operator-acceptance`, `--genesis-manifest`, and `--launch-package-bundle`.
+`--run-rpc` verifies those artifacts, confirms `--validator-id` is admitted in
+the validator set, binds the live status/ops/backup surfaces to their roots, and
+rejects imported snapshots whose embedded launch binding differs. Nodes without
+this binding can still serve local rehearsal RPC, but `/health` and `/ops`
+report `missing-launch-package-binding` and public ops readiness stays false.
+
 Sequencer key rotation and accountability are public-testnet launch gates.
 `/health`, `/status`, and `nebula_status` must expose the current sequencer
 public key, key-rotation history/root, accountability evidence root,

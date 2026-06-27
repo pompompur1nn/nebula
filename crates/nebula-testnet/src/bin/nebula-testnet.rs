@@ -56,7 +56,7 @@ fn main() {
     let wants_run_rpc = args.iter().any(|arg| arg == "--run-rpc");
 
     if wants_run_rpc {
-        run_rpc_node(&args);
+        run_rpc_node(&args, wants_json);
     } else if wants_build_public_status {
         build_public_status(&args, wants_json);
     } else if wants_build_public_probe {
@@ -211,7 +211,7 @@ fn parse_u32_arg(args: &[String], name: &str, default: u32) -> u32 {
     }
 }
 
-fn run_rpc_node(args: &[String]) {
+fn run_rpc_node(args: &[String], wants_json: bool) {
     let bind_addr =
         arg_value(args, "--rpc-bind").unwrap_or(nebula_testnet::runtime::DEFAULT_RPC_BIND_ADDR);
     let mut config = nebula_testnet::runtime::RuntimeConfig::public_testnet_default();
@@ -226,6 +226,7 @@ fn run_rpc_node(args: &[String]) {
     if let Some(sequencer_public_key) = arg_value(args, "--sequencer-public-key") {
         config.sequencer_public_key_hex = sequencer_public_key.to_string();
     }
+    config.launch_binding = read_runtime_launch_binding(args, wants_json, &config.validator_id);
     config.max_mempool_transactions = parse_usize_arg(
         args,
         "--max-mempool-transactions",
@@ -290,11 +291,68 @@ fn run_rpc_node(args: &[String]) {
         options.max_request_bytes,
         options.max_requests_per_minute
     );
+    if let Some(binding) = &config.launch_binding {
+        eprintln!(
+            "Nebula RPC launch binding enabled; endpoint {}; bundle root {}",
+            binding.endpoint_url, binding.launch_package_bundle_root
+        );
+    } else {
+        eprintln!(
+            "Nebula RPC launch binding disabled; public ops readiness will report missing-launch-package-binding"
+        );
+    }
     if let Err(error) =
         nebula_testnet::runtime::serve_runtime_rpc_with_options(bind_addr, config, options)
     {
         eprintln!("Nebula RPC failed: {error}");
         process::exit(1);
+    }
+}
+
+fn read_runtime_launch_binding(
+    args: &[String],
+    wants_json: bool,
+    validator_id: &str,
+) -> Option<nebula_testnet::runtime::RuntimeLaunchBinding> {
+    const RUNTIME_LAUNCH_BINDING_FLAGS: &[&str] = &[
+        "--deployment-attestation",
+        "--public-status",
+        "--public-probe",
+        "--validator-set",
+        "--operator-handoff",
+        "--operator-acceptance",
+        "--genesis-manifest",
+        "--launch-package-bundle",
+    ];
+    if !args
+        .iter()
+        .any(|arg| RUNTIME_LAUNCH_BINDING_FLAGS.contains(&arg.as_str()))
+    {
+        return None;
+    }
+
+    let inputs = read_launch_package_inputs(args, wants_json);
+    let bundle_input = read_launch_package_bundle_input(args, wants_json);
+    match nebula_testnet::build_runtime_launch_binding_from_jsons(
+        &inputs.deployment_input,
+        &inputs.public_status_input,
+        &inputs.public_probe_input,
+        &inputs.validator_set_input,
+        &inputs.operator_handoff_input,
+        &inputs.operator_acceptance_input,
+        &inputs.genesis_input,
+        &bundle_input,
+        validator_id,
+    ) {
+        Ok(binding) => Some(binding),
+        Err(nebula_testnet::AttestationError::MalformedJson(error)) => {
+            print_runtime_launch_binding_error(wants_json, &[error]);
+            process::exit(1);
+        }
+        Err(nebula_testnet::AttestationError::Invalid(errors)) => {
+            print_runtime_launch_binding_error(wants_json, &errors);
+            process::exit(1);
+        }
     }
 }
 
@@ -1894,6 +1952,24 @@ fn print_public_probe_error(wants_json: bool, errors: &[String]) {
         );
     } else {
         eprintln!("Public probe rejected:");
+        for error in errors {
+            eprintln!("- {error}");
+        }
+    }
+}
+
+fn print_runtime_launch_binding_error(wants_json: bool, errors: &[String]) {
+    if wants_json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "runtime_launch_binding_ready": false,
+                "level": "runtime-launch-binding-rejected",
+                "errors": errors,
+            })
+        );
+    } else {
+        eprintln!("Runtime launch binding rejected:");
         for error in errors {
             eprintln!("- {error}");
         }

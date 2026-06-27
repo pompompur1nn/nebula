@@ -3467,6 +3467,76 @@ pub fn verify_launch_package_bundle_jsons(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn build_runtime_launch_binding_from_jsons(
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+    launch_package_bundle_json: &str,
+    validator_id: &str,
+) -> Result<runtime::RuntimeLaunchBinding, AttestationError> {
+    if validator_id.trim().is_empty() {
+        return Err(AttestationError::Invalid(vec![
+            "validator_id must not be empty for runtime launch binding".to_string(),
+        ]));
+    }
+    let launch_report = verify_launch_package_with_operator_acceptance_jsons(
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let bundle_report = verify_launch_package_bundle_jsons(
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let validator_set_manifest = serde_json::from_str::<ValidatorSetManifest>(
+        validator_set_json.trim_start_matches('\u{feff}'),
+    )
+    .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    if !validator_set_manifest
+        .validators
+        .iter()
+        .any(|validator| validator.validator_id == validator_id)
+    {
+        return Err(AttestationError::Invalid(vec![format!(
+            "validator_id {validator_id} is not admitted in validator set"
+        )]));
+    }
+
+    Ok(runtime::RuntimeLaunchBinding {
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        endpoint_url: launch_report.endpoint_url,
+        deployment_attestation_root: launch_report.deployment_attestation_root,
+        public_status_manifest_root: launch_report.public_status_manifest_root,
+        public_probe_root: launch_report.public_probe_root,
+        validator_set_root: launch_report.validator_set_root,
+        operator_handoff_root: launch_report.operator_handoff_root,
+        operator_acceptance_root: bundle_report.operator_acceptance_root,
+        genesis_root: launch_report.genesis_root,
+        launch_package_root: bundle_report.launch_package_root,
+        launch_package_bundle_root: bundle_report.launch_package_bundle_root,
+        activation_height: launch_report.activation_height,
+        validator_count: launch_report.validator_count,
+        operator_count: launch_report.matched_operator_count,
+        region_count: launch_report.matched_region_count,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn build_validator_activation_json_pretty(
     launch_package_bundle_json: &str,
     deployment_attestation_json: &str,
@@ -4810,6 +4880,21 @@ const RUNTIME_OPS_DURABLE_FIELDS: &[&str] = &[
     "service",
     "chain_id",
     "runtime_version",
+    "launch_binding_present",
+    "launch_endpoint_url",
+    "deployment_attestation_root",
+    "public_status_manifest_root",
+    "public_probe_root",
+    "validator_set_root",
+    "operator_handoff_root",
+    "operator_acceptance_root",
+    "genesis_root",
+    "launch_package_root",
+    "launch_package_bundle_root",
+    "launch_activation_height",
+    "launch_validator_count",
+    "launch_operator_count",
+    "launch_region_count",
     "node_role",
     "latest_height",
     "latest_hash",
@@ -4880,6 +4965,21 @@ const RUNTIME_BACKUP_DURABLE_FIELDS: &[&str] = &[
     "manifest_version",
     "chain_id",
     "runtime_version",
+    "launch_binding_present",
+    "launch_endpoint_url",
+    "deployment_attestation_root",
+    "public_status_manifest_root",
+    "public_probe_root",
+    "validator_set_root",
+    "operator_handoff_root",
+    "operator_acceptance_root",
+    "genesis_root",
+    "launch_package_root",
+    "launch_package_bundle_root",
+    "launch_activation_height",
+    "launch_validator_count",
+    "launch_operator_count",
+    "launch_region_count",
     "latest_height",
     "latest_hash",
     "snapshot_version",
@@ -5025,6 +5125,21 @@ fn require_health_status_agreement(errors: &mut Vec<String>, health: &Value, sta
     for field in [
         "chain_id",
         "runtime_version",
+        "launch_binding_present",
+        "launch_endpoint_url",
+        "deployment_attestation_root",
+        "public_status_manifest_root",
+        "public_probe_root",
+        "validator_set_root",
+        "operator_handoff_root",
+        "operator_acceptance_root",
+        "genesis_root",
+        "launch_package_root",
+        "launch_package_bundle_root",
+        "launch_activation_height",
+        "launch_validator_count",
+        "launch_operator_count",
+        "launch_region_count",
         "node_role",
         "latest_height",
         "latest_hash",
@@ -5102,6 +5217,45 @@ fn require_ops_backup_snapshot_agreement(
             .unwrap_or(&Value::Null),
         status.get("runtime_version").unwrap_or(&Value::Null),
     );
+    let snapshot_launch_binding_present = Value::Bool(
+        snapshot
+            .pointer("/config/launch_binding")
+            .is_some_and(|value| !value.is_null()),
+    );
+    require_value_eq(
+        errors,
+        "snapshot.config.launch_binding_present",
+        &snapshot_launch_binding_present,
+        status.get("launch_binding_present").unwrap_or(&Value::Null),
+    );
+    if let Some(launch_binding) = snapshot
+        .pointer("/config/launch_binding")
+        .and_then(Value::as_object)
+    {
+        for (snapshot_field, status_field) in [
+            ("endpoint_url", "launch_endpoint_url"),
+            ("deployment_attestation_root", "deployment_attestation_root"),
+            ("public_status_manifest_root", "public_status_manifest_root"),
+            ("public_probe_root", "public_probe_root"),
+            ("validator_set_root", "validator_set_root"),
+            ("operator_handoff_root", "operator_handoff_root"),
+            ("operator_acceptance_root", "operator_acceptance_root"),
+            ("genesis_root", "genesis_root"),
+            ("launch_package_root", "launch_package_root"),
+            ("launch_package_bundle_root", "launch_package_bundle_root"),
+            ("activation_height", "launch_activation_height"),
+            ("validator_count", "launch_validator_count"),
+            ("operator_count", "launch_operator_count"),
+            ("region_count", "launch_region_count"),
+        ] {
+            require_value_eq(
+                errors,
+                &format!("snapshot.config.launch_binding.{snapshot_field}"),
+                launch_binding.get(snapshot_field).unwrap_or(&Value::Null),
+                status.get(status_field).unwrap_or(&Value::Null),
+            );
+        }
+    }
     if let Some(latest_block) = latest_block {
         require_value_eq(
             errors,
@@ -5172,6 +5326,21 @@ fn require_ops_backup_snapshot_agreement(
         "mempool_capacity_remaining",
         "bridge_policy_root",
         "bridge_custody_reconciled",
+        "launch_binding_present",
+        "launch_endpoint_url",
+        "deployment_attestation_root",
+        "public_status_manifest_root",
+        "public_probe_root",
+        "validator_set_root",
+        "operator_handoff_root",
+        "operator_acceptance_root",
+        "genesis_root",
+        "launch_package_root",
+        "launch_package_bundle_root",
+        "launch_activation_height",
+        "launch_validator_count",
+        "launch_operator_count",
+        "launch_region_count",
     ] {
         let backup_field = field;
         require_value_eq(
@@ -5216,6 +5385,33 @@ fn require_metrics_agreement(
         metrics_text,
         "nebula_sub_second_blocks",
         u8::from(json_bool(status, "sub_second_blocks").unwrap_or(false)),
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_launch_binding_present",
+        u8::from(json_bool(status, "launch_binding_present").unwrap_or(false)),
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_launch_validator_count",
+        status,
+        "launch_validator_count",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_launch_operator_count",
+        status,
+        "launch_operator_count",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_launch_region_count",
+        status,
+        "launch_region_count",
     );
     require_metric_from_json(
         errors,
@@ -10873,6 +11069,69 @@ mod public_launch {
         assert_eq!(report.validator_count, 2);
         assert_eq!(report.matched_operator_count, 2);
         assert_eq!(report.matched_region_count, 2);
+    }
+
+    #[test]
+    fn runtime_launch_binding_builds_from_verified_bundle_and_validator_set() {
+        let deployment = sample_deployment_attestation_json_pretty();
+        let public_status = sample_public_status_manifest_json_pretty();
+        let public_probe = sample_public_probe_json_pretty();
+        let validators = sample_validator_set_json_pretty();
+        let handoff = build_operator_handoff_json_pretty(&deployment, &validators).unwrap();
+        let acceptance =
+            build_operator_acceptance_json_pretty(&handoff, &deployment, &validators).unwrap();
+        let genesis = build_genesis_manifest_json_pretty(&deployment, &validators).unwrap();
+        let bundle = build_launch_package_bundle_json_pretty(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+
+        let binding = build_runtime_launch_binding_from_jsons(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+            &bundle,
+            "validator-a",
+        )
+        .unwrap();
+        binding
+            .validate_against_config(&runtime::RuntimeConfig::public_testnet_default())
+            .unwrap();
+        assert_eq!(binding.chain_id, CHAIN_ID);
+        assert_eq!(binding.runtime_version, VERSION);
+        assert_eq!(binding.validator_count, 2);
+        assert_eq!(binding.operator_count, 2);
+        assert_eq!(binding.region_count, 2);
+        assert_eq!(binding.launch_package_bundle_root.len(), 64);
+
+        let error = build_runtime_launch_binding_from_jsons(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+            &bundle,
+            "validator-z",
+        )
+        .unwrap_err();
+        match error {
+            AttestationError::Invalid(errors) => assert!(errors
+                .iter()
+                .any(|error| error == "validator_id validator-z is not admitted in validator set")),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
     }
 
     #[test]
