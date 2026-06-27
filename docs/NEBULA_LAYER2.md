@@ -157,11 +157,13 @@ evidence is absent or stale.
     with `--bootstrap-rpc`, and continuously sync newer verified snapshots from
     a repeatable `--sync-rpc` peer set. Configure public RPC abuse-resistance with
     `--max-mempool-transactions`, `--max-request-bytes`,
-    `--max-requests-per-minute`, `--max-active-connections`, and
-    `--admin-max-active-connections`. Request-rate buckets and active-connection
-    caps are listener-scoped so public traffic cannot consume the private admin
-    control-plane budget. `--admin-rpc-bind` must be a numeric loopback or
-    private address. Mempool admission is stateful: public nodes
+    `--max-snapshot-response-bytes`, `--max-requests-per-minute`,
+    `--max-active-connections`, and `--admin-max-active-connections`.
+    Request-rate buckets and active-connection caps are listener-scoped so
+    public traffic cannot consume the private admin control-plane budget.
+    Bootstrap and follower sync reject peer HTTP snapshot responses above the
+    configured snapshot response cap. `--admin-rpc-bind` must be a numeric
+    loopback or private address. Mempool admission is stateful: public nodes
     reject missing senders, duplicate pending account nonces, nonce mismatches,
     and insufficient `NBLA`/`nXMR` balances before consuming bounded capacity.
     Launch-bound public endpoints must set `--disable-nbla-faucet`; otherwise
@@ -221,7 +223,8 @@ evidence is absent or stale.
     latest height/hash, state root, snapshot root, persisted snapshot path and
     presence, sync peer count/quorum, sync quorum height/hash/state root,
     successful peer count, mempool cap/remaining capacity/full and admission rejection counts,
-    RPC request-size and rate-limit policy, admin RPC private-listener state,
+    RPC request-size, sync snapshot-response, and rate-limit policy, admin RPC
+    private-listener state,
     public-admin isolation, non-dev sequencer-key status, bridge policy root,
     bridge custody reconciliation, backup
     manifest root, and public ops readiness gauges. `nebula-testnet
@@ -303,10 +306,12 @@ bounded mempool, maximum request body size, per-listener request rate limit,
 public active connection cap, and separate private-admin connection cap;
 tune rehearsal limits with
 `--max-mempool-transactions`, `--max-request-bytes`,
-`--max-requests-per-minute`, `--max-active-connections`, and
-`--admin-max-active-connections`. Admission rejects missing senders, duplicate
-pending account nonces, nonce mismatches, and insufficient `NBLA`/`nXMR`
-balances before consuming local mempool capacity. HTTP requests whose declared
+`--max-snapshot-response-bytes`, `--max-requests-per-minute`,
+`--max-active-connections`, and `--admin-max-active-connections`. Admission
+rejects missing senders, duplicate pending account nonces, nonce mismatches,
+and insufficient `NBLA`/`nXMR` balances before consuming local mempool
+capacity. Bootstrap and follower sync reject peer HTTP snapshot responses above
+the configured snapshot response cap. HTTP requests whose declared
 `Content-Length` body is incomplete are rejected before JSON-RPC dispatch.
 
 Operator-only JSON-RPC methods require a node started with

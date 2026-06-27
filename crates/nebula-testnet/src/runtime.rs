@@ -39,6 +39,7 @@ pub const DEFAULT_MAX_REQUEST_BYTES: usize = 1_048_576;
 pub const DEFAULT_MAX_REQUESTS_PER_MINUTE: u32 = 600;
 pub const DEFAULT_MAX_ACTIVE_CONNECTIONS: usize = 512;
 pub const DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS: usize = 32;
+pub const DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES: usize = 268_435_456;
 const RPC_RATE_LIMIT_WINDOW_MS: u128 = 60_000;
 pub const DEFAULT_DEV_SEQUENCER_SECRET_KEY_HEX: &str =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -58,6 +59,7 @@ pub struct RuntimeNodeOptions {
     pub max_requests_per_minute: u32,
     pub max_active_connections: usize,
     pub admin_max_active_connections: usize,
+    pub max_snapshot_response_bytes: usize,
 }
 
 impl Default for RuntimeNodeOptions {
@@ -76,6 +78,7 @@ impl Default for RuntimeNodeOptions {
             max_requests_per_minute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
             max_active_connections: DEFAULT_MAX_ACTIVE_CONNECTIONS,
             admin_max_active_connections: DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS,
+            max_snapshot_response_bytes: DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES,
         }
     }
 }
@@ -650,6 +653,7 @@ pub struct RuntimeOpsStatus {
     pub rpc_max_requests_per_minute: u32,
     pub rpc_max_active_connections: usize,
     pub admin_rpc_max_active_connections: usize,
+    pub sync_max_snapshot_response_bytes: usize,
     pub admin_rpc_enabled: bool,
     pub admin_rpc_private_listener: bool,
     pub public_rpc_admin_methods_enabled: bool,
@@ -746,6 +750,7 @@ pub struct RuntimeBackupManifest {
     pub rpc_max_requests_per_minute: u32,
     pub rpc_max_active_connections: usize,
     pub admin_rpc_max_active_connections: usize,
+    pub sync_max_snapshot_response_bytes: usize,
     pub admin_rpc_enabled: bool,
     pub admin_rpc_private_listener: bool,
     pub public_rpc_admin_methods_enabled: bool,
@@ -850,6 +855,7 @@ struct RuntimeRpcState {
     runtime: Arc<Mutex<NebulaRuntime>>,
     storage: Option<RuntimeStorage>,
     rpc_limits: RuntimeRpcLimits,
+    sync_limits: RuntimeSyncLimits,
     connection_counters: RuntimeRpcConnectionCounters,
     sync_peers: RuntimeSyncPeerSet,
     sync_telemetry: Arc<Mutex<BTreeMap<String, RuntimeSyncPeerTelemetry>>>,
@@ -883,6 +889,11 @@ struct RuntimeRpcLimits {
     max_requests_per_minute: u32,
     max_active_connections: usize,
     admin_max_active_connections: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+struct RuntimeSyncLimits {
+    max_snapshot_response_bytes: usize,
 }
 
 impl RuntimeRpcLimits {
@@ -1449,6 +1460,10 @@ impl RuntimeRpcState {
             json!(self.rpc_limits.admin_max_active_connections),
         );
         fields.insert(
+            "sync_max_snapshot_response_bytes".to_string(),
+            json!(self.sync_limits.max_snapshot_response_bytes),
+        );
+        fields.insert(
             "bootstrap_peer_urls".to_string(),
             json!(self.sync_peers.bootstrap_peer_urls),
         );
@@ -1743,6 +1758,7 @@ impl RuntimeRpcState {
             rpc_max_requests_per_minute: self.rpc_limits.max_requests_per_minute,
             rpc_max_active_connections: self.rpc_limits.max_active_connections,
             admin_rpc_max_active_connections: self.rpc_limits.admin_max_active_connections,
+            sync_max_snapshot_response_bytes: self.sync_limits.max_snapshot_response_bytes,
             admin_rpc_enabled: self.admin_rpc_enabled(),
             admin_rpc_private_listener: self.admin_rpc_private_listener,
             public_rpc_admin_methods_enabled: self.public_rpc_admin_methods_enabled(),
@@ -1845,6 +1861,7 @@ impl RuntimeRpcState {
             rpc_max_requests_per_minute: ops_status.rpc_max_requests_per_minute,
             rpc_max_active_connections: ops_status.rpc_max_active_connections,
             admin_rpc_max_active_connections: ops_status.admin_rpc_max_active_connections,
+            sync_max_snapshot_response_bytes: ops_status.sync_max_snapshot_response_bytes,
             admin_rpc_enabled: ops_status.admin_rpc_enabled,
             admin_rpc_private_listener: ops_status.admin_rpc_private_listener,
             public_rpc_admin_methods_enabled: ops_status.public_rpc_admin_methods_enabled,
@@ -1920,6 +1937,8 @@ impl RuntimeRpcState {
             "rpc_max_requests_per_minute": status["rpc_max_requests_per_minute"],
             "rpc_max_active_connections": status["rpc_max_active_connections"],
             "admin_rpc_max_active_connections": status["admin_rpc_max_active_connections"],
+            "sync_limits": self.sync_limits,
+            "sync_max_snapshot_response_bytes": status["sync_max_snapshot_response_bytes"],
             "admin_rpc_enabled": self.admin_rpc_enabled(),
             "admin_rpc_private_listener": self.admin_rpc_private_listener,
             "public_rpc_admin_methods_enabled": self.public_rpc_admin_methods_enabled(),
@@ -2092,6 +2111,12 @@ impl RuntimeRpcState {
             "nebula_admin_rpc_max_active_connections",
             "Maximum active private admin RPC connections admitted before listener rejection.",
             self.rpc_limits.admin_max_active_connections,
+        );
+        push_metric(
+            &mut output,
+            "nebula_sync_max_snapshot_response_bytes",
+            "Maximum accepted HTTP response size when fetching peer snapshots.",
+            self.sync_limits.max_snapshot_response_bytes,
         );
         push_metric(
             &mut output,
@@ -2338,6 +2363,17 @@ impl RuntimeRpcLimits {
             max_requests_per_minute: options.max_requests_per_minute,
             max_active_connections: options.max_active_connections,
             admin_max_active_connections: options.admin_max_active_connections,
+        })
+    }
+}
+
+impl RuntimeSyncLimits {
+    fn from_options(options: &RuntimeNodeOptions) -> Result<Self, String> {
+        if options.max_snapshot_response_bytes == 0 {
+            return Err("max_snapshot_response_bytes must be greater than zero".to_string());
+        }
+        Ok(Self {
+            max_snapshot_response_bytes: options.max_snapshot_response_bytes,
         })
     }
 }
@@ -3428,6 +3464,7 @@ pub fn serve_runtime_rpc_with_options(
     options: RuntimeNodeOptions,
 ) -> std::io::Result<()> {
     let rpc_limits = RuntimeRpcLimits::from_options(&options).map_err(std::io::Error::other)?;
+    let sync_limits = RuntimeSyncLimits::from_options(&options).map_err(std::io::Error::other)?;
     let admin_token =
         normalize_admin_token(options.admin_token.clone()).map_err(std::io::Error::other)?;
     let admin_rpc_bind_addr = options.admin_rpc_bind_addr.clone();
@@ -3447,6 +3484,7 @@ pub fn serve_runtime_rpc_with_options(
         storage.as_ref(),
         &startup_bootstrap_peers,
         options.sequencer_secret_key_hex.clone(),
+        sync_limits.max_snapshot_response_bytes,
     )
     .map_err(std::io::Error::other)?;
     if let Some(storage) = &storage {
@@ -3460,6 +3498,7 @@ pub fn serve_runtime_rpc_with_options(
         runtime: Arc::new(Mutex::new(runtime)),
         storage,
         rpc_limits,
+        sync_limits,
         connection_counters: RuntimeRpcConnectionCounters::default(),
         sync_peers,
         sync_telemetry: Arc::new(Mutex::new(BTreeMap::new())),
@@ -3569,12 +3608,14 @@ fn load_runtime_for_node(
     storage: Option<&RuntimeStorage>,
     bootstrap_rpc_urls: &[String],
     sequencer_secret_key_hex: Option<String>,
+    max_snapshot_response_bytes: usize,
 ) -> Result<NebulaRuntime, String> {
     let local_snapshot = match storage {
         Some(storage) => storage.load_snapshot()?,
         None => None,
     };
-    let (bootstrap_snapshots, fetch_errors) = fetch_runtime_snapshots(bootstrap_rpc_urls);
+    let (bootstrap_snapshots, fetch_errors) =
+        fetch_runtime_snapshots(bootstrap_rpc_urls, max_snapshot_response_bytes);
     if local_snapshot.is_none() && bootstrap_snapshots.is_empty() && !bootstrap_rpc_urls.is_empty()
     {
         return Err(format!(
@@ -3831,7 +3872,7 @@ fn sync_runtime_from_peers(
     for url in sync_rpc_urls {
         let started_at_unix_ms = unix_ms();
         state.record_sync_peer_attempt(url, started_at_unix_ms)?;
-        match fetch_runtime_snapshot(url) {
+        match fetch_runtime_snapshot(url, state.sync_limits.max_snapshot_response_bytes) {
             Ok(snapshot) => {
                 let latency_ms = unix_ms().saturating_sub(started_at_unix_ms);
                 state.record_sync_peer_success(url, &snapshot, latency_ms)?;
@@ -3893,11 +3934,14 @@ fn collect_peer_urls(
     Ok(urls)
 }
 
-fn fetch_runtime_snapshots(urls: &[String]) -> (Vec<(String, RuntimeSnapshot)>, Vec<String>) {
+fn fetch_runtime_snapshots(
+    urls: &[String],
+    max_snapshot_response_bytes: usize,
+) -> (Vec<(String, RuntimeSnapshot)>, Vec<String>) {
     let mut snapshots = Vec::new();
     let mut errors = Vec::new();
     for url in urls {
-        match fetch_runtime_snapshot(url) {
+        match fetch_runtime_snapshot(url, max_snapshot_response_bytes) {
             Ok(snapshot) => snapshots.push((url.clone(), snapshot)),
             Err(error) => errors.push(format!("{url}: {error}")),
         }
@@ -3905,7 +3949,10 @@ fn fetch_runtime_snapshots(urls: &[String]) -> (Vec<(String, RuntimeSnapshot)>, 
     (snapshots, errors)
 }
 
-fn fetch_runtime_snapshot(url: &str) -> Result<RuntimeSnapshot, String> {
+fn fetch_runtime_snapshot(
+    url: &str,
+    max_snapshot_response_bytes: usize,
+) -> Result<RuntimeSnapshot, String> {
     let (host, path) = parse_http_url(url)?;
     let mut stream = TcpStream::connect(&host)
         .map_err(|error| format!("failed to connect to bootstrap peer {host}: {error}"))?;
@@ -3915,10 +3962,7 @@ fn fetch_runtime_snapshot(url: &str) -> Result<RuntimeSnapshot, String> {
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
     )
     .map_err(|error| format!("failed to request bootstrap snapshot: {error}"))?;
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .map_err(|error| format!("failed to read bootstrap snapshot response: {error}"))?;
+    let response = read_http_response_limited(&mut stream, max_snapshot_response_bytes)?;
     let Some((head, body)) = response.split_once("\r\n\r\n") else {
         return Err("bootstrap peer returned malformed HTTP response".to_string());
     };
@@ -3926,10 +3970,51 @@ fn fetch_runtime_snapshot(url: &str) -> Result<RuntimeSnapshot, String> {
     if !status_line.contains(" 200 ") {
         return Err(format!("bootstrap peer returned {status_line}"));
     }
+    if let Some(content_length) = content_length_from_headers(head) {
+        if content_length > max_snapshot_response_bytes {
+            return Err(format!(
+                "bootstrap peer declared snapshot response body {content_length} bytes above max_snapshot_response_bytes {max_snapshot_response_bytes}"
+            ));
+        }
+        let body_bytes = body.len();
+        if body_bytes != content_length {
+            return Err(format!(
+                "bootstrap peer returned incomplete snapshot body: declared {content_length} bytes but received {body_bytes}"
+            ));
+        }
+    }
     let snapshot = serde_json::from_str::<RuntimeSnapshot>(body.trim())
         .map_err(|error| format!("failed to parse bootstrap snapshot: {error}"))?;
     validate_snapshot(&snapshot)?;
     Ok(snapshot)
+}
+
+fn read_http_response_limited(
+    stream: &mut TcpStream,
+    max_snapshot_response_bytes: usize,
+) -> Result<String, String> {
+    let mut response = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                if response.len().saturating_add(read) > max_snapshot_response_bytes {
+                    return Err(format!(
+                        "bootstrap peer snapshot response exceeded max_snapshot_response_bytes {max_snapshot_response_bytes}"
+                    ));
+                }
+                response.extend_from_slice(&buffer[..read]);
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to read bootstrap snapshot response: {error}"
+                ));
+            }
+        }
+    }
+    String::from_utf8(response)
+        .map_err(|error| format!("bootstrap peer returned non-UTF-8 HTTP response: {error}"))
 }
 
 fn parse_http_url(url: &str) -> Result<(String, String), String> {
@@ -5884,6 +5969,7 @@ fn ops_status_root(report: &RuntimeOpsStatus) -> String {
         "rpc_max_requests_per_minute": report.rpc_max_requests_per_minute,
         "rpc_max_active_connections": report.rpc_max_active_connections,
         "admin_rpc_max_active_connections": report.admin_rpc_max_active_connections,
+        "sync_max_snapshot_response_bytes": report.sync_max_snapshot_response_bytes,
         "admin_rpc_enabled": report.admin_rpc_enabled,
         "admin_rpc_private_listener": report.admin_rpc_private_listener,
         "public_rpc_admin_methods_enabled": report.public_rpc_admin_methods_enabled,
@@ -5981,6 +6067,7 @@ fn backup_manifest_root(manifest: &RuntimeBackupManifest) -> String {
         "rpc_max_requests_per_minute": manifest.rpc_max_requests_per_minute,
         "rpc_max_active_connections": manifest.rpc_max_active_connections,
         "admin_rpc_max_active_connections": manifest.admin_rpc_max_active_connections,
+        "sync_max_snapshot_response_bytes": manifest.sync_max_snapshot_response_bytes,
         "admin_rpc_enabled": manifest.admin_rpc_enabled,
         "admin_rpc_private_listener": manifest.admin_rpc_private_listener,
         "public_rpc_admin_methods_enabled": manifest.public_rpc_admin_methods_enabled,
@@ -6270,6 +6357,9 @@ mod tests {
                 max_active_connections: DEFAULT_MAX_ACTIVE_CONNECTIONS,
                 admin_max_active_connections: DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS,
             },
+            sync_limits: RuntimeSyncLimits {
+                max_snapshot_response_bytes: DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES,
+            },
             connection_counters: RuntimeRpcConnectionCounters::default(),
             sync_peers: RuntimeSyncPeerSet::default(),
             sync_telemetry: Arc::new(Mutex::new(BTreeMap::new())),
@@ -6544,6 +6634,35 @@ mod tests {
                 body.len(),
                 body
             );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            thread::sleep(Duration::from_millis(25));
+        });
+        (format!("http://{address}/snapshot"), handle)
+    }
+
+    fn one_shot_raw_http_response(response: String) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 256];
+            while !String::from_utf8_lossy(&request).contains("\r\n\r\n") {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(read) => request.extend_from_slice(&chunk[..read]),
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            || error.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
             stream.write_all(response.as_bytes()).unwrap();
             stream.flush().unwrap();
             let _ = stream.shutdown(std::net::Shutdown::Write);
@@ -6694,6 +6813,11 @@ mod tests {
             limits.admin_max_active_connections,
             DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS
         );
+        let sync_limits = RuntimeSyncLimits::from_options(&options).unwrap();
+        assert_eq!(
+            sync_limits.max_snapshot_response_bytes,
+            DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
+        );
 
         let options = RuntimeNodeOptions {
             max_request_bytes: 0,
@@ -6726,6 +6850,14 @@ mod tests {
         assert!(RuntimeRpcLimits::from_options(&options)
             .unwrap_err()
             .contains("admin_max_active_connections"));
+
+        let options = RuntimeNodeOptions {
+            max_snapshot_response_bytes: 0,
+            ..RuntimeNodeOptions::default()
+        };
+        assert!(RuntimeSyncLimits::from_options(&options)
+            .unwrap_err()
+            .contains("max_snapshot_response_bytes"));
 
         assert!(normalize_admin_token(Some(String::new()))
             .unwrap_err()
@@ -6831,6 +6963,10 @@ mod tests {
             status["admin_rpc_max_active_connections"],
             DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS
         );
+        assert_eq!(
+            status["sync_max_snapshot_response_bytes"],
+            DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
+        );
         assert_eq!(status["admin_rpc_enabled"], false);
         assert_eq!(
             status["max_mempool_transactions"],
@@ -6895,6 +7031,11 @@ mod tests {
             dispatch_json_rpc_method(&state, "nebula_status", json!({})).unwrap()
                 ["admin_rpc_max_active_connections"],
             DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS
+        );
+        assert_eq!(
+            dispatch_json_rpc_method(&state, "nebula_status", json!({})).unwrap()
+                ["sync_max_snapshot_response_bytes"],
+            DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
         );
         assert_eq!(
             dispatch_json_rpc_method(&state, "nebula_status", json!({})).unwrap()
@@ -7190,6 +7331,10 @@ mod tests {
             ops.admin_rpc_max_active_connections,
             DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS
         );
+        assert_eq!(
+            ops.sync_max_snapshot_response_bytes,
+            DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
+        );
         assert!(ops.admin_rpc_enabled);
         assert!(ops.admin_rpc_private_listener);
         assert!(!ops.public_rpc_admin_methods_enabled);
@@ -7227,6 +7372,10 @@ mod tests {
             manifest.admin_rpc_max_active_connections,
             DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS
         );
+        assert_eq!(
+            manifest.sync_max_snapshot_response_bytes,
+            DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
+        );
         assert!(manifest.admin_rpc_enabled);
         assert!(manifest.admin_rpc_private_listener);
         assert!(!manifest.public_rpc_admin_methods_enabled);
@@ -7263,6 +7412,10 @@ mod tests {
             rpc_ops["admin_rpc_max_active_connections"],
             DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS
         );
+        assert_eq!(
+            rpc_ops["sync_max_snapshot_response_bytes"],
+            DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
+        );
         let rpc_backup =
             dispatch_json_rpc_method(&state, "nebula_backupManifest", json!({})).unwrap();
         assert_eq!(rpc_backup["backup_root"].as_str().unwrap().len(), 64);
@@ -7281,6 +7434,10 @@ mod tests {
         assert_eq!(
             rpc_backup["admin_rpc_max_active_connections"],
             DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS
+        );
+        assert_eq!(
+            rpc_backup["sync_max_snapshot_response_bytes"],
+            DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
         );
 
         let _ = fs::remove_dir_all(dir);
@@ -7342,6 +7499,10 @@ mod tests {
         assert_eq!(
             health["admin_rpc_max_active_connections"],
             DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS
+        );
+        assert_eq!(
+            health["sync_max_snapshot_response_bytes"],
+            DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES
         );
         assert_eq!(health["snapshot_persisted"], true);
         assert_eq!(health["storage_snapshot_matches_runtime"], true);
@@ -7582,6 +7743,9 @@ mod tests {
         )));
         assert!(metrics.contains(&format!(
             "nebula_admin_rpc_max_active_connections {DEFAULT_ADMIN_MAX_ACTIVE_CONNECTIONS}"
+        )));
+        assert!(metrics.contains(&format!(
+            "nebula_sync_max_snapshot_response_bytes {DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES}"
         )));
         assert!(metrics.contains("nebula_sync_peer_count 0"));
         assert!(metrics.contains("nebula_sync_peer_quorum 1"));
@@ -8556,6 +8720,63 @@ mod tests {
         )
         .unwrap_err()
         .contains("does not extend local height"));
+    }
+
+    #[test]
+    fn fetch_runtime_snapshot_rejects_oversized_declared_response() {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: application/json\r\n",
+            "Content-Length: 100\r\n",
+            "Connection: close\r\n\r\n",
+            "{}"
+        )
+        .to_string();
+        let (url, handle) = one_shot_raw_http_response(response);
+
+        let error = fetch_runtime_snapshot(&url, 64).unwrap_err();
+        handle.join().unwrap();
+
+        assert!(
+            error.contains("exceeded max_snapshot_response_bytes")
+                || error.contains("above max_snapshot_response_bytes"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn fetch_runtime_snapshot_rejects_oversized_streamed_response() {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+            "x".repeat(128)
+        );
+        let (url, handle) = one_shot_raw_http_response(response);
+
+        let error = fetch_runtime_snapshot(&url, 96).unwrap_err();
+        handle.join().unwrap();
+
+        assert!(
+            error.contains("exceeded max_snapshot_response_bytes"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn fetch_runtime_snapshot_rejects_incomplete_declared_body() {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: application/json\r\n",
+            "Content-Length: 10\r\n",
+            "Connection: close\r\n\r\n",
+            "{}"
+        )
+        .to_string();
+        let (url, handle) = one_shot_raw_http_response(response);
+
+        let error = fetch_runtime_snapshot(&url, DEFAULT_MAX_SNAPSHOT_RESPONSE_BYTES).unwrap_err();
+        handle.join().unwrap();
+
+        assert!(error.contains("incomplete snapshot body"), "{error}");
     }
 
     #[test]
