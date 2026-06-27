@@ -33,6 +33,17 @@ fn assert_hex64(value: &Value, field: &str) {
     );
 }
 
+fn assert_u64_at_least(value: &Value, field: &str, minimum: u64) {
+    let actual = value[field]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{field} should be an unsigned integer"));
+
+    assert!(
+        actual >= minimum,
+        "{field} should be at least {minimum}, got {actual}"
+    );
+}
+
 #[test]
 fn prove_local_public_testnet_json_reports_rehearsal_ready_but_launch_blocked() {
     let stdout = run_nebula(&["--prove-local-public-testnet", "--json"]);
@@ -64,5 +75,44 @@ fn prove_local_public_testnet_plain_text_smoke_reports_rehearsal_blocker() {
     let stdout = run_nebula(&["--prove-local-public-testnet"]);
 
     assert!(stdout.contains("local-public-testnet-rehearsal-ready"));
+    assert!(stdout.contains("public-launch-deployment-attestation"));
+}
+
+#[test]
+fn prove_live_rpc_devnet_json_reports_runtime_rehearsal_contract() {
+    let stdout = run_nebula(&["--prove-live-rpc-devnet", "--json"]);
+    let report: Value = serde_json::from_str(&stdout).expect("live rpc devnet report json");
+
+    assert_eq!(report["live_rpc_devnet_rehearsed"], true);
+    assert_eq!(report["level"], "live-rpc-devnet-rehearsal-ready");
+    assert_eq!(report["sub_second_blocks"], true);
+    assert_eq!(report["public_launch_ready"], false);
+    assert_eq!(
+        report["public_launch_blocker"],
+        "public-launch-deployment-attestation"
+    );
+    assert_eq!(report["bridge_deposit_count"], 1);
+    assert_eq!(report["withdrawal_request_count"], 1);
+    assert_eq!(report["finalized_withdrawal_count"], 1);
+    assert_eq!(report["runtime_surface_ready"], true);
+
+    let block_millis = report["block_millis"]
+        .as_u64()
+        .expect("block_millis should be an unsigned integer");
+    assert!(
+        block_millis < 1_000,
+        "block_millis should be sub-second, got {block_millis}"
+    );
+    assert_u64_at_least(&report, "produced_block_count", 2);
+    assert_u64_at_least(&report, "total_nxmr_fees_units", 1);
+    assert_hex64(&report, "runtime_surface_root");
+    assert_hex64(&report, "rehearsal_root");
+}
+
+#[test]
+fn prove_live_rpc_devnet_plain_text_smoke_reports_level_and_blocker() {
+    let stdout = run_nebula(&["--prove-live-rpc-devnet"]);
+
+    assert!(stdout.contains("live-rpc-devnet-rehearsal-ready"));
     assert!(stdout.contains("public-launch-deployment-attestation"));
 }

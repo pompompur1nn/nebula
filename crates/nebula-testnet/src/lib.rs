@@ -1,11 +1,15 @@
 #![recursion_limit = "512"]
 
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha3::{Digest, Sha3_256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub mod runtime;
 
@@ -757,6 +761,42 @@ pub struct LocalPublicTestnetRehearsalReport {
     pub observer_count: usize,
     pub region_count: usize,
     pub generated_at_unix_ms: u128,
+    pub rehearsal_root: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LiveRpcDevnetRehearsalReport {
+    pub live_rpc_devnet_rehearsed: bool,
+    pub level: &'static str,
+    pub chain_id: String,
+    pub runtime_version: String,
+    pub public_launch_ready: bool,
+    pub public_launch_blocker: String,
+    pub endpoint_url: String,
+    pub sequencer_rpc_addr: String,
+    pub follower_rpc_addr: String,
+    pub block_millis: u64,
+    pub sub_second_blocks: bool,
+    pub produced_block_count: u64,
+    pub runtime_surface_ready: bool,
+    pub runtime_surface_root: String,
+    pub latest_height: u64,
+    pub sync_quorum_met: bool,
+    pub sync_successful_peer_count: u64,
+    pub bridge_deposit_count: u64,
+    pub withdrawal_request_count: u64,
+    pub finalized_withdrawal_count: u64,
+    pub bridge_replay_cache_count: u64,
+    pub bridge_deposited_nxmr_units: u128,
+    pub account_nxmr_units: u128,
+    pub withdrawal_reserved_nxmr_units: u128,
+    pub total_nxmr_fees_units: u128,
+    pub buyback_pool_nebulai: u128,
+    pub validator_reward_nebulai: u128,
+    pub bridge_custody_reconciled: bool,
+    pub nxmr_custody_deficit_units: u128,
+    pub sequencer_key_rotation_count: u64,
+    pub launch_package_bundle_root: String,
     pub rehearsal_root: String,
 }
 
@@ -1864,6 +1904,310 @@ pub fn prove_local_public_testnet_rehearsal(
         rehearsal_root: String::new(),
     };
     report.rehearsal_root = local_public_testnet_rehearsal_root(&report);
+    Ok(report)
+}
+
+pub fn prove_live_rpc_devnet_rehearsal_json_pretty() -> Result<String, AttestationError> {
+    let report = prove_live_rpc_devnet_rehearsal()?;
+    serde_json::to_string_pretty(&report)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+pub fn prove_live_rpc_devnet_rehearsal() -> Result<LiveRpcDevnetRehearsalReport, AttestationError> {
+    const ADMIN_TOKEN: &str = "live-rpc-devnet-rehearsal-admin";
+    let readiness = readiness_report();
+    let public_launch_blocker = readiness
+        .public_launch_readiness
+        .blocking_gaps
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "none".to_string());
+    let (sequencer_binding, follower_binding) = live_runtime_launch_bindings()?;
+    let endpoint_url = sequencer_binding.endpoint_url.clone();
+    let block_millis = runtime::DEFAULT_SUBSECOND_BLOCK_MS;
+
+    let mut sequencer_config = runtime::RuntimeConfig::public_testnet_default();
+    sequencer_config.block_target_ms = block_millis;
+    sequencer_config.validator_id = "validator-a".to_string();
+    sequencer_config.launch_binding = Some(sequencer_binding);
+    let initial_sequencer_secret_key_hex = "3c".repeat(32);
+    sequencer_config.sequencer_public_key_hex = live_account_id(0x3c);
+    let (sequencer_rpc_addr, sequencer_admin_addr) = live_rpc_start_server_with_admin(
+        sequencer_config,
+        runtime::RuntimeNodeOptions {
+            admin_token: Some(ADMIN_TOKEN.to_string()),
+            sequencer_secret_key_hex: Some(initial_sequencer_secret_key_hex),
+            data_dir: Some(live_temp_data_dir("sequencer")),
+            auto_produce_blocks: false,
+            max_requests_per_minute: 10_000,
+            ..runtime::RuntimeNodeOptions::default()
+        },
+    )?;
+
+    let initial_block = live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_produceBlock",
+        json!({ "admin_token": ADMIN_TOKEN }),
+    )?;
+    if live_rpc_result(&initial_block)?["height"]
+        .as_u64()
+        .unwrap_or(0)
+        == 0
+    {
+        return Err(live_rehearsal_invalid(
+            "initial block production did not advance height",
+        ));
+    }
+    live_wait_for_json_condition(
+        &sequencer_rpc_addr,
+        "/ops",
+        "sequencer public ops ready",
+        |ops| ops["public_ops_ready"] == true && ops["latest_height"].as_u64().unwrap_or(0) > 0,
+    )?;
+
+    let rotation = live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_rotateSequencerKey",
+        json!({
+            "admin_token": ADMIN_TOKEN,
+            "new_sequencer_secret_key_hex": "4d".repeat(32),
+            "operator_id": "operator-a",
+            "approval_root": hex_64("live-rotation-approval"),
+        }),
+    )?;
+    let rotation = live_rpc_result(&rotation)?;
+    if rotation["rotated"] != true {
+        return Err(live_rehearsal_invalid(
+            "sequencer key rotation did not report rotated=true",
+        ));
+    }
+    let rotated_public_key = rotation["sequencer_public_key_hex"]
+        .as_str()
+        .ok_or_else(|| live_rehearsal_invalid("sequencer rotation response missing public key"))?
+        .to_string();
+
+    let bridge_account_seed = 0x46;
+    let bridge_account = live_account_id(bridge_account_seed);
+    let faucet = live_rpc_call(
+        &sequencer_rpc_addr,
+        "nebula_faucet",
+        json!({ "account": bridge_account.clone() }),
+    )?;
+    if live_rpc_result(&faucet)?["credited_nxmr_units"] != 0 {
+        return Err(live_rehearsal_invalid(
+            "faucet credited nXMR; nXMR must remain bridge-only",
+        ));
+    }
+
+    let bridge_deposit = live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_observeBridgeDeposit",
+        json!({
+            "admin_token": ADMIN_TOKEN,
+            "deposit": live_bridge_deposit(bridge_account_seed, 5_000),
+        }),
+    )?;
+    let bridge_deposit = live_rpc_result(&bridge_deposit)?;
+    if bridge_deposit["credited"] != true {
+        return Err(live_rehearsal_invalid(
+            "bridge deposit did not report credited=true",
+        ));
+    }
+
+    let nxmr_gas_tx = live_rpc_call(
+        &sequencer_rpc_addr,
+        "nebula_sendTransaction",
+        json!({ "tx": live_signed_nxmr_fee_transaction(bridge_account_seed, 0, "live-nxmr-recipient") }),
+    )?;
+    if live_rpc_result(&nxmr_gas_tx)?["accepted_to_mempool"] != true {
+        return Err(live_rehearsal_invalid(
+            "nXMR gas transaction was not accepted to mempool",
+        ));
+    }
+    let block_with_nxmr_fee = live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_produceBlock",
+        json!({ "admin_token": ADMIN_TOKEN }),
+    )?;
+    let block_with_nxmr_fee = live_rpc_result(&block_with_nxmr_fee)?;
+    if block_with_nxmr_fee["producer_public_key"] != rotated_public_key {
+        return Err(live_rehearsal_invalid(
+            "post-rotation block was not signed by the rotated sequencer key",
+        ));
+    }
+
+    let withdrawal = live_rpc_call(
+        &sequencer_rpc_addr,
+        "nebula_requestWithdrawal",
+        json!({
+            "account": bridge_account.clone(),
+            "monero_address": "9xTestnetMoneroAddressForNebulaWithdrawals",
+            "amount_nxmr_units": 2_000,
+            "nonce": 1,
+            "signature": live_withdrawal_signature(
+                bridge_account_seed,
+                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                2_000,
+                1,
+            ),
+        }),
+    )?;
+    let withdrawal = live_rpc_result(&withdrawal)?;
+    if withdrawal["accepted"] != true {
+        return Err(live_rehearsal_invalid(
+            "withdrawal request did not report accepted=true",
+        ));
+    }
+    let withdrawal_id = withdrawal["withdrawal"]["withdrawal_id"]
+        .as_str()
+        .ok_or_else(|| live_rehearsal_invalid("withdrawal response missing withdrawal_id"))?
+        .to_string();
+    let withdrawal_request = serde_json::from_value::<runtime::RuntimeWithdrawalRequest>(
+        withdrawal["withdrawal"].clone(),
+    )
+    .map_err(|error| live_rehearsal_invalid(format!("invalid withdrawal response: {error}")))?;
+    let finalized_monero_tx_id = hex_64("live-finalized-withdrawal");
+    let finalization_proof_root = hex_64("live-finalization-proof");
+    let (operator_approval_ids, operator_approval_roots, operator_approvals) =
+        live_operator_approval_quorum(
+            &withdrawal_request,
+            &finalized_monero_tx_id,
+            &finalization_proof_root,
+        );
+    let finalization = live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_finalizeWithdrawal",
+        json!({
+            "admin_token": ADMIN_TOKEN,
+            "withdrawal_id": withdrawal_id,
+            "finalized_monero_tx_id": finalized_monero_tx_id,
+            "finalization_proof_root": finalization_proof_root,
+            "operator_approval_ids": operator_approval_ids,
+            "operator_approval_roots": operator_approval_roots,
+            "operator_approvals": operator_approvals,
+        }),
+    )?;
+    if live_rpc_result(&finalization)?["finalized"] != true {
+        return Err(live_rehearsal_invalid(
+            "withdrawal finalization did not report finalized=true",
+        ));
+    }
+
+    let sequencer_status = live_wait_for_json_condition(
+        &sequencer_rpc_addr,
+        "/status",
+        "sequencer lifecycle state committed",
+        |status| {
+            status["sequencer_key_rotation_count"] == 1
+                && status["bridge_deposit_count"] == 1
+                && status["withdrawal_request_count"] == 1
+                && status["finalized_withdrawal_count"] == 1
+                && status["total_nxmr_fees_units"] == 1_000
+                && status["buyback_pool_nebulai"] == 900
+                && status["validator_reward_nebulai"] == 100
+                && status["bridge_custody_reconciled"] == true
+        },
+    )?;
+
+    let snapshot_url = format!("http://{sequencer_rpc_addr}/snapshot");
+    let mut follower_config = runtime::RuntimeConfig::public_testnet_default();
+    follower_config.block_target_ms = block_millis;
+    follower_config.validator_id = "validator-b".to_string();
+    follower_config.produce_blocks = false;
+    follower_config.sequencer_public_key_hex = rotated_public_key;
+    follower_config.launch_binding = Some(follower_binding.clone());
+    let follower_rpc_addr = live_rpc_start_server(
+        follower_config,
+        runtime::RuntimeNodeOptions {
+            data_dir: Some(live_temp_data_dir("follower")),
+            bootstrap_rpc_url: Some(snapshot_url.clone()),
+            sync_rpc_url: Some(snapshot_url),
+            sync_peer_quorum: 1,
+            max_requests_per_minute: 10_000,
+            ..runtime::RuntimeNodeOptions::default()
+        },
+    )?;
+
+    let follower_ops = live_wait_for_json_condition(
+        &follower_rpc_addr,
+        "/ops",
+        "follower public ops ready",
+        |ops| {
+            ops["public_ops_ready"] == true
+                && ops["node_role"] == "follower"
+                && ops["sync_quorum_met"] == true
+                && ops["sync_successful_peer_count"].as_u64().unwrap_or(0) >= 1
+                && ops["latest_height"].as_u64().unwrap_or(0) >= 2
+        },
+    )?;
+    let evidence = live_wait_for_runtime_surface_evidence(&follower_rpc_addr, &endpoint_url)?;
+    let runtime_surface_report = verify_runtime_surface_evidence_json(&evidence.to_string())?;
+    if !runtime_surface_report.runtime_surface_ready {
+        return Err(live_rehearsal_invalid(
+            "runtime surface evidence did not report ready=true",
+        ));
+    }
+    if !runtime_surface_report.blocking_gaps.is_empty() {
+        return Err(live_rehearsal_invalid(format!(
+            "runtime surface evidence has blocking gaps: {}",
+            runtime_surface_report.blocking_gaps.join(", ")
+        )));
+    }
+    let status = &evidence["status"];
+    let produced_block_count = live_value_u64(status, "latest_height")?;
+    let mut report = LiveRpcDevnetRehearsalReport {
+        live_rpc_devnet_rehearsed: true,
+        level: "live-rpc-devnet-rehearsal-ready",
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        public_launch_ready: readiness.public_launch_readiness.public_launch_ready,
+        public_launch_blocker,
+        endpoint_url,
+        sequencer_rpc_addr,
+        follower_rpc_addr,
+        block_millis,
+        sub_second_blocks: live_value_bool(status, "sub_second_blocks")?,
+        produced_block_count,
+        runtime_surface_ready: runtime_surface_report.runtime_surface_ready,
+        runtime_surface_root: runtime_surface_report.runtime_surface_root,
+        latest_height: runtime_surface_report.latest_height,
+        sync_quorum_met: live_value_bool(&follower_ops, "sync_quorum_met")?,
+        sync_successful_peer_count: live_value_u64(&follower_ops, "sync_successful_peer_count")?,
+        bridge_deposit_count: live_value_u64(status, "bridge_deposit_count")?,
+        withdrawal_request_count: live_value_u64(status, "withdrawal_request_count")?,
+        finalized_withdrawal_count: live_value_u64(status, "finalized_withdrawal_count")?,
+        bridge_replay_cache_count: live_value_u64(status, "bridge_replay_cache_count")?,
+        bridge_deposited_nxmr_units: live_value_u128(status, "bridge_deposited_nxmr_units")?,
+        account_nxmr_units: live_value_u128(status, "account_nxmr_units")?,
+        withdrawal_reserved_nxmr_units: live_value_u128(status, "withdrawal_reserved_nxmr_units")?,
+        total_nxmr_fees_units: live_value_u128(status, "total_nxmr_fees_units")?,
+        buyback_pool_nebulai: live_value_u128(status, "buyback_pool_nebulai")?,
+        validator_reward_nebulai: live_value_u128(status, "validator_reward_nebulai")?,
+        bridge_custody_reconciled: live_value_bool(status, "bridge_custody_reconciled")?,
+        nxmr_custody_deficit_units: live_value_u128(status, "nxmr_custody_deficit_units")?,
+        sequencer_key_rotation_count: live_value_u64(status, "sequencer_key_rotation_count")?,
+        launch_package_bundle_root: follower_binding.launch_package_bundle_root,
+        rehearsal_root: String::new(),
+    };
+    if report.produced_block_count < 2 {
+        return Err(live_rehearsal_invalid(
+            "live RPC rehearsal produced fewer than two blocks",
+        ));
+    }
+    if !report.sub_second_blocks || report.block_millis >= 1_000 {
+        return Err(live_rehearsal_invalid(
+            "live RPC rehearsal did not prove sub-second blocks",
+        ));
+    }
+    if sequencer_status["nxmr_custody_deficit_units"] != 0
+        || !report.bridge_custody_reconciled
+        || report.nxmr_custody_deficit_units != 0
+    {
+        return Err(live_rehearsal_invalid(
+            "live RPC rehearsal did not reconcile nXMR custody",
+        ));
+    }
+    report.rehearsal_root = live_rpc_devnet_rehearsal_root(&report);
     Ok(report)
 }
 
@@ -5247,6 +5591,523 @@ fn local_public_testnet_rehearsal_root(report: &LocalPublicTestnetRehearsalRepor
         "observer_count": report.observer_count,
         "region_count": report.region_count,
         "generated_at_unix_ms": report.generated_at_unix_ms,
+    }))
+}
+
+fn live_rehearsal_invalid(error: impl Into<String>) -> AttestationError {
+    AttestationError::Invalid(vec![error.into()])
+}
+
+fn live_runtime_launch_bindings(
+) -> Result<(runtime::RuntimeLaunchBinding, runtime::RuntimeLaunchBinding), AttestationError> {
+    let deployment_attestation_json = sample_deployment_attestation_json_pretty();
+    let public_status_json = sample_public_status_manifest_json_pretty();
+    let public_probe_json = sample_public_probe_json_pretty();
+    let validator_set_json = sample_validator_set_json_pretty();
+    let operator_handoff_json =
+        build_operator_handoff_json_pretty(&deployment_attestation_json, &validator_set_json)?;
+    let operator_acceptance_json = build_operator_acceptance_json_pretty(
+        &operator_handoff_json,
+        &deployment_attestation_json,
+        &validator_set_json,
+    )?;
+    let genesis_manifest_json =
+        build_genesis_manifest_json_pretty(&deployment_attestation_json, &validator_set_json)?;
+    let launch_package_bundle_json = build_launch_package_bundle_json_pretty(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let sequencer_binding = build_runtime_launch_binding_from_jsons(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+        &launch_package_bundle_json,
+        "validator-a",
+    )?;
+    let follower_binding = build_runtime_launch_binding_from_jsons(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+        &launch_package_bundle_json,
+        "validator-b",
+    )?;
+    Ok((sequencer_binding, follower_binding))
+}
+
+fn live_rpc_start_server(
+    config: runtime::RuntimeConfig,
+    options: runtime::RuntimeNodeOptions,
+) -> Result<String, AttestationError> {
+    let rpc_addr = live_reserve_local_addr().map_err(live_rehearsal_invalid)?;
+    let served_addr = rpc_addr.clone();
+    thread::spawn(move || {
+        if let Err(error) = runtime::serve_runtime_rpc_with_options(&served_addr, config, options) {
+            eprintln!("live RPC rehearsal server failed on {served_addr}: {error}");
+        }
+    });
+    live_wait_for_rpc(&rpc_addr).map_err(live_rehearsal_invalid)?;
+    Ok(rpc_addr)
+}
+
+fn live_rpc_start_server_with_admin(
+    config: runtime::RuntimeConfig,
+    mut options: runtime::RuntimeNodeOptions,
+) -> Result<(String, String), AttestationError> {
+    let rpc_addr = live_reserve_local_addr().map_err(live_rehearsal_invalid)?;
+    let admin_addr = live_reserve_local_addr().map_err(live_rehearsal_invalid)?;
+    options.admin_rpc_bind_addr = Some(admin_addr.clone());
+    let served_addr = rpc_addr.clone();
+    thread::spawn(move || {
+        if let Err(error) = runtime::serve_runtime_rpc_with_options(&served_addr, config, options) {
+            eprintln!("live RPC rehearsal server failed on {served_addr}: {error}");
+        }
+    });
+    live_wait_for_rpc(&rpc_addr).map_err(live_rehearsal_invalid)?;
+    live_wait_for_rpc(&admin_addr).map_err(live_rehearsal_invalid)?;
+    Ok((rpc_addr, admin_addr))
+}
+
+fn live_reserve_local_addr() -> Result<String, String> {
+    let listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|error| format!("bind local port: {error}"))?;
+    listener
+        .local_addr()
+        .map(|addr| addr.to_string())
+        .map_err(|error| format!("read local port: {error}"))
+}
+
+fn live_wait_for_rpc(rpc_addr: &str) -> Result<(), String> {
+    let deadline = unix_ms().saturating_add(5_000);
+    loop {
+        match live_http_json(rpc_addr, "/health") {
+            Ok(health) if health["chain_id"] == CHAIN_ID => return Ok(()),
+            Ok(_) | Err(_) if unix_ms() < deadline => thread::sleep(Duration::from_millis(25)),
+            Ok(health) => {
+                return Err(format!(
+                    "RPC {rpc_addr} returned unexpected health response {health}"
+                ));
+            }
+            Err(error) => return Err(format!("RPC {rpc_addr} did not become ready: {error}")),
+        }
+    }
+}
+
+fn live_wait_for_json_condition<F>(
+    rpc_addr: &str,
+    path: &str,
+    description: &str,
+    condition: F,
+) -> Result<Value, AttestationError>
+where
+    F: Fn(&Value) -> bool,
+{
+    let deadline = unix_ms().saturating_add(5_000);
+    loop {
+        match live_http_json(rpc_addr, path) {
+            Ok(value) if condition(&value) => return Ok(value),
+            Ok(value) => {
+                if unix_ms() >= deadline {
+                    return Err(live_rehearsal_invalid(format!(
+                        "{description} not satisfied by {value}"
+                    )));
+                }
+            }
+            Err(error) => {
+                if unix_ms() >= deadline {
+                    return Err(live_rehearsal_invalid(error));
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn live_wait_for_runtime_surface_evidence(
+    rpc_addr: &str,
+    endpoint_url: &str,
+) -> Result<Value, AttestationError> {
+    let deadline = unix_ms().saturating_add(5_000);
+    loop {
+        match live_capture_runtime_surface_evidence(rpc_addr, endpoint_url) {
+            Ok(evidence) => return Ok(evidence),
+            Err(error) => {
+                if unix_ms() >= deadline {
+                    return Err(live_rehearsal_invalid(error));
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn live_capture_runtime_surface_evidence(
+    rpc_addr: &str,
+    endpoint_url: &str,
+) -> Result<Value, String> {
+    let health = live_http_json(rpc_addr, "/health")?;
+    let status = live_http_json(rpc_addr, "/status")?;
+    let snapshot = live_http_json(rpc_addr, "/snapshot")?;
+    let ops = live_http_json(rpc_addr, "/ops")?;
+    let backup = live_http_json(rpc_addr, "/backup")?;
+    let (_content_type, metrics_text) = live_http_text(rpc_addr, "/metrics")?;
+    let rpc_status = live_rpc_request_value(rpc_addr, "nebula_status", json!({}))?;
+    let rpc_ops_status = live_rpc_request_value(rpc_addr, "nebula_opsStatus", json!({}))?;
+    let rpc_backup_manifest = live_rpc_request_value(rpc_addr, "nebula_backupManifest", json!({}))?;
+    let evidence_json =
+        build_runtime_surface_evidence_json_pretty(RuntimeSurfaceEvidenceBuildInput {
+            endpoint_url: endpoint_url.to_string(),
+            captured_at_unix_ms: unix_ms(),
+            health_json: health.to_string(),
+            status_json: status.to_string(),
+            snapshot_json: snapshot.to_string(),
+            ops_json: ops.to_string(),
+            backup_json: backup.to_string(),
+            rpc_status_json: rpc_status.to_string(),
+            rpc_ops_status_json: rpc_ops_status.to_string(),
+            rpc_backup_manifest_json: rpc_backup_manifest.to_string(),
+            metrics_text,
+        })
+        .map_err(|error| match error {
+            AttestationError::MalformedJson(error) => error,
+            AttestationError::Invalid(errors) => errors.join("; "),
+        })?;
+
+    serde_json::from_str::<Value>(&evidence_json).map_err(|error| error.to_string())
+}
+
+fn live_rpc_call(rpc_addr: &str, method: &str, params: Value) -> Result<Value, AttestationError> {
+    live_rpc_request_value(rpc_addr, method, params).map_err(live_rehearsal_invalid)
+}
+
+fn live_rpc_request_value(rpc_addr: &str, method: &str, params: Value) -> Result<Value, String> {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": params,
+    })
+    .to_string();
+    let (_content_type, response) = live_http_request(rpc_addr, "/rpc", "POST", Some(body))?;
+    serde_json::from_str::<Value>(&response)
+        .map_err(|error| format!("invalid JSON-RPC response for {method}: {error}: {response}"))
+}
+
+fn live_rpc_result(response: &Value) -> Result<&Value, AttestationError> {
+    if let Some(error) = response.get("error") {
+        return Err(live_rehearsal_invalid(format!("JSON-RPC error: {error}")));
+    }
+    response.get("result").ok_or_else(|| {
+        live_rehearsal_invalid(format!("JSON-RPC response missing result: {response}"))
+    })
+}
+
+fn live_http_json(rpc_addr: &str, path: &str) -> Result<Value, String> {
+    let (_content_type, body) = live_http_text(rpc_addr, path)?;
+    serde_json::from_str::<Value>(&body)
+        .map_err(|error| format!("invalid JSON from {path}: {error}: {body}"))
+}
+
+fn live_http_text(rpc_addr: &str, path: &str) -> Result<(String, String), String> {
+    live_http_request(rpc_addr, path, "GET", None)
+}
+
+fn live_http_request(
+    rpc_addr: &str,
+    path: &str,
+    method: &str,
+    body: Option<String>,
+) -> Result<(String, String), String> {
+    let mut stream =
+        TcpStream::connect(rpc_addr).map_err(|error| format!("connect {rpc_addr}: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| format!("set read timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| format!("set write timeout: {error}"))?;
+    let body = body.unwrap_or_default();
+    let request = if method == "POST" {
+        format!(
+            "POST {path} HTTP/1.1\r\nHost: {rpc_addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    } else {
+        format!("GET {path} HTTP/1.1\r\nHost: {rpc_addr}\r\nConnection: close\r\n\r\n")
+    };
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| format!("write request {path}: {error}"))?;
+    stream
+        .flush()
+        .map_err(|error| format!("flush request {path}: {error}"))?;
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| format!("read response {path}: {error}"))?;
+    let Some((head, response_body)) = response.split_once("\r\n\r\n") else {
+        return Err(format!("malformed HTTP response from {path}: {response}"));
+    };
+    let mut header_lines = head.lines();
+    let status_line = header_lines.next().unwrap_or_default();
+    if !status_line.contains(" 200 ") {
+        return Err(format!(
+            "HTTP {path} failed with {status_line}: {response_body}"
+        ));
+    }
+    let content_type = header_lines
+        .find_map(|line| {
+            line.split_once(':').and_then(|(name, value)| {
+                name.eq_ignore_ascii_case("content-type")
+                    .then(|| value.trim().to_string())
+            })
+        })
+        .unwrap_or_default();
+    Ok((content_type, response_body.to_string()))
+}
+
+fn live_signing_key(seed: u8) -> SigningKey {
+    SigningKey::from_bytes(&[seed; 32])
+}
+
+fn live_account_id(seed: u8) -> String {
+    hex::encode(live_signing_key(seed).verifying_key().to_bytes())
+}
+
+fn live_sign_root(seed: u8, root: &str) -> String {
+    hex::encode(live_signing_key(seed).sign(root.as_bytes()).to_bytes())
+}
+
+fn live_signed_nxmr_fee_transaction(seed: u8, nonce: u64, to: &str) -> runtime::RuntimeTransaction {
+    live_signed_transaction_with_fee_asset(seed, nonce, to, NXMR_SYMBOL, 1, 1_000)
+}
+
+fn live_signed_transaction_with_fee_asset(
+    seed: u8,
+    nonce: u64,
+    to: &str,
+    fee_asset: &str,
+    amount_nebulai: u128,
+    gas_units: u128,
+) -> runtime::RuntimeTransaction {
+    let mut tx = runtime::RuntimeTransaction {
+        from: live_account_id(seed),
+        to: to.to_string(),
+        amount_nebulai,
+        gas_units,
+        gas_price_nebulai: runtime::DEFAULT_GAS_PRICE_NEBULAI,
+        fee_asset: fee_asset.to_string(),
+        nonce,
+        signature: String::new(),
+        memo: Some(format!("live-rpc-devnet-rehearsal-{fee_asset}-{nonce}")),
+    };
+    tx.signature = live_sign_root(seed, &tx.signing_root());
+    tx
+}
+
+fn live_withdrawal_signature(
+    seed: u8,
+    monero_address: &str,
+    amount_nxmr_units: u128,
+    nonce: u64,
+) -> String {
+    let root = runtime::withdrawal_authorization_root(
+        &live_account_id(seed),
+        monero_address,
+        amount_nxmr_units,
+        nonce,
+    );
+    live_sign_root(seed, &root)
+}
+
+fn live_bridge_deposit(seed: u8, amount_nxmr_units: u128) -> Value {
+    let mut deposit = runtime::RuntimeBridgeDeposit {
+        monero_tx_id: hex_64("live-rpc-devnet-monero-deposit"),
+        account: live_account_id(seed),
+        amount_nxmr_units,
+        confirmations: runtime::MIN_BRIDGE_CONFIRMATIONS,
+        observer_id: "observer-us-east-1".to_string(),
+        observer_ids: vec![
+            "observer-us-east-1".to_string(),
+            "observer-eu-west-1".to_string(),
+        ],
+        proof_root: hex_64("live-rpc-devnet-deposit-proof"),
+        custody_proof_root: hex_64("live-rpc-devnet-custody-proof"),
+        relayer_set_root: hex_64("live-rpc-devnet-relayer-set"),
+        observer_signature_roots: Vec::new(),
+        observer_evidence: Vec::new(),
+        observed_at_unix_ms: 1,
+    };
+    let observer_a = live_observer_evidence(&deposit, "observer-us-east-1", 0xb1);
+    let observer_b = live_observer_evidence(&deposit, "observer-eu-west-1", 0xb2);
+    deposit.observer_signature_roots = vec![
+        observer_a.evidence_root.clone(),
+        observer_b.evidence_root.clone(),
+    ];
+    deposit.observer_evidence = vec![observer_a, observer_b];
+    json!(deposit)
+}
+
+fn live_observer_evidence(
+    deposit: &runtime::RuntimeBridgeDeposit,
+    observer_id: &str,
+    seed: u8,
+) -> runtime::RuntimeBridgeObserverEvidence {
+    let payload_root = runtime::bridge_observer_deposit_payload_root(deposit);
+    let mut evidence = runtime::RuntimeBridgeObserverEvidence {
+        observer_id: observer_id.to_string(),
+        observer_public_key_hex: live_account_id(seed),
+        payload_root: payload_root.clone(),
+        signature: live_sign_root(seed, &payload_root),
+        signed_at_unix_ms: 1,
+        evidence_root: String::new(),
+    };
+    evidence.evidence_root = runtime::bridge_observer_evidence_root(&evidence);
+    evidence
+}
+
+fn live_operator_approval_quorum(
+    withdrawal: &runtime::RuntimeWithdrawalRequest,
+    finalized_monero_tx_id: &str,
+    finalization_proof_root: &str,
+) -> (
+    Vec<String>,
+    Vec<String>,
+    Vec<runtime::RuntimeWithdrawalOperatorApproval>,
+) {
+    let approval_a = live_operator_approval(
+        withdrawal,
+        finalized_monero_tx_id,
+        finalization_proof_root,
+        "operator-a",
+        0xa1,
+    );
+    let approval_b = live_operator_approval(
+        withdrawal,
+        finalized_monero_tx_id,
+        finalization_proof_root,
+        "operator-b",
+        0xa2,
+    );
+    (
+        vec![
+            approval_a.operator_id.clone(),
+            approval_b.operator_id.clone(),
+        ],
+        vec![
+            approval_a.approval_root.clone(),
+            approval_b.approval_root.clone(),
+        ],
+        vec![approval_a, approval_b],
+    )
+}
+
+fn live_operator_approval(
+    withdrawal: &runtime::RuntimeWithdrawalRequest,
+    finalized_monero_tx_id: &str,
+    finalization_proof_root: &str,
+    operator_id: &str,
+    seed: u8,
+) -> runtime::RuntimeWithdrawalOperatorApproval {
+    let payload_root = runtime::withdrawal_operator_finalization_payload_root(
+        withdrawal,
+        finalized_monero_tx_id,
+        finalization_proof_root,
+    );
+    let mut approval = runtime::RuntimeWithdrawalOperatorApproval {
+        operator_id: operator_id.to_string(),
+        operator_public_key_hex: live_account_id(seed),
+        payload_root: payload_root.clone(),
+        signature: live_sign_root(seed, &payload_root),
+        signed_at_unix_ms: 1,
+        approval_root: String::new(),
+    };
+    approval.approval_root = runtime::withdrawal_operator_approval_root(&approval);
+    approval
+}
+
+fn live_value_u64(value: &Value, field: &str) -> Result<u64, AttestationError> {
+    value[field]
+        .as_u64()
+        .ok_or_else(|| live_rehearsal_invalid(format!("{field} must be an unsigned integer")))
+}
+
+fn live_value_u128(value: &Value, field: &str) -> Result<u128, AttestationError> {
+    value[field]
+        .as_u64()
+        .map(u128::from)
+        .ok_or_else(|| live_rehearsal_invalid(format!("{field} must be an unsigned integer")))
+}
+
+fn live_value_bool(value: &Value, field: &str) -> Result<bool, AttestationError> {
+    value[field]
+        .as_bool()
+        .ok_or_else(|| live_rehearsal_invalid(format!("{field} must be a boolean")))
+}
+
+fn live_temp_data_dir(label: &str) -> String {
+    let mut path: PathBuf = std::env::temp_dir();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let thread_id = format!("{:?}", thread::current().id())
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    path.push(format!(
+        "nebula-live-rpc-devnet-{label}-{}-{thread_id}-{nanos}",
+        std::process::id()
+    ));
+    path.to_string_lossy().into_owned()
+}
+
+fn live_rpc_devnet_rehearsal_root(report: &LiveRpcDevnetRehearsalReport) -> String {
+    stable_root(&json!({
+        "live_rpc_devnet_rehearsal_domain": "nebula-live-rpc-devnet-rehearsal-v1",
+        "chain_id": report.chain_id,
+        "runtime_version": report.runtime_version,
+        "level": report.level,
+        "live_rpc_devnet_rehearsed": report.live_rpc_devnet_rehearsed,
+        "public_launch_ready": report.public_launch_ready,
+        "public_launch_blocker": report.public_launch_blocker,
+        "endpoint_url": report.endpoint_url,
+        "block_millis": report.block_millis,
+        "sub_second_blocks": report.sub_second_blocks,
+        "produced_block_count": report.produced_block_count,
+        "runtime_surface_ready": report.runtime_surface_ready,
+        "runtime_surface_root": report.runtime_surface_root,
+        "latest_height": report.latest_height,
+        "sync_quorum_met": report.sync_quorum_met,
+        "sync_successful_peer_count": report.sync_successful_peer_count,
+        "bridge_deposit_count": report.bridge_deposit_count,
+        "withdrawal_request_count": report.withdrawal_request_count,
+        "finalized_withdrawal_count": report.finalized_withdrawal_count,
+        "bridge_replay_cache_count": report.bridge_replay_cache_count,
+        "bridge_deposited_nxmr_units": report.bridge_deposited_nxmr_units,
+        "account_nxmr_units": report.account_nxmr_units,
+        "withdrawal_reserved_nxmr_units": report.withdrawal_reserved_nxmr_units,
+        "total_nxmr_fees_units": report.total_nxmr_fees_units,
+        "buyback_pool_nebulai": report.buyback_pool_nebulai,
+        "validator_reward_nebulai": report.validator_reward_nebulai,
+        "bridge_custody_reconciled": report.bridge_custody_reconciled,
+        "nxmr_custody_deficit_units": report.nxmr_custody_deficit_units,
+        "sequencer_key_rotation_count": report.sequencer_key_rotation_count,
+        "launch_package_bundle_root": report.launch_package_bundle_root,
     }))
 }
 

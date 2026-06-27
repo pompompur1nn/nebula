@@ -34,6 +34,13 @@ validator, handoff, acceptance, genesis, launch-package, activation, join,
 observer-confirmation, and launch-certificate chain while keeping
 `public_launch_ready` blocked on live deployment attestation.
 
+Operators can prove the stronger local live-RPC devnet path with
+`nebula-testnet --prove-live-rpc-devnet --json`. That command starts loopback
+sequencer and follower RPC nodes, produces sub-second blocks, rotates the
+sequencer key, exercises bridge-attested `nXMR`, `nXMR` gas buyback/reward
+accounting, withdrawal finalization, follower sync, and verified runtime-surface
+evidence while still reporting the live public deployment attestation blocker.
+
 ## Target Public Testnet Architecture
 
 Nebula's public testnet target is a Monero Layer 2 that keeps Monero as the
@@ -156,7 +163,9 @@ evidence is absent or stale.
     successful valid snapshot response and a configured `--sync-peer-quorum`
     agreeing on the same height, latest block hash, and state root. Attempts,
     successes, failures, stale snapshots, fork rejections, quorum rejections,
-    and imports must be visible as telemetry.
+    and imports must be visible as telemetry. For a reproducible local proof,
+    `nebula-testnet --prove-live-rpc-devnet --json` must pass before any public
+    endpoint is described as testnet-ready.
 12. Confirm the sequencer/follower public-testnet RPC surfaces before launch.
     `/health`, `/status`, `/snapshot`, and JSON-RPC `/rpc` must agree on chain
     head, genesis identity, activation height, fee policy, validator identity,
@@ -483,6 +492,7 @@ cargo build --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testne
 cargo test --manifest-path crates/nebula-testnet/Cargo.toml -- --test-threads=1
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --mainnet-readiness --json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --prove-local-public-testnet --json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --prove-live-rpc-devnet --json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-status > /tmp/nebula-public-status.json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-status /tmp/nebula-public-status.json --json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-probe > /tmp/nebula-public-probe.json
