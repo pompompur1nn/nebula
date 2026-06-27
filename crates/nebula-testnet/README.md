@@ -24,6 +24,14 @@ model: `NBLA` gas credits validator rewards directly, and `nXMR` gas funds NBLA
 buybacks, NBLA backing, and validator rewards at the target reference price of
 `0.001 XMR` per `NBLA`.
 
+Bridge custody is a public-testnet launch gate, not an honor-system credit
+path. Policy discovery uses `nebula_bridgePolicy`; deposits use
+`nebula_observeBridgeDeposit`; withdrawals use `nebula_requestWithdrawal`; and
+withdrawal finalization uses `nebula_finalizeWithdrawal`. Public testnet policy
+requires explicit Monero confirmation, custody proof, relayer/observer evidence,
+replay protection, and withdrawal finalization evidence before `nXMR` can be
+treated as public gas.
+
 The public launch sequence for this crate is:
 
 1. Prove local readiness with formatting, build, tests, the readiness contract,
@@ -61,16 +69,29 @@ The public launch sequence for this crate is:
    configured sync peers so operators can confirm replica failover coverage.
    Public RPC nodes enforce request-size and per-client rate limits; tune them
    with `--max-request-bytes` and `--max-requests-per-minute`.
-9. Build and verify validator activation receipts, validator join receipts,
+9. Exercise the bridge custody policy. `nebula_bridgePolicy` must expose the
+   active bridge policy root and quorum constants. Deposits must prove the
+   current `monero_tx_id`, `account`, `amount_nxmr_units`, `confirmations`,
+   `observer_id`, `proof_root`, `custody_proof_root`, `relayer_set_root`,
+   `observer_signature_roots`, and observed time fields plus a minimum `10`
+   Monero confirmations and at least `2` observer signatures. Withdrawals must
+   stay `operator_pending` until `nebula_finalizeWithdrawal` binds the
+   `withdrawal_id`, `finalized_monero_tx_id`, `finalization_proof_root`, and at
+   least `2` `operator_approval_roots`. `/health`, `/status`, and
+   `nebula_status` must expose or agree with `bridge_policy_root`,
+   `bridge_min_deposit_confirmations`, `bridge_deposit_observer_quorum`,
+   `bridge_withdrawal_operator_quorum`, `bridge_live_value_enabled`,
+   `bridge_deposit_count`, and `withdrawal_request_count`.
+10. Build and verify validator activation receipts, validator join receipts,
    operator join confirmations, public observer confirmations, and the public
    testnet launch-candidate certificate against the same deployment,
    public-surface, validator, genesis, fee-policy, and bundle roots.
-10. Open the public launch gate only after the signed launch package, verified
+11. Open the public launch gate only after the signed launch package, verified
     bundle, sequencer/follower rehearsal evidence, verified snapshots, and
     launch certificate all agree. Run the `NBLA`/`nXMR` economics trial with
     live value disabled, and keep reporting any remaining blocking evidence
-    until every deployment, operator, validator, observer, RPC, snapshot,
-    certificate, and economics gap is closed.
+    until every deployment, operator, validator, observer, RPC, snapshot, bridge
+    custody, certificate, and economics gap is closed.
 
 ## Local RPC Devnet
 
@@ -97,6 +118,21 @@ rate limit before dispatching JSON-RPC work. Use `--max-request-bytes <bytes>`
 and `--max-requests-per-minute <count>` to tune rehearsals or public endpoint
 hardening.
 
+Bridge custody policy is rehearsed over the existing RPC names.
+`nebula_bridgePolicy` reports the active policy root and quorum constants.
+`nebula_observeBridgeDeposit` accepts a deposit with `monero_tx_id`, `account`,
+`amount_nxmr_units`, `confirmations`, `observer_id`, `proof_root`,
+`custody_proof_root`, `relayer_set_root`, `observer_signature_roots`, and
+`observed_at_unix_ms`. `nebula_requestWithdrawal` accepts `account`,
+`monero_address`, and `amount_nxmr_units`, then keeps the withdrawal
+`operator_pending` until `nebula_finalizeWithdrawal` supplies `withdrawal_id`,
+`finalized_monero_tx_id`, `finalization_proof_root`, and
+`operator_approval_roots`. Public testnet operators should require `/health`,
+`/status`, and `nebula_status` to report or agree with the bridge policy root,
+confirmation floor, observer quorum, withdrawal operator quorum, live-value
+disabled state, deposit count, withdrawal count, finalized withdrawal count,
+and replay cache count before advertising `nXMR` gas.
+
 The default dev sequencer key is only for throwaway local rehearsals. Public
 rehearsals should pass `--sequencer-public-key <hex>` to all nodes and pass the
 matching `--sequencer-secret-key <hex>` only to the sequencer. Snapshots export
@@ -108,7 +144,8 @@ for
 `nebula_getAccount`, `nebula_getReceipt`, `nebula_exportSnapshot`,
 `nebula_importSnapshot`, `nebula_feeQuote`, `nebula_faucet`,
 `nebula_sendTransaction`, `nebula_observeBridgeDeposit`,
-`nebula_requestWithdrawal`, and `nebula_produceBlock`.
+`nebula_requestWithdrawal`, `nebula_finalizeWithdrawal`, `nebula_bridgePolicy`,
+and `nebula_produceBlock`.
 
 ## Commands
 

@@ -24,9 +24,12 @@ pub const DEFAULT_MAX_BLOCK_TRANSACTIONS: usize = 512;
 pub const DEFAULT_FAUCET_NBLA: u128 = 10_000 * NEBULAI_PER_NBLA;
 pub const DEFAULT_FAUCET_NXMR: u128 = 10_000 * TARGET_NXMR_BASE_UNITS_PER_NXMR;
 pub const MIN_BRIDGE_CONFIRMATIONS: u64 = 10;
+pub const MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM: usize = 2;
+pub const MIN_WITHDRAWAL_OPERATOR_QUORUM: usize = 2;
+pub const BRIDGE_CUSTODY_POLICY_ID: &str = "nebula-monero-bridge-custody-testnet-v1";
 pub const VALIDATOR_REWARD_ACCOUNT_PREFIX: &str = "validator:";
 pub const RUNTIME_SNAPSHOT_FILE: &str = "nebula-runtime-snapshot.json";
-pub const RUNTIME_SNAPSHOT_VERSION: u32 = 2;
+pub const RUNTIME_SNAPSHOT_VERSION: u32 = 3;
 pub const DEFAULT_PEER_SYNC_MS: u64 = 100;
 pub const DEFAULT_MAX_REQUEST_BYTES: usize = 1_048_576;
 pub const DEFAULT_MAX_REQUESTS_PER_MINUTE: u32 = 600;
@@ -208,6 +211,9 @@ pub struct RuntimeBridgeDeposit {
     pub confirmations: u64,
     pub observer_id: String,
     pub proof_root: String,
+    pub custody_proof_root: String,
+    pub relayer_set_root: String,
+    pub observer_signature_roots: Vec<String>,
     pub observed_at_unix_ms: u128,
 }
 
@@ -220,6 +226,11 @@ pub struct RuntimeWithdrawalRequest {
     pub amount_nxmr_units: u128,
     pub requested_at_unix_ms: u128,
     pub status: String,
+    pub bridge_policy_root: String,
+    pub operator_approval_roots: Vec<String>,
+    pub finalized_monero_tx_id: Option<String>,
+    pub finalization_proof_root: Option<String>,
+    pub finalized_at_unix_ms: Option<u128>,
     pub root: String,
 }
 
@@ -289,10 +300,28 @@ pub struct RuntimeStatus {
     pub account_count: usize,
     pub bridge_deposit_count: usize,
     pub withdrawal_request_count: usize,
+    pub finalized_withdrawal_count: usize,
     pub total_nxmr_fees_units: u128,
     pub buyback_pool_nebulai: u128,
     pub validator_reward_nebulai: u128,
     pub validator_reward_account: String,
+    pub bridge_policy_root: String,
+    pub bridge_min_deposit_confirmations: u64,
+    pub bridge_deposit_observer_quorum: usize,
+    pub bridge_withdrawal_operator_quorum: usize,
+    pub bridge_live_value_enabled: bool,
+    pub bridge_replay_cache_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeBridgePolicy {
+    pub policy_id: &'static str,
+    pub custody_model: &'static str,
+    pub min_deposit_confirmations: u64,
+    pub min_deposit_observer_quorum: usize,
+    pub min_withdrawal_operator_quorum: usize,
+    pub replay_protection: &'static str,
+    pub live_value_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -319,6 +348,14 @@ pub struct WithdrawalReport {
     pub accepted: bool,
     pub withdrawal: RuntimeWithdrawalRequest,
     pub account_state: RuntimeAccount,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WithdrawalFinalizationReport {
+    pub finalized: bool,
+    pub withdrawal: RuntimeWithdrawalRequest,
+    pub operator_approval_count: usize,
+    pub finalization_root: String,
 }
 
 #[derive(Debug, Clone)]
@@ -682,6 +719,11 @@ impl NebulaRuntime {
             .blocks
             .last()
             .expect("runtime always has a genesis block");
+        let finalized_withdrawal_count = self
+            .withdrawals
+            .values()
+            .filter(|withdrawal| withdrawal.status == "finalized")
+            .count();
         RuntimeStatus {
             chain_id: self.config.chain_id.clone(),
             runtime_version: self.config.runtime_version.clone(),
@@ -702,10 +744,17 @@ impl NebulaRuntime {
             account_count: self.accounts.len(),
             bridge_deposit_count: self.bridge_deposits.len(),
             withdrawal_request_count: self.withdrawals.len(),
+            finalized_withdrawal_count,
             total_nxmr_fees_units: self.total_nxmr_fees_units,
             buyback_pool_nebulai: self.buyback_pool_nebulai,
             validator_reward_nebulai: self.validator_reward_nebulai,
             validator_reward_account: self.config.validator_reward_account(),
+            bridge_policy_root: bridge_policy_root(),
+            bridge_min_deposit_confirmations: MIN_BRIDGE_CONFIRMATIONS,
+            bridge_deposit_observer_quorum: MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM,
+            bridge_withdrawal_operator_quorum: MIN_WITHDRAWAL_OPERATOR_QUORUM,
+            bridge_live_value_enabled: bridge_policy().live_value_enabled,
+            bridge_replay_cache_count: self.bridge_deposits.len() + finalized_withdrawal_count,
         }
     }
 
@@ -850,6 +899,11 @@ impl NebulaRuntime {
             amount_nxmr_units,
             requested_at_unix_ms,
             status: "operator_pending".to_string(),
+            bridge_policy_root: bridge_policy_root(),
+            operator_approval_roots: Vec::new(),
+            finalized_monero_tx_id: None,
+            finalization_proof_root: None,
+            finalized_at_unix_ms: None,
             root: String::new(),
         };
         withdrawal.root = withdrawal_root(&withdrawal);
@@ -859,6 +913,76 @@ impl NebulaRuntime {
             accepted: true,
             withdrawal,
             account_state,
+        })
+    }
+
+    pub fn finalize_withdrawal(
+        &mut self,
+        withdrawal_id: &str,
+        finalized_monero_tx_id: &str,
+        finalization_proof_root: &str,
+        operator_approval_roots: Vec<String>,
+    ) -> Result<WithdrawalFinalizationReport, String> {
+        validate_fixed_hex(finalized_monero_tx_id, "finalized_monero_tx_id", 64)?;
+        validate_fixed_hex(finalization_proof_root, "finalization_proof_root", 64)?;
+        validate_quorum_roots(
+            &operator_approval_roots,
+            "operator_approval_roots",
+            MIN_WITHDRAWAL_OPERATOR_QUORUM,
+        )?;
+        if self.withdrawals.values().any(|withdrawal| {
+            withdrawal
+                .finalized_monero_tx_id
+                .as_deref()
+                .map(|tx_id| tx_id.eq_ignore_ascii_case(finalized_monero_tx_id))
+                .unwrap_or(false)
+        }) {
+            return Err(format!(
+                "withdrawal Monero tx {finalized_monero_tx_id} already finalized"
+            ));
+        }
+        if self
+            .bridge_deposits
+            .keys()
+            .any(|monero_tx_id| monero_tx_id.eq_ignore_ascii_case(finalized_monero_tx_id))
+        {
+            return Err(format!(
+                "withdrawal Monero tx {finalized_monero_tx_id} reuses a deposit tx id"
+            ));
+        }
+        if self.withdrawals.values().any(|withdrawal| {
+            withdrawal
+                .finalization_proof_root
+                .as_deref()
+                .map(|proof_root| proof_root.eq_ignore_ascii_case(finalization_proof_root))
+                .unwrap_or(false)
+        }) {
+            return Err(format!(
+                "withdrawal finalization proof {finalization_proof_root} already used"
+            ));
+        }
+        let withdrawal = self
+            .withdrawals
+            .get_mut(withdrawal_id)
+            .ok_or_else(|| format!("withdrawal {withdrawal_id} not found"))?;
+        if withdrawal.status != "operator_pending" {
+            return Err(format!(
+                "withdrawal {withdrawal_id} status {} cannot be finalized",
+                withdrawal.status
+            ));
+        }
+        withdrawal.status = "finalized".to_string();
+        withdrawal.operator_approval_roots = operator_approval_roots;
+        withdrawal.finalized_monero_tx_id = Some(finalized_monero_tx_id.to_ascii_lowercase());
+        withdrawal.finalization_proof_root = Some(finalization_proof_root.to_ascii_lowercase());
+        withdrawal.finalized_at_unix_ms = Some(unix_ms());
+        withdrawal.root = withdrawal_root(withdrawal);
+        validate_withdrawal(withdrawal)?;
+        Ok(WithdrawalFinalizationReport {
+            finalized: true,
+            withdrawal: withdrawal.clone(),
+            operator_approval_count: withdrawal.operator_approval_roots.len(),
+            finalization_root: withdrawal.root.clone(),
         })
     }
 
@@ -1506,18 +1630,31 @@ fn handle_http_connection(mut stream: TcpStream, state: RuntimeRpcState) -> std:
     let path = request_parts.next().unwrap_or("/");
 
     match (method, path) {
-        ("GET", "/health") => write_json_response(
-            &mut stream,
-            200,
-            &json!({
-                "ok": true,
-                "service": "nebula-testnet-rpc",
-                "rpc_limits": state.rpc_limits,
-                "bootstrap_peer_urls": state.sync_peers.bootstrap_peer_urls,
-                "sync_peer_urls": state.sync_peers.sync_peer_urls,
-                "sync_peer_count": state.sync_peers.sync_peer_urls.len(),
-            }),
-        )?,
+        ("GET", "/health") => {
+            let status = state.status_json().map_err(std::io::Error::other)?;
+            write_json_response(
+                &mut stream,
+                200,
+                &json!({
+                    "ok": true,
+                    "service": "nebula-testnet-rpc",
+                    "rpc_limits": state.rpc_limits,
+                    "bootstrap_peer_urls": state.sync_peers.bootstrap_peer_urls,
+                    "sync_peer_urls": state.sync_peers.sync_peer_urls,
+                    "sync_peer_count": state.sync_peers.sync_peer_urls.len(),
+                    "bridge_policy": bridge_policy(),
+                    "bridge_policy_root": status["bridge_policy_root"],
+                    "bridge_min_deposit_confirmations": status["bridge_min_deposit_confirmations"],
+                    "bridge_deposit_observer_quorum": status["bridge_deposit_observer_quorum"],
+                    "bridge_withdrawal_operator_quorum": status["bridge_withdrawal_operator_quorum"],
+                    "bridge_live_value_enabled": status["bridge_live_value_enabled"],
+                    "bridge_deposit_count": status["bridge_deposit_count"],
+                    "withdrawal_request_count": status["withdrawal_request_count"],
+                    "finalized_withdrawal_count": status["finalized_withdrawal_count"],
+                    "bridge_replay_cache_count": status["bridge_replay_cache_count"],
+                }),
+            )?;
+        }
         ("GET", "/status") => match state.status_json() {
             Ok(status) => write_json_response(&mut stream, 200, &status)?,
             Err(error) => write_json_response(&mut stream, 500, &json!({"error": error}))?,
@@ -1686,6 +1823,29 @@ fn dispatch_json_rpc_method(
             state.persist()?;
             Ok(json!(report))
         }
+        "nebula_finalizeWithdrawal" => {
+            ensure_block_producer(state)?;
+            let withdrawal_id = required_str_param(&params, "withdrawal_id")?;
+            let finalized_monero_tx_id = required_str_param(&params, "finalized_monero_tx_id")?;
+            let finalization_proof_root = required_str_param(&params, "finalization_proof_root")?;
+            let operator_approval_roots =
+                required_string_array_param(&params, "operator_approval_roots")?;
+            let report = {
+                let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+                runtime.finalize_withdrawal(
+                    &withdrawal_id,
+                    &finalized_monero_tx_id,
+                    &finalization_proof_root,
+                    operator_approval_roots,
+                )?
+            };
+            state.persist()?;
+            Ok(json!(report))
+        }
+        "nebula_bridgePolicy" => Ok(json!({
+            "policy": bridge_policy(),
+            "bridge_policy_root": bridge_policy_root(),
+        })),
         "nebula_produceBlock" => {
             ensure_block_producer(state)?;
             let block = {
@@ -1924,21 +2084,43 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
             return Err(format!("bridge deposit {monero_tx_id} root failed"));
         }
     }
+    let mut finalized_withdrawal_txs = BTreeMap::<String, String>::new();
+    let mut finalized_withdrawal_proofs = BTreeMap::<String, String>::new();
     for (withdrawal_id, withdrawal) in &snapshot.withdrawals {
         if withdrawal_id != &withdrawal.withdrawal_id {
             return Err(format!(
                 "withdrawal map key {withdrawal_id} does not match inner withdrawal_id"
             ));
         }
-        validate_account_id(&withdrawal.account)?;
-        validate_monero_address(&withdrawal.monero_address)?;
-        if withdrawal.amount_nxmr_units == 0 {
-            return Err(format!(
-                "withdrawal {withdrawal_id} amount_nxmr_units must be greater than zero"
-            ));
+        validate_withdrawal(withdrawal)?;
+        if let Some(monero_tx_id) = &withdrawal.finalized_monero_tx_id {
+            let normalized = monero_tx_id.to_ascii_lowercase();
+            if snapshot
+                .bridge_deposits
+                .keys()
+                .any(|deposit_tx_id| deposit_tx_id.eq_ignore_ascii_case(monero_tx_id))
+            {
+                return Err(format!(
+                    "withdrawal {withdrawal_id} finalization reuses bridge deposit tx {monero_tx_id}"
+                ));
+            }
+            if let Some(previous) =
+                finalized_withdrawal_txs.insert(normalized, withdrawal_id.clone())
+            {
+                return Err(format!(
+                    "withdrawals {previous} and {withdrawal_id} reuse finalized Monero tx {monero_tx_id}"
+                ));
+            }
         }
-        if withdrawal.root != withdrawal_root(withdrawal) {
-            return Err(format!("withdrawal {withdrawal_id} root does not match"));
+        if let Some(proof_root) = &withdrawal.finalization_proof_root {
+            let normalized = proof_root.to_ascii_lowercase();
+            if let Some(previous) =
+                finalized_withdrawal_proofs.insert(normalized, withdrawal_id.clone())
+            {
+                return Err(format!(
+                    "withdrawals {previous} and {withdrawal_id} reuse finalization proof root {proof_root}"
+                ));
+            }
         }
     }
 
@@ -1972,8 +2154,116 @@ fn validate_bridge_deposit(deposit: &RuntimeBridgeDeposit) -> Result<(), String>
     validate_account_id(&deposit.observer_id)?;
     validate_fixed_hex(&deposit.monero_tx_id, "monero_tx_id", 64)?;
     validate_fixed_hex(&deposit.proof_root, "proof_root", 64)?;
+    validate_fixed_hex(&deposit.custody_proof_root, "custody_proof_root", 64)?;
+    validate_fixed_hex(&deposit.relayer_set_root, "relayer_set_root", 64)?;
+    validate_quorum_roots(
+        &deposit.observer_signature_roots,
+        "observer_signature_roots",
+        MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM,
+    )?;
     if deposit.amount_nxmr_units == 0 {
         return Err("amount_nxmr_units must be greater than zero".to_string());
+    }
+    Ok(())
+}
+
+fn validate_withdrawal(withdrawal: &RuntimeWithdrawalRequest) -> Result<(), String> {
+    validate_account_id(&withdrawal.account)?;
+    validate_monero_address(&withdrawal.monero_address)?;
+    if withdrawal.amount_nxmr_units == 0 {
+        return Err(format!(
+            "withdrawal {} amount_nxmr_units must be greater than zero",
+            withdrawal.withdrawal_id
+        ));
+    }
+    if withdrawal.bridge_policy_root != bridge_policy_root() {
+        return Err(format!(
+            "withdrawal {} bridge_policy_root does not match runtime policy",
+            withdrawal.withdrawal_id
+        ));
+    }
+    match withdrawal.status.as_str() {
+        "operator_pending" => {
+            if !withdrawal.operator_approval_roots.is_empty() {
+                return Err(format!(
+                    "withdrawal {} pending request must not have operator approvals",
+                    withdrawal.withdrawal_id
+                ));
+            }
+            if withdrawal.finalized_monero_tx_id.is_some()
+                || withdrawal.finalization_proof_root.is_some()
+                || withdrawal.finalized_at_unix_ms.is_some()
+            {
+                return Err(format!(
+                    "withdrawal {} pending request must not have finalization evidence",
+                    withdrawal.withdrawal_id
+                ));
+            }
+        }
+        "finalized" => {
+            validate_quorum_roots(
+                &withdrawal.operator_approval_roots,
+                "operator_approval_roots",
+                MIN_WITHDRAWAL_OPERATOR_QUORUM,
+            )?;
+            let monero_tx_id = withdrawal
+                .finalized_monero_tx_id
+                .as_deref()
+                .ok_or_else(|| {
+                    format!(
+                        "withdrawal {} finalized request missing finalized_monero_tx_id",
+                        withdrawal.withdrawal_id
+                    )
+                })?;
+            validate_fixed_hex(monero_tx_id, "finalized_monero_tx_id", 64)?;
+            let proof_root = withdrawal
+                .finalization_proof_root
+                .as_deref()
+                .ok_or_else(|| {
+                    format!(
+                        "withdrawal {} finalized request missing finalization_proof_root",
+                        withdrawal.withdrawal_id
+                    )
+                })?;
+            validate_fixed_hex(proof_root, "finalization_proof_root", 64)?;
+            if withdrawal.finalized_at_unix_ms.is_none() {
+                return Err(format!(
+                    "withdrawal {} finalized request missing finalized_at_unix_ms",
+                    withdrawal.withdrawal_id
+                ));
+            }
+        }
+        other => {
+            return Err(format!(
+                "withdrawal {} has unsupported status {other}",
+                withdrawal.withdrawal_id
+            ))
+        }
+    }
+    if withdrawal.root != withdrawal_root(withdrawal) {
+        return Err(format!(
+            "withdrawal {} root does not match",
+            withdrawal.withdrawal_id
+        ));
+    }
+    Ok(())
+}
+
+fn validate_quorum_roots(roots: &[String], name: &str, minimum_count: usize) -> Result<(), String> {
+    if roots.len() < minimum_count {
+        return Err(format!(
+            "{name} must include at least {minimum_count} distinct roots"
+        ));
+    }
+    let mut seen = BTreeMap::<String, usize>::new();
+    for (index, root) in roots.iter().enumerate() {
+        validate_fixed_hex(root, &format!("{name}[{index}]"), 64)?;
+        let normalized = root.to_ascii_lowercase();
+        if let Some(previous_index) = seen.insert(normalized, index) {
+            return Err(format!(
+                "{name}[{index}] duplicates {name}[{previous_index}]"
+            ));
+        }
     }
     Ok(())
 }
@@ -2151,6 +2441,23 @@ fn required_u128_param(params: &Value, name: &str) -> Result<u128, String> {
     value_to_u128(value, name)
 }
 
+fn required_string_array_param(params: &Value, name: &str) -> Result<Vec<String>, String> {
+    let values = params
+        .get(name)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("missing string array param {name}"))?;
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| format!("{name}[{index}] must be a string"))
+        })
+        .collect()
+}
+
 fn optional_u128_param(params: &Value, name: &str) -> Result<Option<u128>, String> {
     match params.get(name) {
         Some(value) if !value.is_null() => value_to_u128(value, name).map(Some),
@@ -2182,6 +2489,25 @@ fn transaction_root(transactions: &[RuntimeTransaction], rejected_tx_ids: &[Stri
     }))
 }
 
+pub fn bridge_policy() -> RuntimeBridgePolicy {
+    RuntimeBridgePolicy {
+        policy_id: BRIDGE_CUSTODY_POLICY_ID,
+        custody_model: "testnet-multisig-evidence-roots",
+        min_deposit_confirmations: MIN_BRIDGE_CONFIRMATIONS,
+        min_deposit_observer_quorum: MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM,
+        min_withdrawal_operator_quorum: MIN_WITHDRAWAL_OPERATOR_QUORUM,
+        replay_protection: "monero tx ids must be unique across deposits and finalized withdrawals",
+        live_value_enabled: false,
+    }
+}
+
+pub fn bridge_policy_root() -> String {
+    stable_runtime_root(&json!({
+        "bridge_policy_domain": "nebula-runtime-monero-bridge-policy-v1",
+        "policy": bridge_policy(),
+    }))
+}
+
 fn bridge_deposit_root(deposit: &RuntimeBridgeDeposit) -> String {
     stable_runtime_root(&json!({
         "bridge_deposit_domain": "nebula-runtime-monero-bridge-deposit-v1",
@@ -2191,7 +2517,11 @@ fn bridge_deposit_root(deposit: &RuntimeBridgeDeposit) -> String {
         "confirmations": deposit.confirmations,
         "observer_id": deposit.observer_id,
         "proof_root": deposit.proof_root,
+        "custody_proof_root": deposit.custody_proof_root,
+        "relayer_set_root": deposit.relayer_set_root,
+        "observer_signature_roots": deposit.observer_signature_roots,
         "observed_at_unix_ms": deposit.observed_at_unix_ms,
+        "bridge_policy_root": bridge_policy_root(),
     }))
 }
 
@@ -2204,6 +2534,11 @@ fn withdrawal_root(withdrawal: &RuntimeWithdrawalRequest) -> String {
         "amount_nxmr_units": withdrawal.amount_nxmr_units,
         "requested_at_unix_ms": withdrawal.requested_at_unix_ms,
         "status": withdrawal.status,
+        "bridge_policy_root": withdrawal.bridge_policy_root,
+        "operator_approval_roots": withdrawal.operator_approval_roots,
+        "finalized_monero_tx_id": withdrawal.finalized_monero_tx_id,
+        "finalization_proof_root": withdrawal.finalization_proof_root,
+        "finalized_at_unix_ms": withdrawal.finalized_at_unix_ms,
     }))
 }
 
@@ -2270,6 +2605,21 @@ mod tests {
             },
             sync_peers: RuntimeSyncPeerSet::default(),
             rate_limits: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    fn test_bridge_deposit(monero_tx_digit: char, proof_digit: char) -> RuntimeBridgeDeposit {
+        RuntimeBridgeDeposit {
+            monero_tx_id: monero_tx_digit.to_string().repeat(64),
+            account: "alice".to_string(),
+            amount_nxmr_units: 5_000,
+            confirmations: MIN_BRIDGE_CONFIRMATIONS,
+            observer_id: "observer-a".to_string(),
+            proof_root: proof_digit.to_string().repeat(64),
+            custody_proof_root: "7".repeat(64),
+            relayer_set_root: "8".repeat(64),
+            observer_signature_roots: vec!["9".repeat(64), "a".repeat(64)],
+            observed_at_unix_ms: 1,
         }
     }
 
@@ -2555,15 +2905,8 @@ mod tests {
     #[test]
     fn runtime_bridge_deposit_requires_confirmations_and_credits_nxmr() {
         let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
-        let mut deposit = RuntimeBridgeDeposit {
-            monero_tx_id: "a".repeat(64),
-            account: "alice".to_string(),
-            amount_nxmr_units: 5_000,
-            confirmations: MIN_BRIDGE_CONFIRMATIONS - 1,
-            observer_id: "observer-a".to_string(),
-            proof_root: "b".repeat(64),
-            observed_at_unix_ms: 1,
-        };
+        let mut deposit = test_bridge_deposit('a', 'b');
+        deposit.confirmations = MIN_BRIDGE_CONFIRMATIONS - 1;
         assert!(runtime.observe_bridge_deposit(deposit.clone()).is_err());
 
         deposit.confirmations = MIN_BRIDGE_CONFIRMATIONS;
@@ -2578,15 +2921,7 @@ mod tests {
     fn runtime_withdrawal_burns_nxmr_into_operator_pending_request() {
         let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
         runtime
-            .observe_bridge_deposit(RuntimeBridgeDeposit {
-                monero_tx_id: "c".repeat(64),
-                account: "alice".to_string(),
-                amount_nxmr_units: 5_000,
-                confirmations: MIN_BRIDGE_CONFIRMATIONS,
-                observer_id: "observer-a".to_string(),
-                proof_root: "d".repeat(64),
-                observed_at_unix_ms: 1,
-            })
+            .observe_bridge_deposit(test_bridge_deposit('c', 'd'))
             .unwrap();
 
         let report = runtime
@@ -2594,9 +2929,128 @@ mod tests {
             .unwrap();
         assert!(report.accepted);
         assert_eq!(report.withdrawal.status, "operator_pending");
+        assert_eq!(report.withdrawal.bridge_policy_root, bridge_policy_root());
+        assert!(report.withdrawal.operator_approval_roots.is_empty());
         assert_eq!(report.withdrawal.root.len(), 64);
         assert_eq!(report.account_state.nxmr_units, 3_000);
         assert_eq!(runtime.status().withdrawal_request_count, 1);
+    }
+
+    #[test]
+    fn runtime_bridge_policy_is_reported_in_status() {
+        let runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let status = runtime.status();
+
+        assert_eq!(status.bridge_policy_root, bridge_policy_root());
+        assert_eq!(
+            status.bridge_min_deposit_confirmations,
+            MIN_BRIDGE_CONFIRMATIONS
+        );
+        assert_eq!(
+            status.bridge_deposit_observer_quorum,
+            MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM
+        );
+        assert_eq!(
+            status.bridge_withdrawal_operator_quorum,
+            MIN_WITHDRAWAL_OPERATOR_QUORUM
+        );
+        assert!(!status.bridge_live_value_enabled);
+    }
+
+    #[test]
+    fn runtime_bridge_deposit_requires_observer_quorum_and_custody_roots() {
+        let mut deposit = test_bridge_deposit('b', 'c');
+        deposit.observer_signature_roots = vec!["1".repeat(64)];
+        assert!(validate_bridge_deposit(&deposit)
+            .unwrap_err()
+            .contains("observer_signature_roots"));
+
+        deposit = test_bridge_deposit('b', 'c');
+        deposit.observer_signature_roots = vec!["1".repeat(64), "1".repeat(64)];
+        assert!(validate_bridge_deposit(&deposit)
+            .unwrap_err()
+            .contains("duplicates"));
+
+        deposit = test_bridge_deposit('b', 'c');
+        deposit.custody_proof_root = "not-hex".to_string();
+        assert!(validate_bridge_deposit(&deposit)
+            .unwrap_err()
+            .contains("custody_proof_root"));
+    }
+
+    #[test]
+    fn runtime_withdrawal_finalization_requires_operator_quorum_and_prevents_replay() {
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        runtime
+            .observe_bridge_deposit(test_bridge_deposit('d', 'e'))
+            .unwrap();
+        let withdrawal_id = runtime
+            .request_withdrawal("alice", "9xTestnetMoneroAddressForNebulaWithdrawals", 2_000)
+            .unwrap()
+            .withdrawal
+            .withdrawal_id;
+        let finalized_tx_id = "f".repeat(64);
+
+        assert!(runtime
+            .finalize_withdrawal(
+                &withdrawal_id,
+                &finalized_tx_id,
+                &"1".repeat(64),
+                vec!["2".repeat(64)]
+            )
+            .unwrap_err()
+            .contains("operator_approval_roots"));
+
+        let report = runtime
+            .finalize_withdrawal(
+                &withdrawal_id,
+                &finalized_tx_id,
+                &"1".repeat(64),
+                vec!["2".repeat(64), "3".repeat(64)],
+            )
+            .unwrap();
+        assert!(report.finalized);
+        assert_eq!(
+            report.operator_approval_count,
+            MIN_WITHDRAWAL_OPERATOR_QUORUM
+        );
+        assert_eq!(report.withdrawal.status, "finalized");
+        assert_eq!(
+            report.withdrawal.finalized_monero_tx_id.as_deref(),
+            Some(finalized_tx_id.as_str())
+        );
+        assert_eq!(report.finalization_root, report.withdrawal.root);
+
+        runtime
+            .observe_bridge_deposit(test_bridge_deposit('4', '5'))
+            .unwrap();
+        let second_withdrawal_id = runtime
+            .request_withdrawal("alice", "9xTestnetMoneroAddressForNebulaWithdrawals", 1_000)
+            .unwrap()
+            .withdrawal
+            .withdrawal_id;
+        assert!(runtime
+            .finalize_withdrawal(
+                &second_withdrawal_id,
+                &finalized_tx_id,
+                &"6".repeat(64),
+                vec!["7".repeat(64), "8".repeat(64)]
+            )
+            .unwrap_err()
+            .contains("already finalized"));
+        assert!(runtime
+            .finalize_withdrawal(
+                &second_withdrawal_id,
+                &"a".repeat(64),
+                &"1".repeat(64),
+                vec!["7".repeat(64), "8".repeat(64)]
+            )
+            .unwrap_err()
+            .contains("already used"));
+
+        let status = runtime.status();
+        assert_eq!(status.finalized_withdrawal_count, 1);
+        assert_eq!(status.bridge_replay_cache_count, 3);
     }
 
     #[test]
@@ -2681,15 +3135,7 @@ mod tests {
     #[test]
     fn bridge_deposit_and_withdrawal_survive_snapshot_without_double_credit() {
         let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
-        let deposit = RuntimeBridgeDeposit {
-            monero_tx_id: "e".repeat(64),
-            account: "alice".to_string(),
-            amount_nxmr_units: 5_000,
-            confirmations: MIN_BRIDGE_CONFIRMATIONS,
-            observer_id: "observer-a".to_string(),
-            proof_root: "f".repeat(64),
-            observed_at_unix_ms: 1,
-        };
+        let deposit = test_bridge_deposit('e', 'f');
         runtime.observe_bridge_deposit(deposit.clone()).unwrap();
         runtime
             .request_withdrawal("alice", "9xTestnetMoneroAddressForNebulaWithdrawals", 2_000)

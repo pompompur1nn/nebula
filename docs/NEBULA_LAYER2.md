@@ -53,6 +53,11 @@ The target architecture is:
   bridged XMR liquidity
 - nXMR-funded NBLA buybacks, NBLA backing, and validator rewards at the target
   reference price of `0.001 XMR` per `NBLA`
+- explicit Monero bridge custody policy for `nebula_bridgePolicy`,
+  `nebula_observeBridgeDeposit`, `nebula_requestWithdrawal`, and
+  `nebula_finalizeWithdrawal`: minimum confirmations, operator custody quorum,
+  relayer/observer quorum, replay protection, withdrawal finalization evidence,
+  and `/health`/`/status` visibility
 - post-quantum attestation roots and role-separated validator, operator,
   observer, witness, TLS, consensus, and network keys
 
@@ -132,38 +137,53 @@ evidence is absent or stale.
     snapshots must never include the sequencer secret key. Public RPC nodes must
     reject oversized requests and throttle per-client request bursts before
     launch observers treat the endpoint as ready.
-13. Build and verify validator activation receipts that bind every admitted
+13. Gate bridge custody before treating `nXMR` as public-testnet gas. The
+    `nebula_bridgePolicy` method must expose the policy root and testnet
+    custody constants. Deposits submitted through `nebula_observeBridgeDeposit`
+    must carry `monero_tx_id`, `account`, `amount_nxmr_units`, `confirmations`,
+    `observer_id`, `proof_root`, `custody_proof_root`, `relayer_set_root`,
+    `observer_signature_roots`, and observed time, with at least `10` Monero
+    confirmations and at least `2` observer signatures. Withdrawals submitted
+    through `nebula_requestWithdrawal` must remain `operator_pending` until
+    `nebula_finalizeWithdrawal` binds the `withdrawal_id`,
+    `finalized_monero_tx_id`, `finalization_proof_root`, and at least `2`
+    `operator_approval_roots`. `/health`, `/status`, and `nebula_status` must
+    expose or agree with `bridge_policy_root`,
+    `bridge_min_deposit_confirmations`, `bridge_deposit_observer_quorum`,
+    `bridge_withdrawal_operator_quorum`, `bridge_live_value_enabled`,
+    `bridge_deposit_count`, and `withdrawal_request_count`.
+14. Build and verify validator activation receipts that bind every admitted
     validator to the verified launch-package bundle, activation root, reward
     account, P2P endpoint, consensus key, network key, and operator acceptance
     root.
-14. Build and verify validator join receipts after activation. Each activated
+15. Build and verify validator join receipts after activation. Each activated
     validator must observe the chain at or after activation height `1`, prove the
     required peer count, and sign the observed validator join root.
-15. Build and verify operator join confirmations after validator join. Every
+16. Build and verify operator join confirmations after validator join. Every
     operator must confirm the validator join root, activation root,
     launch-package bundle root, operator acceptance root, and operator
     confirmation signature root.
-16. Build and verify public observer confirmations after operator-confirmed
+17. Build and verify public observer confirmations after operator-confirmed
     validator join. Deployment observers must re-check the live public endpoint,
     public status root, public probe root, observer region, and observer
     signature root with the required observer and region coverage.
-17. Build and verify the public testnet launch-candidate certificate. The
+18. Build and verify the public testnet launch-candidate certificate. The
     certificate binds the launch-package bundle, validator activation, validator
     join, operator join confirmation, public observer confirmation, public
     status, public probe, validator set, genesis, endpoint URL, and validator,
     operator, observer, and region counts into one candidate root.
-18. Open the public launch gate only after the signed launch package, verified
+19. Open the public launch gate only after the signed launch package, verified
     launch-package bundle, Base-style sequencer/follower rehearsal evidence,
     verified snapshots, and launch-candidate certificate all bind to the same
     deployment, public-surface, validator, genesis, and fee-policy roots.
-19. Run the economics trial with `NBLA` gas, `nXMR` gas, nXMR-funded NBLA
+20. Run the economics trial with `NBLA` gas, `nXMR` gas, nXMR-funded NBLA
     buybacks, NBLA backing, and validator-reward accounting at `0.001 XMR` per
     `NBLA`, while live-value policy stays disabled.
-20. Publish the remaining blocking evidence list. If any deployment, operator,
-    validator, observer, sequencer/follower, snapshot, certificate, or economics
-    evidence is missing, mismatched, unsigned, signed by an unexpected
-    sequencer key, or stale, keep the public launch gate closed and report the
-    exact blocking gap.
+21. Publish the remaining blocking evidence list. If any deployment, operator,
+    validator, observer, sequencer/follower, snapshot, bridge custody,
+    certificate, or economics evidence is missing, mismatched, unsigned, signed
+    by an unexpected sequencer key, or stale, keep the public launch gate closed
+    and report the exact blocking gap.
 
 ## Local RPC Devnet
 
@@ -195,6 +215,18 @@ blocks, block signatures, mempool, receipts, bridge deposits, withdrawals,
 balances, fee accounting, and current state root across restarts. Followers use
 the same snapshot format for persisted local state and reject blocks whose
 signature does not verify against the expected sequencer public key.
+
+Bridge custody rehearsal uses the runtime RPC names that public operators will
+see. `nebula_bridgePolicy` reports the active policy root and quorum constants.
+Deposits enter through `nebula_observeBridgeDeposit` with `monero_tx_id`,
+`account`, `amount_nxmr_units`, `confirmations`, `observer_id`, `proof_root`,
+`custody_proof_root`, `relayer_set_root`, `observer_signature_roots`, and
+`observed_at_unix_ms`. Withdrawals enter through `nebula_requestWithdrawal`
+with `account`, `monero_address`, and `amount_nxmr_units`, then remain
+`operator_pending` until `nebula_finalizeWithdrawal` supplies `withdrawal_id`,
+`finalized_monero_tx_id`, `finalization_proof_root`, and
+`operator_approval_roots`. `/health`, `/status`, and `nebula_status` are the
+operator-facing surfaces for bridge policy visibility.
 
 A follower can import once from an ahead peer before it starts serving RPC:
 
@@ -416,6 +448,47 @@ quality, and fee contribution before any live-value reward policy is enabled.
 The validator-set verifier reports a deterministic reward-ledger root over the
 admitted reward accounts, and the genesis and launch-package gates bind that
 root before public testnet rollout.
+
+## Monero Bridge Custody Policy
+
+The public-testnet bridge policy is evidence-first and fail-closed. The runtime
+API names are `nebula_bridgePolicy` for policy discovery,
+`nebula_observeBridgeDeposit` for deposits, `nebula_requestWithdrawal` for
+withdrawal requests, and `nebula_finalizeWithdrawal` for withdrawal
+finalization. The status surfaces are `GET /health`, `GET /status`, and
+JSON-RPC `nebula_status`.
+
+Deposits must prove:
+
+- at least `10` Monero confirmations before crediting `nXMR`
+- a unique `monero_tx_id` replay key and a deterministic replay-protection root
+- the destination Nebula `account`, `amount_nxmr_units`, `observer_id`,
+  `proof_root`, and `observed_at_unix_ms`
+- `custody_proof_root` evidence for the bridge wallet or custody set
+- `relayer_set_root` evidence for the relayer set that observed the Monero
+  deposit
+- at least `2` distinct `observer_signature_roots` agreeing on the credited
+  `nXMR` amount
+
+Withdrawals must prove:
+
+- the request burned or locked the caller's `nXMR` and produced a deterministic
+  `withdrawal_id`, `bridge_policy_root`, and withdrawal root
+- the withdrawal stayed `operator_pending` until at least `2`
+  `operator_approval_roots` were present
+- `nebula_finalizeWithdrawal` bound the destination Monero address, amount,
+  withdrawal root, `finalized_monero_tx_id`, `finalization_proof_root`, and
+  finalization timestamp
+- withdrawal replay protection prevented the same `withdrawal_id`,
+  `finalization_proof_root`, or Monero payout transaction from finalizing twice
+
+Public launch observers should treat the bridge as launch-blocked unless
+`/health`, `/status`, and `nebula_status` expose or agree with
+`bridge_policy_root`, `bridge_min_deposit_confirmations`,
+`bridge_deposit_observer_quorum`, `bridge_withdrawal_operator_quorum`,
+`bridge_live_value_enabled`, `bridge_deposit_count`, and
+`withdrawal_request_count`, and `nebula_bridgePolicy` returns the same policy
+root. `bridge_live_value_enabled` must remain `false` for public testnet.
 
 ## CI
 
