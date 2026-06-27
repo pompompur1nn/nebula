@@ -108,6 +108,8 @@ The public launch suite covers:
   bootstrap nodes
 - launch package binding between validator P2P hosts and attested bootstrap
   endpoint hosts
+- launch package key-domain separation between admitted validators and
+  deployment witnesses
 - launch package rejection of deployment operators and bootstrap nodes that
   have no admitted validator
 - bootstrap node/operator region binding inside deployment evidence
@@ -171,6 +173,7 @@ Public launch requires a filled deployment attestation. The verifier rejects:
 - operator and observer witness roots that do not match the deployment surface
 - operator and observer public keys that are not 64-character hex values
 - observer public keys that reuse an operator public key
+- validator consensus/network keys that reuse deployment witness public keys
 - bootstrap node attestation roots that do not bind the deployment witness root
 - operator, observer, and validator admission signature roots that do not bind
   the signed payload
@@ -274,10 +277,11 @@ It rejects a package when the public surface roots do not match the deployment
 attestation, or when the genesis manifest does not bind the exact deployment
 evidence root, validator-set root, validator count, total genesis power, and
 deployment validity window produced by the other verified files. It also rejects
+validator consensus/network keys that reuse deployment witness keys,
 validator-set manifests whose admitted validators do not map to the attested
-deployment operators and bootstrap nodes, rejects validator P2P hosts that do
-not match their attested bootstrap endpoint host, and rejects deployment
-operators or bootstrap nodes that are not represented by an admitted validator.
+deployment operators and bootstrap nodes, validator P2P hosts that do not match
+their attested bootstrap endpoint host, and deployment operators or bootstrap
+nodes that are not represented by an admitted validator.
 
 Operators can verify the full package with:
 

@@ -675,6 +675,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "validator_set_binds_deployment_operators": true,
                 "validator_set_binds_bootstrap_nodes": true,
                 "validator_p2p_host_binds_bootstrap_endpoint": true,
+                "validator_witness_key_domains_disjoint": true,
                 "all_deployment_operators_admitted": true,
                 "all_bootstrap_nodes_admitted": true,
                 "genesis_binds_deployment_attestation_root": true,
@@ -2470,10 +2471,32 @@ fn verify_validator_deployment_binding(
         .collect::<BTreeMap<_, _>>();
     let mut admitted_operator_ids = BTreeSet::new();
     let mut admitted_node_ids = BTreeSet::new();
+    let deployment_witness_keys = attestation
+        .operators
+        .iter()
+        .map(|operator| operator.public_key.as_str())
+        .chain(
+            attestation
+                .observers
+                .iter()
+                .map(|observer| observer.signature.public_key.as_str()),
+        )
+        .collect::<BTreeSet<_>>();
 
     for (index, validator) in validator_set.validators.iter().enumerate() {
         admitted_operator_ids.insert(validator.operator_id.as_str());
         admitted_node_ids.insert(validator.node_id.as_str());
+
+        if deployment_witness_keys.contains(validator.consensus_public_key.as_str()) {
+            errors.push(format!(
+                "validators[{index}].consensus_public_key must not reuse a deployment witness public key"
+            ));
+        }
+        if deployment_witness_keys.contains(validator.network_public_key.as_str()) {
+            errors.push(format!(
+                "validators[{index}].network_public_key must not reuse a deployment witness public key"
+            ));
+        }
 
         match operators_by_id.get(validator.operator_id.as_str()) {
             Some(operator) => {
@@ -4652,6 +4675,40 @@ mod public_launch {
             AttestationError::Invalid(errors) => {
                 assert!(errors.iter().any(|error| {
                     error == "validators[0].p2p_endpoint.host expected bootstrap-a.testnet.nebula.example but got other-bootstrap.testnet.nebula.example"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn launch_package_rejects_validator_key_reused_as_witness_key() {
+        let deployment = sample_deployment_attestation_json_pretty();
+        let deployment_value = serde_json::from_str::<Value>(&deployment).unwrap();
+        let public_status = sample_public_status_manifest_json_pretty();
+        let public_probe = sample_public_probe_json_pretty();
+        let mut validators =
+            serde_json::from_str::<Value>(&sample_validator_set_json_pretty()).unwrap();
+        validators["validators"][0]["consensus_public_key"] =
+            deployment_value["operators"][0]["public_key"].clone();
+        refresh_validator_manifest_root(&mut validators, 0);
+        let validators = validators.to_string();
+        let genesis = build_genesis_manifest_json_pretty(&deployment, &validators).unwrap();
+
+        let error = verify_launch_package_jsons(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error
+                        == "validators[0].consensus_public_key must not reuse a deployment witness public key"
                 }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
