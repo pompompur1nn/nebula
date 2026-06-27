@@ -40,10 +40,10 @@ shared witness root for the launch bundle, public status, HTTPS endpoint/TLS
 pins, policy claim, and public probe. Operator and observer signature roots must
 bind their signer identity and that witness root. Bootstrap node IDs/endpoints,
 operator IDs/keys, observer IDs/keys, and TLS certificate/public-key pins must
-be unique. Operator and observer quorums must each cover at least two regions.
-Deployment evidence must be generated within `24` hours, expire within `7`
-days, carry TLS pins with at least `7` days remaining, and include a rollback
-drill from the last `7` days.
+be unique. Bootstrap nodes, operator quorums, and observer quorums must each
+cover at least two regions. Deployment evidence must be generated within `24`
+hours, expire within `7` days, carry TLS pins with at least `7` days remaining,
+and include a rollback drill from the last `7` days.
 
 Preflight and runbook receipt verifiers let operators prove launch steps before
 wrapping those receipts in deployment evidence.

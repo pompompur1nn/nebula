@@ -634,6 +634,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "unique_tls_public_key_pins_required": true,
                 "unique_bootstrap_node_ids_required": true,
                 "unique_bootstrap_endpoints_required": true,
+                "bootstrap_region_spread_required": true,
                 "unique_operator_ids_required": true,
                 "unique_operator_keys_required": true,
                 "unique_observer_ids_required": true,
@@ -2082,6 +2083,7 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
 
     let mut bootstrap_node_ids = BTreeSet::new();
     let mut bootstrap_endpoints = BTreeSet::new();
+    let mut bootstrap_regions = BTreeSet::new();
     for (index, node) in attestation.bootstrap_nodes.iter().enumerate() {
         require_non_empty(
             errors,
@@ -2108,6 +2110,7 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
                 "bootstrap_nodes[{index}].endpoint must use an https:// endpoint"
             ));
         }
+        bootstrap_regions.insert(node.region.clone());
         insert_unique(
             errors,
             &mut bootstrap_node_ids,
@@ -2140,6 +2143,11 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
     if bootstrap_node_ids.len() < MIN_PUBLIC_TESTNET_VALIDATORS {
         errors.push(format!(
             "bootstrap_nodes must include at least {MIN_PUBLIC_TESTNET_VALIDATORS} unique node_id values"
+        ));
+    }
+    if bootstrap_regions.len() < MIN_PUBLIC_TESTNET_REGIONS {
+        errors.push(format!(
+            "bootstrap_nodes must cover at least {MIN_PUBLIC_TESTNET_REGIONS} regions"
         ));
     }
 
@@ -3155,6 +3163,25 @@ mod public_launch {
     }
 
     #[test]
+    fn deployment_attestation_rejects_single_region_bootstrap_nodes() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["bootstrap_nodes"][1]["region"] = value["bootstrap_nodes"][0]["region"].clone();
+        refresh_bootstrap_node_root(&mut value, 1);
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "bootstrap_nodes must cover at least 2 regions"));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
     fn deployment_attestation_rejects_observer_wrong_witness_root() {
         let mut value =
             serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
@@ -3647,6 +3674,24 @@ mod public_launch {
         .unwrap();
         attestation["operators"][operator_index]["signature_sha3_256"] =
             json!(operator_signature_root(&operator, &witness_evidence_root));
+    }
+
+    fn refresh_bootstrap_node_root(attestation: &mut Value, node_index: usize) {
+        let deployment =
+            serde_json::from_value::<DeploymentAttestation>(attestation.clone()).unwrap();
+        let witness_evidence_root = deployment_witness_root(
+            &deployment.launch_bundle,
+            &deployment.public_status_manifest,
+            &deployment.public_endpoint,
+            &deployment.policy_claim,
+            &deployment.public_probe,
+        );
+        let node = serde_json::from_value::<BootstrapNode>(
+            attestation["bootstrap_nodes"][node_index].clone(),
+        )
+        .unwrap();
+        attestation["bootstrap_nodes"][node_index]["attestation_root"] =
+            json!(bootstrap_node_root(&node, &witness_evidence_root));
     }
 }
 
