@@ -664,6 +664,7 @@ pub fn readiness_report() -> NebulaReadiness {
                 "bootstrap_operator_id_domains_disjoint": true,
                 "unique_bootstrap_endpoints_required": true,
                 "unique_bootstrap_endpoint_hosts_required": true,
+                "public_bootstrap_endpoint_hosts_disjoint": true,
                 "bootstrap_endpoint_authority_required": true,
                 "bootstrap_endpoint_path_forbidden": true,
                 "bootstrap_region_spread_required": true,
@@ -2290,6 +2291,8 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
     let mut bootstrap_endpoints = BTreeSet::new();
     let mut bootstrap_endpoint_hosts = BTreeSet::new();
     let mut bootstrap_regions = BTreeSet::new();
+    let public_endpoint_host = endpoint_host(&attestation.public_endpoint.url, "https://")
+        .filter(|host| !host.trim().is_empty());
     for (index, node) in attestation.bootstrap_nodes.iter().enumerate() {
         require_non_empty(
             errors,
@@ -2338,6 +2341,11 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
         );
         if let Some(host) = endpoint_host(&node.endpoint, "https://") {
             if !host.trim().is_empty() {
+                if Some(host) == public_endpoint_host {
+                    errors.push(format!(
+                        "bootstrap_nodes[{index}].endpoint.host must not reuse public_endpoint.url host"
+                    ));
+                }
                 insert_unique(
                     errors,
                     &mut bootstrap_endpoint_hosts,
@@ -3878,6 +3886,26 @@ mod public_launch {
                 assert!(errors
                     .iter()
                     .any(|error| error == "bootstrap_nodes[1].endpoint.host must be unique"));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_bootstrap_endpoint_reusing_public_host() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["bootstrap_nodes"][0]["endpoint"] = json!("https://testnet.nebula.example");
+        refresh_bootstrap_node_root(&mut value, 0);
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error
+                        == "bootstrap_nodes[0].endpoint.host must not reuse public_endpoint.url host"
+                }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }

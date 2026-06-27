@@ -112,6 +112,8 @@ The public launch suite covers:
   endpoint hosts
 - launch package key-domain separation between admitted validators and
   deployment witnesses
+- launch package host separation between the public endpoint and bootstrap
+  endpoints
 - launch package rejection of deployment operators and bootstrap nodes that
   have no admitted validator
 - bootstrap node/operator region binding inside deployment evidence
@@ -175,6 +177,7 @@ Public launch requires a filled deployment attestation. The verifier rejects:
   include query/fragment components, or include a nonnumeric/zero port
 - bootstrap endpoints that include a path, omit a host, include userinfo, or
   include query/fragment components or a nonnumeric/zero port
+- bootstrap endpoint hosts that reuse the public endpoint host
 - operator and observer witness roots that do not match the deployment surface
 - operator and observer public keys that are not 64-character hex values
 - observer public keys that reuse an operator public key

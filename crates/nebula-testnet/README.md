@@ -49,7 +49,8 @@ Public status and probe HTTPS endpoints must include a host and no
 userinfo/query/fragment components; any explicit HTTPS port must be numeric and
 nonzero. Bootstrap HTTPS endpoints must include a host and no
 path/userinfo/query/fragment components; any explicit bootstrap port must be
-numeric and nonzero. Bootstrap nodes must match their attested operator region.
+numeric and nonzero. Bootstrap endpoint hosts must not reuse the public endpoint
+host. Bootstrap nodes must match their attested operator region.
 Bootstrap
 nodes, operator quorums, and observer quorums must each cover at least two
 regions. Bootstrap, operator, observer, and deployment-region labels must not
