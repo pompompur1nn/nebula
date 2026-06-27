@@ -191,8 +191,9 @@ The public launch sequence for this crate is:
     runtime-surface evidence from the live follower, and launch-bound
     accountability evidence fail-closed behavior. Run the `NBLA`/`nXMR`
     economics trial with live value disabled; final launch readiness rejects
-    runtime evidence that has not exercised both gas paths or whose nXMR-funded
-    buyback accounting misses the target conversion rate. Keep reporting any remaining blocking evidence
+    runtime evidence whose signed snapshot receipts have not exercised both gas
+    paths, whose exposed counters disagree with the snapshot, or whose
+    nXMR-funded buyback accounting misses the target conversion rate. Keep reporting any remaining blocking evidence
     until every deployment, operator, validator, observer, RPC, snapshot, bridge
     custody, ops/backup, key-rotation/accountability, certificate, and economics
     gap is closed.
@@ -342,6 +343,7 @@ configured gas price, bridge policy root, bridge custody reconciliation, and
 backup manifest root. `--build-runtime-surface-evidence` binds those captured files, JSON-RPC
 mirror responses, and `/metrics` text into one root; the verifier rejects stale
 captures, split durable `/status` versus JSON-RPC views, invalid snapshot roots,
+economics counters that are not derived from included signed-block receipts,
 mismatched ops/backup roots, missing public ops readiness, and durable metrics
 drift. Fast-moving sync attempt/import counters remain exposed as telemetry but
 are not durable equality fields across separately captured live surfaces.

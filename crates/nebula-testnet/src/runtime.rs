@@ -583,6 +583,16 @@ impl RuntimeSnapshot {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeSnapshotEconomics {
+    pub included_nbla_receipt_count: u64,
+    pub included_nxmr_receipt_count: u64,
+    pub total_nxmr_fees_units: u128,
+    pub buyback_pool_nebulai: u128,
+    pub validator_reward_nebulai: u128,
+    pub nxmr_validator_reward_nebulai: u128,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeBlock {
@@ -5573,6 +5583,7 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
             }
         }
     }
+    derive_runtime_snapshot_economics(snapshot)?;
 
     for (monero_tx_id, deposit) in &snapshot.bridge_deposits {
         if monero_tx_id != &deposit.monero_tx_id {
@@ -5668,6 +5679,152 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+pub fn derive_runtime_snapshot_economics(
+    snapshot: &RuntimeSnapshot,
+) -> Result<RuntimeSnapshotEconomics, String> {
+    let mut economics = RuntimeSnapshotEconomics::default();
+    let mut signed_block_tx_ids = BTreeSet::new();
+
+    for block in &snapshot.blocks {
+        for tx in &block.transactions {
+            let tx_id = tx.id();
+            if !signed_block_tx_ids.insert(tx_id.clone()) {
+                return Err(format!(
+                    "included transaction {tx_id} appears in more than one signed block"
+                ));
+            }
+            let receipt = snapshot.receipts.get(&tx_id).ok_or_else(|| {
+                format!(
+                    "included transaction {tx_id} in block {} has no receipt",
+                    block.height
+                )
+            })?;
+            if receipt.status != TransactionStatus::Included {
+                return Err(format!(
+                    "included transaction {tx_id} in block {} has non-included receipt",
+                    block.height
+                ));
+            }
+            if receipt.block_height != Some(block.height) {
+                return Err(format!(
+                    "included receipt {tx_id} block_height expected {} but got {:?}",
+                    block.height, receipt.block_height
+                ));
+            }
+            if receipt.fee_asset != tx.fee_asset {
+                return Err(format!(
+                    "included receipt {tx_id} fee_asset expected transaction {} but got {}",
+                    tx.fee_asset, receipt.fee_asset
+                ));
+            }
+            if receipt.error.is_some() {
+                return Err(format!("included receipt {tx_id} must not carry an error"));
+            }
+
+            let fee_asset = tx.fee_asset_kind().map_err(|error| {
+                format!(
+                    "included transaction {tx_id} in block {} fee_asset rejected: {error}",
+                    block.height
+                )
+            })?;
+            let quote = quote_hybrid_fee(
+                fee_asset,
+                tx.gas_units,
+                tx.gas_price_nebulai,
+                Some(TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT),
+            )
+            .map_err(|error| {
+                format!(
+                    "included transaction {tx_id} in block {} fee quote rejected: {error:?}",
+                    block.height
+                )
+            })?;
+
+            if receipt.paid_amount_units != quote.paid_amount_units {
+                return Err(format!(
+                    "included receipt {tx_id} paid_amount_units expected {} but got {}",
+                    quote.paid_amount_units, receipt.paid_amount_units
+                ));
+            }
+            if receipt.buyback_nebulai != quote.buyback_nebulai {
+                return Err(format!(
+                    "included receipt {tx_id} buyback_nebulai expected {} but got {}",
+                    quote.buyback_nebulai, receipt.buyback_nebulai
+                ));
+            }
+            if receipt.validator_reward_nebulai != quote.validator_reward_nebulai {
+                return Err(format!(
+                    "included receipt {tx_id} validator_reward_nebulai expected {} but got {}",
+                    quote.validator_reward_nebulai, receipt.validator_reward_nebulai
+                ));
+            }
+
+            economics.validator_reward_nebulai = economics
+                .validator_reward_nebulai
+                .checked_add(quote.validator_reward_nebulai)
+                .ok_or_else(|| "validator reward receipt sum overflowed".to_string())?;
+
+            match fee_asset {
+                FeeAsset::Nbla => {
+                    economics.included_nbla_receipt_count = economics
+                        .included_nbla_receipt_count
+                        .checked_add(1)
+                        .ok_or_else(|| "NBLA receipt count overflowed".to_string())?;
+                }
+                FeeAsset::NXmr => {
+                    economics.included_nxmr_receipt_count = economics
+                        .included_nxmr_receipt_count
+                        .checked_add(1)
+                        .ok_or_else(|| "nXMR receipt count overflowed".to_string())?;
+                    economics.total_nxmr_fees_units = economics
+                        .total_nxmr_fees_units
+                        .checked_add(quote.paid_amount_units)
+                        .ok_or_else(|| "nXMR fee receipt sum overflowed".to_string())?;
+                    economics.buyback_pool_nebulai = economics
+                        .buyback_pool_nebulai
+                        .checked_add(quote.buyback_nebulai)
+                        .ok_or_else(|| "NBLA buyback receipt sum overflowed".to_string())?;
+                    economics.nxmr_validator_reward_nebulai = economics
+                        .nxmr_validator_reward_nebulai
+                        .checked_add(quote.validator_reward_nebulai)
+                        .ok_or_else(|| {
+                            "nXMR validator reward receipt sum overflowed".to_string()
+                        })?;
+                }
+            }
+        }
+    }
+
+    for (tx_id, receipt) in &snapshot.receipts {
+        if receipt.status == TransactionStatus::Included && !signed_block_tx_ids.contains(tx_id) {
+            return Err(format!(
+                "included receipt {tx_id} is not present in signed block transactions"
+            ));
+        }
+    }
+
+    if snapshot.total_nxmr_fees_units != economics.total_nxmr_fees_units {
+        return Err(format!(
+            "total_nxmr_fees_units expected {} from included nXMR receipts but got {}",
+            economics.total_nxmr_fees_units, snapshot.total_nxmr_fees_units
+        ));
+    }
+    if snapshot.buyback_pool_nebulai != economics.buyback_pool_nebulai {
+        return Err(format!(
+            "buyback_pool_nebulai expected {} from included nXMR receipts but got {}",
+            economics.buyback_pool_nebulai, snapshot.buyback_pool_nebulai
+        ));
+    }
+    if snapshot.validator_reward_nebulai != economics.validator_reward_nebulai {
+        return Err(format!(
+            "validator_reward_nebulai expected {} from included receipts but got {}",
+            economics.validator_reward_nebulai, snapshot.validator_reward_nebulai
+        ));
+    }
+
+    Ok(economics)
 }
 
 fn nxmr_custody_reconciliation(
@@ -7643,6 +7800,64 @@ mod tests {
     fn sign_test_transaction(mut tx: RuntimeTransaction) -> RuntimeTransaction {
         tx.signature = sign_test_root(&tx.signing_root());
         tx
+    }
+
+    fn runtime_with_both_fee_asset_receipts() -> NebulaRuntime {
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let account = test_account_id();
+        runtime.faucet(&account).unwrap();
+        runtime
+            .observe_bridge_deposit(test_bridge_deposit('2', '3'))
+            .unwrap();
+        let nbla_tx = sign_test_transaction(RuntimeTransaction {
+            from: account.clone(),
+            to: "nbla-fee-recipient".to_string(),
+            amount_nebulai: 10,
+            gas_units: 5,
+            gas_price_nebulai: 2,
+            fee_asset: NBLA_SYMBOL.to_string(),
+            nonce: 0,
+            signature: String::new(),
+            memo: None,
+        });
+        runtime.submit_transaction(nbla_tx).unwrap();
+        runtime.produce_block();
+
+        let nxmr_tx = sign_test_transaction(RuntimeTransaction {
+            from: account,
+            to: "nxmr-fee-recipient".to_string(),
+            amount_nebulai: 100,
+            gas_units: 100,
+            gas_price_nebulai: 10,
+            fee_asset: NXMR_SYMBOL.to_string(),
+            nonce: 1,
+            signature: String::new(),
+            memo: None,
+        });
+        runtime.submit_transaction(nxmr_tx).unwrap();
+        runtime.produce_block();
+        runtime
+    }
+
+    fn refresh_default_signed_snapshot_roots(snapshot: &mut RuntimeSnapshot) {
+        snapshot.state_root = stable_runtime_root(&json!({
+            "state_domain": "nebula-runtime-state-v1",
+            "accounts": snapshot.accounts,
+            "bridge_deposits": snapshot.bridge_deposits,
+            "withdrawals": snapshot.withdrawals,
+            "total_nxmr_fees_units": snapshot.total_nxmr_fees_units,
+            "buyback_pool_nebulai": snapshot.buyback_pool_nebulai,
+            "validator_reward_nebulai": snapshot.validator_reward_nebulai,
+        }));
+        let latest = snapshot
+            .blocks
+            .last_mut()
+            .expect("snapshot has latest block");
+        latest.state_root = snapshot.state_root.clone();
+        latest.block_hash = block_root(latest);
+        latest.signature =
+            sign_block_hash(&latest.block_hash, DEFAULT_DEV_SEQUENCER_SECRET_KEY_HEX).unwrap();
+        snapshot.root = snapshot_root(snapshot);
     }
 
     fn test_withdrawal_signature(
@@ -10179,6 +10394,71 @@ mod tests {
             .unwrap();
         assert_eq!(reward_account.nbla_nebulai, 1_000);
         assert_eq!(reward_account.validator_points, 1_000);
+    }
+
+    #[test]
+    fn snapshot_economics_are_derived_from_signed_block_receipts() {
+        let snapshot = runtime_with_both_fee_asset_receipts().export_snapshot();
+        let economics = derive_runtime_snapshot_economics(&snapshot).unwrap();
+
+        assert_eq!(economics.included_nbla_receipt_count, 1);
+        assert_eq!(economics.included_nxmr_receipt_count, 1);
+        assert_eq!(economics.total_nxmr_fees_units, 1_000);
+        assert_eq!(economics.buyback_pool_nebulai, 1_000);
+        assert_eq!(economics.nxmr_validator_reward_nebulai, 1_000);
+        assert_eq!(economics.validator_reward_nebulai, 1_010);
+    }
+
+    #[test]
+    fn snapshot_rejects_tampered_included_receipt_economics() {
+        let mut snapshot = runtime_with_both_fee_asset_receipts().export_snapshot();
+        let nxmr_tx_id = snapshot
+            .receipts
+            .iter()
+            .find_map(|(tx_id, receipt)| {
+                (receipt.status == TransactionStatus::Included && receipt.fee_asset == NXMR_SYMBOL)
+                    .then(|| tx_id.clone())
+            })
+            .expect("snapshot has included nXMR receipt");
+        snapshot
+            .receipts
+            .get_mut(&nxmr_tx_id)
+            .expect("nXMR receipt exists")
+            .buyback_nebulai = 999;
+        snapshot.root = snapshot_root(&snapshot);
+
+        assert!(validate_snapshot(&snapshot)
+            .unwrap_err()
+            .contains("buyback_nebulai expected 1000 but got 999"));
+    }
+
+    #[test]
+    fn snapshot_rejects_orphan_included_receipt() {
+        let mut snapshot = runtime_with_both_fee_asset_receipts().export_snapshot();
+        let mut orphan = snapshot
+            .receipts
+            .values()
+            .find(|receipt| receipt.status == TransactionStatus::Included)
+            .expect("snapshot has included receipt")
+            .clone();
+        orphan.tx_id = "a".repeat(64);
+        snapshot.receipts.insert(orphan.tx_id.clone(), orphan);
+        snapshot.root = snapshot_root(&snapshot);
+
+        assert!(validate_snapshot(&snapshot)
+            .unwrap_err()
+            .contains("is not present in signed block transactions"));
+    }
+
+    #[test]
+    fn snapshot_rejects_economics_counters_without_receipt_backing() {
+        let mut snapshot = runtime_with_both_fee_asset_receipts().export_snapshot();
+        snapshot.total_nxmr_fees_units = 999;
+        refresh_default_signed_snapshot_roots(&mut snapshot);
+
+        assert!(validate_snapshot(&snapshot).unwrap_err().contains(
+            "total_nxmr_fees_units expected 1000 from included nXMR receipts but got 999"
+        ));
     }
 
     #[test]

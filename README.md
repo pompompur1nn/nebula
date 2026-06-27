@@ -302,8 +302,10 @@ evidence is absent or stale.
 23. Run the economics trial with `NBLA` gas, `nXMR` gas, nXMR-funded NBLA
     buybacks at `0.001 XMR` per `NBLA`, and validator-reward accounting for the
     bought NBLA while live-value policy stays disabled. Final public launch
-    readiness rejects runtime evidence that has not exercised both gas paths or
-    whose nXMR-funded buyback accounting misses the target conversion rate.
+    readiness derives the trial from included signed-block receipts in the
+    captured snapshot, rejects status/metrics counters that do not match the
+    snapshot, and rejects runtime evidence that has not exercised both gas paths
+    or whose nXMR-funded buyback accounting misses the target conversion rate.
 24. Publish the remaining blocking evidence list. If any deployment, operator,
     validator, observer, sequencer/follower, snapshot, ops/backup, bridge
     custody, key-rotation/accountability, certificate, or economics evidence is
@@ -319,7 +321,9 @@ continuously sync signed, verified snapshots from a configured peer set. It
 targets `250 ms` blocks by default, enforces a public-testnet block target below
 one second, exposes health/status JSON and scrapeable metrics, accepts transfer transactions, and
 accounts for `NBLA` gas, `nXMR` gas, nXMR-funded NBLA buybacks, and validator
-rewards. Public RPC nodes enforce stateful signed-spend admission, a
+rewards. Runtime-surface verification recomputes those economics from included
+block transactions and receipts in the signed snapshot before accepting exposed
+status or metrics counters. Public RPC nodes enforce stateful signed-spend admission, a
 bounded mempool, maximum request body size, per-listener request rate limit,
 public active connection cap, and separate private-admin connection cap;
 tune rehearsal limits with

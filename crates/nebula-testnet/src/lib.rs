@@ -1069,6 +1069,12 @@ pub struct RuntimeSurfaceEvidenceReport {
     pub latest_hash: String,
     pub snapshot_root: String,
     pub state_root: String,
+    pub included_nbla_receipt_count: u64,
+    pub included_nxmr_receipt_count: u64,
+    pub total_nxmr_fees_units: u128,
+    pub buyback_pool_nebulai: u128,
+    pub validator_reward_nebulai: u128,
+    pub nxmr_validator_reward_nebulai: u128,
     pub ops_root: String,
     pub backup_root: String,
     pub public_ops_ready: bool,
@@ -2619,9 +2625,9 @@ fn prove_live_rpc_devnet_rehearsal_with_bindings(
         bridge_deposited_nxmr_units: live_value_u128(status, "bridge_deposited_nxmr_units")?,
         account_nxmr_units: live_value_u128(status, "account_nxmr_units")?,
         withdrawal_reserved_nxmr_units: live_value_u128(status, "withdrawal_reserved_nxmr_units")?,
-        total_nxmr_fees_units: live_value_u128(status, "total_nxmr_fees_units")?,
-        buyback_pool_nebulai: live_value_u128(status, "buyback_pool_nebulai")?,
-        validator_reward_nebulai: live_value_u128(status, "validator_reward_nebulai")?,
+        total_nxmr_fees_units: runtime_surface_report.total_nxmr_fees_units,
+        buyback_pool_nebulai: runtime_surface_report.buyback_pool_nebulai,
+        validator_reward_nebulai: runtime_surface_report.validator_reward_nebulai,
         bridge_custody_reconciled: live_value_bool(status, "bridge_custody_reconciled")?,
         nxmr_custody_deficit_units: live_value_u128(status, "nxmr_custody_deficit_units")?,
         sequencer_key_rotation_count: live_value_u64(status, "sequencer_key_rotation_count")?,
@@ -3272,6 +3278,7 @@ fn verify_runtime_surface_evidence(
             &evidence.status,
             snapshot,
         );
+        require_runtime_surface_snapshot_economics(&mut errors, &evidence.status, snapshot);
     }
 
     let launch_package_bundle_root =
@@ -3338,6 +3345,8 @@ fn verify_runtime_surface_evidence(
         .blocks
         .last()
         .expect("validated snapshot always has a latest block");
+    let economics = runtime::derive_runtime_snapshot_economics(&snapshot)
+        .expect("snapshot economics were derived when no errors were recorded");
     let ops = ops.expect("ops was parsed when no errors were recorded");
     let backup = backup.expect("backup was parsed when no errors were recorded");
 
@@ -3365,6 +3374,12 @@ fn verify_runtime_surface_evidence(
         latest_hash: latest.block_hash.clone(),
         snapshot_root: snapshot.root,
         state_root: snapshot.state_root,
+        included_nbla_receipt_count: economics.included_nbla_receipt_count,
+        included_nxmr_receipt_count: economics.included_nxmr_receipt_count,
+        total_nxmr_fees_units: economics.total_nxmr_fees_units,
+        buyback_pool_nebulai: economics.buyback_pool_nebulai,
+        validator_reward_nebulai: economics.validator_reward_nebulai,
+        nxmr_validator_reward_nebulai: economics.nxmr_validator_reward_nebulai,
         ops_root: ops.ops_root,
         backup_root: backup.backup_root,
         public_ops_ready: true,
@@ -6416,7 +6431,17 @@ pub fn verify_public_testnet_launch_readiness_jsons(
             "region_count must be at least {MIN_PUBLIC_TESTNET_REGIONS}"
         ));
     }
-    require_public_launch_economics_trial(&mut errors, &runtime_surface_evidence.status);
+    let runtime_surface_snapshot = serde_json::from_value::<runtime::RuntimeSnapshot>(
+        runtime_surface_evidence.snapshot.clone(),
+    )
+    .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    if let Some(economics) = require_runtime_surface_snapshot_economics(
+        &mut errors,
+        &runtime_surface_evidence.status,
+        &runtime_surface_snapshot,
+    ) {
+        require_public_launch_economics_trial(&mut errors, &economics);
+    }
 
     if !errors.is_empty() {
         return Err(AttestationError::Invalid(errors));
@@ -6593,62 +6618,88 @@ pub fn verify_live_rpc_devnet_rehearsal_json(
     Ok(report)
 }
 
-fn require_public_launch_economics_trial(errors: &mut Vec<String>, status: &Value) {
-    let total_nxmr_fees_units =
-        json_u128_field(status, "runtime_surface.status.total_nxmr_fees_units");
-    let buyback_pool_nebulai =
-        json_u128_field(status, "runtime_surface.status.buyback_pool_nebulai");
-    let validator_reward_nebulai =
-        json_u128_field(status, "runtime_surface.status.validator_reward_nebulai");
-
-    let total_nxmr_fees_units = match total_nxmr_fees_units {
-        Ok(value) => value,
-        Err(AttestationError::Invalid(mut field_errors)) => {
-            errors.append(&mut field_errors);
-            return;
-        }
-        Err(AttestationError::MalformedJson(error)) => {
-            errors.push(error);
-            return;
-        }
-    };
-    let buyback_pool_nebulai = match buyback_pool_nebulai {
-        Ok(value) => value,
-        Err(AttestationError::Invalid(mut field_errors)) => {
-            errors.append(&mut field_errors);
-            return;
-        }
-        Err(AttestationError::MalformedJson(error)) => {
-            errors.push(error);
-            return;
-        }
-    };
-    let validator_reward_nebulai = match validator_reward_nebulai {
-        Ok(value) => value,
-        Err(AttestationError::Invalid(mut field_errors)) => {
-            errors.append(&mut field_errors);
-            return;
-        }
-        Err(AttestationError::MalformedJson(error)) => {
-            errors.push(error);
-            return;
+fn require_runtime_surface_snapshot_economics(
+    errors: &mut Vec<String>,
+    status: &Value,
+    snapshot: &runtime::RuntimeSnapshot,
+) -> Option<runtime::RuntimeSnapshotEconomics> {
+    let economics = match runtime::derive_runtime_snapshot_economics(snapshot) {
+        Ok(economics) => economics,
+        Err(error) => {
+            errors.push(format!("runtime_surface.snapshot.economics: {error}"));
+            return None;
         }
     };
 
-    if total_nxmr_fees_units == 0 {
+    require_status_counter_matches_snapshot(
+        errors,
+        status,
+        "total_nxmr_fees_units",
+        snapshot.total_nxmr_fees_units,
+    );
+    require_status_counter_matches_snapshot(
+        errors,
+        status,
+        "buyback_pool_nebulai",
+        snapshot.buyback_pool_nebulai,
+    );
+    require_status_counter_matches_snapshot(
+        errors,
+        status,
+        "validator_reward_nebulai",
+        snapshot.validator_reward_nebulai,
+    );
+
+    Some(economics)
+}
+
+fn require_status_counter_matches_snapshot(
+    errors: &mut Vec<String>,
+    status: &Value,
+    field: &str,
+    expected: u128,
+) {
+    match json_u128_field(status, &format!("runtime_surface.status.{field}")) {
+        Ok(value) if value == expected => {}
+        Ok(value) => errors.push(format!(
+            "runtime_surface.status.{field} expected snapshot {expected} but got {value}"
+        )),
+        Err(AttestationError::Invalid(mut field_errors)) => errors.append(&mut field_errors),
+        Err(AttestationError::MalformedJson(error)) => errors.push(error),
+    }
+}
+
+fn require_public_launch_economics_trial(
+    errors: &mut Vec<String>,
+    economics: &runtime::RuntimeSnapshotEconomics,
+) {
+    if economics.total_nxmr_fees_units == 0 {
         errors.push(
-            "runtime_surface.status.total_nxmr_fees_units must be greater than zero to prove nXMR gas was exercised"
+            "runtime_surface.snapshot.total_nxmr_fees_units must be greater than zero to prove nXMR gas was exercised"
+                .to_string(),
+        );
+    }
+    if economics.included_nxmr_receipt_count == 0 {
+        errors.push(
+            "runtime_surface.snapshot must include at least one signed-block nXMR gas receipt"
+                .to_string(),
+        );
+    }
+    if economics.included_nbla_receipt_count == 0 {
+        errors.push(
+            "runtime_surface.snapshot must include at least one signed-block NBLA gas receipt"
                 .to_string(),
         );
     }
 
-    let converted_nbla_nebulai = match total_nxmr_fees_units
+    let converted_nbla_nebulai = match economics
+        .total_nxmr_fees_units
         .checked_mul(TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT)
     {
         Some(value) => value,
         None => {
             errors.push(
-                "runtime_surface.status.total_nxmr_fees_units conversion overflowed".to_string(),
+                "runtime_surface.snapshot.total_nxmr_fees_units conversion overflowed".to_string(),
             );
             return;
         }
@@ -6658,7 +6709,8 @@ fn require_public_launch_economics_trial(errors: &mut Vec<String>, status: &Valu
             Ok(value) => value,
             Err(_) => {
                 errors.push(
-                    "runtime_surface.status.buyback_pool_nebulai accounting overflowed".to_string(),
+                    "runtime_surface.snapshot.buyback_pool_nebulai accounting overflowed"
+                        .to_string(),
                 );
                 return;
             }
@@ -6668,26 +6720,28 @@ fn require_public_launch_economics_trial(errors: &mut Vec<String>, status: &Valu
             Ok(value) => value,
             Err(_) => {
                 errors.push(
-                    "runtime_surface.status.validator_reward_nebulai accounting overflowed"
+                    "runtime_surface.snapshot.validator_reward_nebulai accounting overflowed"
                         .to_string(),
                 );
                 return;
             }
         };
 
-    if buyback_pool_nebulai != expected_buyback_nebulai {
+    if economics.buyback_pool_nebulai != expected_buyback_nebulai {
         errors.push(format!(
-            "runtime_surface.status.buyback_pool_nebulai expected {expected_buyback_nebulai} from {total_nxmr_fees_units} nXMR fee units at 0.001 XMR/NBLA but got {buyback_pool_nebulai}"
+            "runtime_surface.snapshot.buyback_pool_nebulai expected {expected_buyback_nebulai} from {} nXMR fee units at 0.001 XMR/NBLA but got {}",
+            economics.total_nxmr_fees_units, economics.buyback_pool_nebulai
         ));
     }
-    if validator_reward_nebulai < expected_nxmr_validator_reward_nebulai {
+    if economics.nxmr_validator_reward_nebulai < expected_nxmr_validator_reward_nebulai {
         errors.push(format!(
-            "runtime_surface.status.validator_reward_nebulai expected at least {expected_nxmr_validator_reward_nebulai} from nXMR gas rewards but got {validator_reward_nebulai}"
+            "runtime_surface.snapshot.nxmr_validator_reward_nebulai expected at least {expected_nxmr_validator_reward_nebulai} from nXMR gas rewards but got {}",
+            economics.nxmr_validator_reward_nebulai
         ));
     }
-    if validator_reward_nebulai <= expected_nxmr_validator_reward_nebulai {
+    if economics.validator_reward_nebulai <= expected_nxmr_validator_reward_nebulai {
         errors.push(
-            "runtime_surface.status.validator_reward_nebulai must exceed nXMR-derived rewards to prove NBLA gas was exercised"
+            "runtime_surface.snapshot.validator_reward_nebulai must exceed nXMR-derived rewards to prove NBLA gas was exercised"
                 .to_string(),
         );
     }
@@ -12263,6 +12317,156 @@ mod public_launch {
         Ok(output)
     }
 
+    fn runtime_surface_with_snapshot_economics_counters(
+        runtime_surface_json: &str,
+        total_nxmr_fees_units: u128,
+        buyback_pool_nebulai: u128,
+        validator_reward_nebulai: u128,
+    ) -> String {
+        let mut evidence = serde_json::from_str::<RuntimeSurfaceEvidence>(runtime_surface_json)
+            .expect("runtime surface evidence parses");
+        let mut snapshot =
+            serde_json::from_value::<runtime::RuntimeSnapshot>(evidence.snapshot.clone())
+                .expect("snapshot parses");
+        snapshot.total_nxmr_fees_units = total_nxmr_fees_units;
+        snapshot.buyback_pool_nebulai = buyback_pool_nebulai;
+        snapshot.validator_reward_nebulai = validator_reward_nebulai;
+        snapshot.state_root = runtime_snapshot_state_root_for_test(&snapshot);
+        let active_sequencer_secret_key_hex = "4d".repeat(32);
+        assert_eq!(
+            public_key_hex_for_secret_key(&active_sequencer_secret_key_hex)
+                .expect("sequencer public key"),
+            snapshot.config.sequencer_public_key_hex
+        );
+        let latest_block = snapshot
+            .blocks
+            .last_mut()
+            .expect("snapshot has a latest block");
+        latest_block.state_root = snapshot.state_root.clone();
+        latest_block.block_hash = runtime_block_root_for_test(latest_block);
+        latest_block.signature =
+            sign_root_with_secret_key(&active_sequencer_secret_key_hex, &latest_block.block_hash)
+                .expect("latest block signature");
+        let latest_hash = latest_block.block_hash.clone();
+        snapshot.root = runtime::runtime_snapshot_root(&snapshot);
+
+        evidence.status["total_nxmr_fees_units"] = json!(total_nxmr_fees_units);
+        evidence.status["buyback_pool_nebulai"] = json!(buyback_pool_nebulai);
+        evidence.status["validator_reward_nebulai"] = json!(validator_reward_nebulai);
+        evidence.status["latest_hash"] = json!(latest_hash);
+        evidence.status["latest_state_root"] = json!(snapshot.state_root.clone());
+        evidence.status["current_state_root"] = json!(snapshot.state_root.clone());
+        evidence.status["sync_quorum_latest_hash"] = evidence.status["latest_hash"].clone();
+        evidence.status["sync_quorum_state_root"] = json!(snapshot.state_root.clone());
+
+        evidence.health["latest_hash"] = evidence.status["latest_hash"].clone();
+        evidence.health["latest_state_root"] = evidence.status["latest_state_root"].clone();
+        evidence.health["current_state_root"] = evidence.status["current_state_root"].clone();
+        evidence.health["snapshot_root"] = json!(snapshot.root.clone());
+
+        let ops_root = update_surface_ops_like_for_snapshot_economics(
+            &mut evidence.ops,
+            &evidence.status,
+            &snapshot,
+        );
+        let backup_root = update_surface_ops_like_for_snapshot_economics(
+            &mut evidence.backup,
+            &evidence.status,
+            &snapshot,
+        );
+        evidence.health["ops_root"] = json!(ops_root);
+        evidence.health["backup_root"] = json!(backup_root);
+
+        evidence.snapshot = serde_json::to_value(&snapshot).expect("snapshot serializes");
+        match evidence.rpc_status.get_mut("result") {
+            Some(result) => *result = evidence.status.clone(),
+            None => evidence.rpc_status = evidence.status.clone(),
+        }
+        match evidence.rpc_ops_status.get_mut("result") {
+            Some(result) => *result = evidence.ops.clone(),
+            None => evidence.rpc_ops_status = evidence.ops.clone(),
+        }
+        match evidence.rpc_backup_manifest.get_mut("result") {
+            Some(result) => *result = evidence.backup.clone(),
+            None => evidence.rpc_backup_manifest = evidence.backup.clone(),
+        }
+        evidence.metrics_text = metrics_text_with_value(
+            &evidence.metrics_text,
+            "nebula_total_nxmr_fees_units",
+            total_nxmr_fees_units,
+        );
+        evidence.metrics_text = metrics_text_with_value(
+            &evidence.metrics_text,
+            "nebula_buyback_pool_nebulai",
+            buyback_pool_nebulai,
+        );
+        evidence.metrics_text = metrics_text_with_value(
+            &evidence.metrics_text,
+            "nebula_validator_reward_nebulai",
+            validator_reward_nebulai,
+        );
+        evidence.root = runtime_surface_evidence_root(&evidence);
+        serde_json::to_string_pretty(&evidence).expect("runtime surface serializes")
+    }
+
+    fn update_surface_ops_like_for_snapshot_economics(
+        value: &mut Value,
+        status: &Value,
+        snapshot: &runtime::RuntimeSnapshot,
+    ) -> String {
+        value["latest_hash"] = status["latest_hash"].clone();
+        value["latest_state_root"] = status["latest_state_root"].clone();
+        value["current_state_root"] = status["current_state_root"].clone();
+        value["sync_quorum_latest_hash"] = status["sync_quorum_latest_hash"].clone();
+        value["sync_quorum_state_root"] = status["sync_quorum_state_root"].clone();
+        value["snapshot_root"] = json!(snapshot.root.clone());
+        value["storage_snapshot_root"] = json!(snapshot.root.clone());
+        value["total_nxmr_fees_units"] = status["total_nxmr_fees_units"].clone();
+        value["buyback_pool_nebulai"] = status["buyback_pool_nebulai"].clone();
+        value["validator_reward_nebulai"] = status["validator_reward_nebulai"].clone();
+        if value.get("ops_root").is_some() {
+            let mut ops = serde_json::from_value::<runtime::RuntimeOpsStatus>(value.clone())
+                .expect("ops parses");
+            ops.ops_root = runtime::runtime_ops_status_root(&ops);
+            let root = ops.ops_root.clone();
+            *value = serde_json::to_value(ops).expect("ops serializes");
+            root
+        } else {
+            let mut backup =
+                serde_json::from_value::<runtime::RuntimeBackupManifest>(value.clone())
+                    .expect("backup parses");
+            backup.backup_root = runtime::runtime_backup_manifest_root(&backup);
+            let root = backup.backup_root.clone();
+            *value = serde_json::to_value(backup).expect("backup serializes");
+            root
+        }
+    }
+
+    fn runtime_snapshot_state_root_for_test(snapshot: &runtime::RuntimeSnapshot) -> String {
+        stable_root(&json!({
+            "state_domain": "nebula-runtime-state-v1",
+            "accounts": snapshot.accounts,
+            "bridge_deposits": snapshot.bridge_deposits,
+            "withdrawals": snapshot.withdrawals,
+            "total_nxmr_fees_units": snapshot.total_nxmr_fees_units,
+            "buyback_pool_nebulai": snapshot.buyback_pool_nebulai,
+            "validator_reward_nebulai": snapshot.validator_reward_nebulai,
+        }))
+    }
+
+    fn runtime_block_root_for_test(block: &runtime::RuntimeBlock) -> String {
+        stable_root(&json!({
+            "block_domain": "nebula-runtime-block-v1",
+            "height": block.height,
+            "parent_hash": block.parent_hash,
+            "timestamp_unix_ms": block.timestamp_unix_ms,
+            "producer": block.producer,
+            "producer_public_key": block.producer_public_key,
+            "tx_root": block.tx_root,
+            "state_root": block.state_root,
+        }))
+    }
+
     fn metrics_text_with_value(metrics_text: &str, metric_name: &str, value: u128) -> String {
         let prefix = format!("{metric_name} ");
         metrics_text
@@ -15992,91 +16196,36 @@ mod public_launch {
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
 
-        let no_economics_runtime_surface =
-            runtime_surface_with_economics_counters(&external_runtime_surface, 0, 0, 0).unwrap();
-        let no_economics_certificate = build_public_testnet_launch_certificate_json_pretty(
-            &observer_confirmation,
-            &no_economics_runtime_surface,
-            &join_confirmation,
-            &join,
-            &activation,
-            &bundle,
-            &deployment,
-            &public_status,
-            &public_probe,
-            &validators,
-            &handoff,
-            &acceptance,
-            &genesis,
-        )
-        .unwrap();
-        let no_economics_ready_error = verify_public_testnet_launch_readiness_jsons(
-            &no_economics_certificate,
-            &observer_confirmation,
-            &no_economics_runtime_surface,
-            &live_rehearsal,
-            &join_confirmation,
-            &join,
-            &activation,
-            &bundle,
-            &deployment,
-            &public_status,
-            &public_probe,
-            &validators,
-            &handoff,
-            &acceptance,
-            &genesis,
-        )
-        .unwrap_err();
-        match no_economics_ready_error {
+        let status_only_economics_error =
+            runtime_surface_with_economics_counters(&external_runtime_surface, 0, 0, 0)
+                .unwrap_err();
+        match status_only_economics_error {
             AttestationError::Invalid(errors) => {
-                assert!(errors.iter().any(|error| error == "runtime_surface.status.total_nxmr_fees_units must be greater than zero to prove nXMR gas was exercised"));
-                assert!(errors.iter().any(|error| error == "runtime_surface.status.validator_reward_nebulai must exceed nXMR-derived rewards to prove NBLA gas was exercised"));
+                assert!(errors.iter().any(|error| {
+                    error
+                        == "runtime_surface.status.total_nxmr_fees_units expected snapshot 1000 but got 0"
+                }));
+                assert!(errors.iter().any(|error| {
+                    error
+                        == "runtime_surface.status.validator_reward_nebulai expected snapshot 1010 but got 0"
+                }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
 
-        let mispriced_nxmr_runtime_surface =
-            runtime_surface_with_economics_counters(&external_runtime_surface, 1_000, 999, 1_010)
-                .unwrap();
-        let mispriced_nxmr_certificate = build_public_testnet_launch_certificate_json_pretty(
-            &observer_confirmation,
-            &mispriced_nxmr_runtime_surface,
-            &join_confirmation,
-            &join,
-            &activation,
-            &bundle,
-            &deployment,
-            &public_status,
-            &public_probe,
-            &validators,
-            &handoff,
-            &acceptance,
-            &genesis,
-        )
-        .unwrap();
-        let mispriced_nxmr_ready_error = verify_public_testnet_launch_readiness_jsons(
-            &mispriced_nxmr_certificate,
-            &observer_confirmation,
-            &mispriced_nxmr_runtime_surface,
-            &live_rehearsal,
-            &join_confirmation,
-            &join,
-            &activation,
-            &bundle,
-            &deployment,
-            &public_status,
-            &public_probe,
-            &validators,
-            &handoff,
-            &acceptance,
-            &genesis,
-        )
-        .unwrap_err();
-        match mispriced_nxmr_ready_error {
+        let mispriced_nxmr_runtime_surface = runtime_surface_with_snapshot_economics_counters(
+            &external_runtime_surface,
+            1_000,
+            999,
+            1_010,
+        );
+        let mispriced_nxmr_error =
+            verify_runtime_surface_evidence_json(&mispriced_nxmr_runtime_surface).unwrap_err();
+        match mispriced_nxmr_error {
             AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
-                error
-                    == "runtime_surface.status.buyback_pool_nebulai expected 1000 from 1000 nXMR fee units at 0.001 XMR/NBLA but got 999"
+                error.contains(
+                    "buyback_pool_nebulai expected 1000 from included nXMR receipts but got 999",
+                )
             })),
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
