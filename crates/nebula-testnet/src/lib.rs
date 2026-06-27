@@ -1,15 +1,24 @@
 #![recursion_limit = "512"]
 
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha3::{Digest, Sha3_256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+pub mod runtime;
 
 pub const VERSION: &str = "nebula-testnet-runner/0.2.0";
 pub const CHAIN_ID: &str = "nebula-private-l2-testnet";
 pub const PUBLIC_LAUNCH_BLOCKER: &str = "public-launch-deployment-attestation";
 pub const PUBLIC_TESTNET_BUNDLE_ID: &str = "nebula-public-testnet-bundle-1";
+pub const RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT: &str = "external-public-endpoint";
+pub const RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET: &str = "loopback-devnet";
 pub const NBLA_SYMBOL: &str = "NBLA";
 pub const NXMR_SYMBOL: &str = "nXMR";
 pub const NEBULAI_UNIT: &str = "nebulai";
@@ -19,9 +28,11 @@ pub const NBLA_TARGET_NXMR_DENOMINATOR: u128 = 1_000;
 pub const TARGET_NXMR_BASE_UNITS_PER_NXMR: u128 =
     NEBULAI_PER_NBLA * NBLA_TARGET_NXMR_DENOMINATOR / NBLA_TARGET_NXMR_NUMERATOR;
 pub const TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT: u128 = 1;
+pub const MINIMUM_GAS_PRICE_NEBULAI: u128 = 1;
 pub const FEE_BASIS_POINTS: u128 = 10_000;
-pub const NXMR_RESERVE_BACKING_BPS: u128 = 9_000;
-pub const NXMR_VALIDATOR_REWARD_BPS: u128 = 1_000;
+pub const NXMR_BUYBACK_BPS: u128 = FEE_BASIS_POINTS;
+pub const NXMR_RESERVE_BACKING_BPS: u128 = 0;
+pub const NXMR_VALIDATOR_REWARD_BPS: u128 = FEE_BASIS_POINTS;
 pub const TESTNET_POINTS_PER_NEBULAI: u128 = 1;
 pub const MIN_PUBLIC_TESTNET_VALIDATORS: usize = 2;
 pub const MIN_PUBLIC_TESTNET_OPERATORS: usize = 2;
@@ -92,7 +103,9 @@ pub struct HybridFeePolicy {
     pub target_nxmr_per_nbla_denominator: u128,
     pub target_nxmr_base_units_per_nxmr: u128,
     pub target_nxmr_to_nbla_rate_nebulai_per_unit: u128,
+    pub minimum_gas_price_nebulai: u128,
     pub bridged_fee_conversion: &'static str,
+    pub nxmr_buyback_bps: u128,
     pub nxmr_reserve_backing_bps: u128,
     pub nxmr_validator_reward_bps: u128,
     pub nbla_validator_reward_bps: u128,
@@ -109,6 +122,7 @@ pub struct HybridFeeQuote {
     pub nxmr_to_nbla_rate_nebulai_per_unit: Option<u128>,
     pub paid_amount_units: u128,
     pub converted_nbla_nebulai: u128,
+    pub buyback_nebulai: u128,
     pub reserve_backing_nebulai: u128,
     pub validator_reward_nebulai: u128,
     pub validator_points: u128,
@@ -276,6 +290,7 @@ pub struct SignatureVerification {
     pub algorithm: String,
     pub public_key: String,
     pub signature_sha3_256: String,
+    pub signature_hex: String,
     pub verified: bool,
 }
 
@@ -292,6 +307,7 @@ pub struct DeploymentAttestationReport {
     pub public_launch_ready: bool,
     pub level: &'static str,
     pub evidence_root: String,
+    pub endpoint_url: String,
     pub witness_evidence_root: String,
     pub public_surface_root: String,
     pub operator_approval_root: String,
@@ -504,6 +520,64 @@ pub struct LaunchPackageBundleReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct PublicTestnetPeerManifest {
+    pub chain_id: String,
+    pub runtime_version: String,
+    pub generated_at_unix_ms: u128,
+    pub endpoint_url: String,
+    pub launch_package_bundle_root: String,
+    pub launch_package_root: String,
+    pub deployment_attestation_root: String,
+    pub validator_set_root: String,
+    pub operator_handoff_root: String,
+    pub operator_acceptance_root: String,
+    pub genesis_root: String,
+    pub sync_peer_quorum: usize,
+    pub peers: Vec<PublicTestnetPeer>,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PublicTestnetPeer {
+    pub validator_id: String,
+    pub operator_id: String,
+    pub node_id: String,
+    pub region: String,
+    pub p2p_endpoint: String,
+    pub bootstrap_endpoint: String,
+    pub rpc_url: String,
+    pub status_url: String,
+    pub snapshot_url: String,
+    pub consensus_public_key: String,
+    pub network_public_key: String,
+    pub reward_account: String,
+    pub bootstrap_attestation_root: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PublicTestnetPeerManifestReport {
+    pub public_testnet_peer_manifest_ready: bool,
+    pub level: &'static str,
+    pub public_testnet_peer_manifest_root: String,
+    pub launch_package_bundle_root: String,
+    pub launch_package_root: String,
+    pub deployment_attestation_root: String,
+    pub validator_set_root: String,
+    pub operator_handoff_root: String,
+    pub operator_acceptance_root: String,
+    pub genesis_root: String,
+    pub endpoint_url: String,
+    pub sync_peer_quorum: usize,
+    pub peer_count: usize,
+    pub operator_count: usize,
+    pub region_count: usize,
+    pub rpc_peer_urls: Vec<String>,
+    pub snapshot_peer_urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ValidatorActivationManifest {
     pub chain_id: String,
     pub runtime_version: String,
@@ -683,6 +757,173 @@ pub struct PublicObserverConfirmationReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct PublicTestnetLaunchCertificate {
+    pub chain_id: String,
+    pub runtime_version: String,
+    pub launch_package_bundle_root: String,
+    pub launch_package_root: String,
+    pub fee_policy_root: String,
+    pub validator_activation_root: String,
+    pub validator_join_root: String,
+    pub operator_join_confirmation_root: String,
+    pub public_observer_confirmation_root: String,
+    pub public_status_manifest_root: String,
+    pub public_probe_root: String,
+    pub runtime_surface_root: String,
+    pub validator_set_root: String,
+    pub genesis_root: String,
+    pub endpoint_url: String,
+    pub certified_at_unix_ms: u128,
+    pub validator_count: usize,
+    pub operator_count: usize,
+    pub observer_count: usize,
+    pub region_count: usize,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PublicTestnetLaunchCertificateReport {
+    pub public_testnet_launch_certificate_ready: bool,
+    pub level: &'static str,
+    pub public_testnet_launch_certificate_root: String,
+    pub launch_package_bundle_root: String,
+    pub launch_package_root: String,
+    pub fee_policy_root: String,
+    pub validator_activation_root: String,
+    pub validator_join_root: String,
+    pub operator_join_confirmation_root: String,
+    pub public_observer_confirmation_root: String,
+    pub public_status_manifest_root: String,
+    pub public_probe_root: String,
+    pub runtime_surface_root: String,
+    pub validator_set_root: String,
+    pub genesis_root: String,
+    pub endpoint_url: String,
+    pub validator_count: usize,
+    pub operator_count: usize,
+    pub observer_count: usize,
+    pub region_count: usize,
+    pub certified_at_unix_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PublicTestnetLaunchReadinessReport {
+    pub public_launch_ready: bool,
+    pub level: &'static str,
+    pub blocking_gaps: Vec<String>,
+    pub satisfied_attestation: &'static str,
+    pub public_launch_readiness_root: String,
+    pub public_testnet_launch_certificate_root: String,
+    pub deployment_attestation_root: String,
+    pub launch_package_bundle_root: String,
+    pub launch_package_root: String,
+    pub fee_policy_root: String,
+    pub validator_activation_root: String,
+    pub validator_join_root: String,
+    pub operator_join_confirmation_root: String,
+    pub public_observer_confirmation_root: String,
+    pub public_status_manifest_root: String,
+    pub public_probe_root: String,
+    pub runtime_surface_root: String,
+    pub runtime_surface_capture_mode: String,
+    pub live_rpc_devnet_rehearsal_root: String,
+    pub live_rpc_devnet_runtime_surface_root: String,
+    pub validator_set_root: String,
+    pub genesis_root: String,
+    pub endpoint_url: String,
+    pub validator_count: usize,
+    pub operator_count: usize,
+    pub observer_count: usize,
+    pub region_count: usize,
+    pub certified_at_unix_ms: u128,
+    pub generated_at_unix_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PublicTestnetLaunchReadinessRejectionReport {
+    pub public_launch_ready: bool,
+    pub level: &'static str,
+    pub blocking_gaps: Vec<String>,
+    pub errors: Vec<String>,
+    pub required_attestation: &'static str,
+    pub public_launch_readiness_rejection_root: String,
+    pub generated_at_unix_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalPublicTestnetRehearsalArtifact {
+    pub name: &'static str,
+    pub level: &'static str,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalPublicTestnetRehearsalReport {
+    pub local_public_testnet_rehearsed: bool,
+    pub level: &'static str,
+    pub chain_id: String,
+    pub runtime_version: String,
+    pub public_launch_ready: bool,
+    pub public_launch_blocker: String,
+    pub verified_artifact_count: usize,
+    pub verified_artifacts: Vec<LocalPublicTestnetRehearsalArtifact>,
+    pub public_testnet_launch_certificate_root: String,
+    pub public_testnet_peer_manifest_root: String,
+    pub launch_package_bundle_root: String,
+    pub launch_package_root: String,
+    pub validator_activation_root: String,
+    pub validator_join_root: String,
+    pub operator_join_confirmation_root: String,
+    pub public_observer_confirmation_root: String,
+    pub validator_count: usize,
+    pub operator_count: usize,
+    pub observer_count: usize,
+    pub region_count: usize,
+    pub generated_at_unix_ms: u128,
+    pub rehearsal_root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveRpcDevnetRehearsalReport {
+    pub live_rpc_devnet_rehearsed: bool,
+    pub level: String,
+    pub chain_id: String,
+    pub runtime_version: String,
+    pub public_launch_ready: bool,
+    pub public_launch_blocker: String,
+    pub endpoint_url: String,
+    pub sequencer_rpc_addr: String,
+    pub follower_rpc_addr: String,
+    pub block_millis: u64,
+    pub sub_second_blocks: bool,
+    pub produced_block_count: u64,
+    pub runtime_surface_ready: bool,
+    pub runtime_surface_root: String,
+    pub latest_height: u64,
+    pub sync_quorum_met: bool,
+    pub sync_successful_peer_count: u64,
+    pub sync_import_count: u64,
+    pub sync_last_import_height: u64,
+    pub sync_quorum_height: u64,
+    pub bridge_deposit_count: u64,
+    pub withdrawal_request_count: u64,
+    pub finalized_withdrawal_count: u64,
+    pub bridge_replay_cache_count: u64,
+    pub bridge_deposited_nxmr_units: u128,
+    pub account_nxmr_units: u128,
+    pub withdrawal_reserved_nxmr_units: u128,
+    pub total_nxmr_fees_units: u128,
+    pub buyback_pool_nebulai: u128,
+    pub validator_reward_nebulai: u128,
+    pub bridge_custody_reconciled: bool,
+    pub nxmr_custody_deficit_units: u128,
+    pub sequencer_key_rotation_count: u64,
+    pub launch_package_bundle_root: String,
+    pub rehearsal_root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct OperatorHandoffManifest {
     pub chain_id: String,
     pub runtime_version: String,
@@ -781,6 +1022,77 @@ pub struct PublicProbeReport {
     pub fee_policy_root: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeSurfaceEvidence {
+    pub chain_id: String,
+    pub runtime_version: String,
+    pub endpoint_url: String,
+    pub capture_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_observation: Option<TlsEndpointPin>,
+    pub captured_at_unix_ms: u128,
+    pub health: Value,
+    pub status: Value,
+    pub snapshot: Value,
+    pub ops: Value,
+    pub backup: Value,
+    pub rpc_status: Value,
+    pub rpc_ops_status: Value,
+    pub rpc_backup_manifest: Value,
+    pub metrics_text: String,
+    pub root: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeSurfaceEvidenceBuildInput {
+    pub endpoint_url: String,
+    pub capture_mode: String,
+    pub tls_observation: Option<TlsEndpointPin>,
+    pub captured_at_unix_ms: u128,
+    pub health_json: String,
+    pub status_json: String,
+    pub snapshot_json: String,
+    pub ops_json: String,
+    pub backup_json: String,
+    pub rpc_status_json: String,
+    pub rpc_ops_status_json: String,
+    pub rpc_backup_manifest_json: String,
+    pub metrics_text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeSurfaceEvidenceReport {
+    pub runtime_surface_ready: bool,
+    pub level: &'static str,
+    pub runtime_surface_root: String,
+    pub endpoint_url: String,
+    pub capture_mode: String,
+    pub tls_observation: Option<TlsEndpointPin>,
+    pub chain_id: String,
+    pub runtime_version: String,
+    pub launch_package_bundle_root: String,
+    pub launch_package_root: String,
+    pub fee_policy_root: String,
+    pub gas_price_nebulai: u128,
+    pub validator_set_root: String,
+    pub genesis_root: String,
+    pub latest_height: u64,
+    pub latest_hash: String,
+    pub snapshot_root: String,
+    pub state_root: String,
+    pub included_nbla_receipt_count: u64,
+    pub included_nxmr_receipt_count: u64,
+    pub total_nxmr_fees_units: u128,
+    pub buyback_pool_nebulai: u128,
+    pub validator_reward_nebulai: u128,
+    pub nxmr_validator_reward_nebulai: u128,
+    pub ops_root: String,
+    pub backup_root: String,
+    pub public_ops_ready: bool,
+    pub blocking_gaps: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ReceiptReport {
     pub receipt_ready: bool,
@@ -791,12 +1103,72 @@ pub struct ReceiptReport {
     pub step_count: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct PublicSurfaceBuildInput {
+    pub endpoint_url: String,
+    pub artifact_sha3_256: String,
+    pub cargo_lock_sha3_256: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeploymentAttestationBuildInput {
+    pub public_status_json: String,
+    pub public_probe_json: String,
+    pub preflight_receipt_json: String,
+    pub runbook_receipt_json: String,
+    pub artifact_sha3_256: String,
+    pub cargo_lock_sha3_256: String,
+    pub generated_at_unix_ms: u128,
+    pub expires_at_unix_ms: u128,
+    pub tls_pins: Vec<TlsEndpointPin>,
+    pub bootstrap_nodes: Vec<BootstrapNodeBuildInput>,
+    pub operators: Vec<OperatorBuildInput>,
+    pub observers: Vec<ObserverBuildInput>,
+    pub rollback_plan_sha3_256: String,
+    pub rollback_last_drill_unix_ms: u128,
+    pub rollback_recovery_point_root: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BootstrapNodeBuildInput {
+    pub node_id: String,
+    pub operator_id: String,
+    pub region: String,
+    pub endpoint: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OperatorBuildInput {
+    pub operator_id: String,
+    pub region: String,
+    pub public_key: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObserverBuildInput {
+    pub observer_id: String,
+    pub region: String,
+    pub public_key: String,
+    pub secret_key_hex: Option<String>,
+}
+
 struct PublicSurfaceSample {
     endpoint_url: String,
     launch_bundle_root: String,
     economics_root: String,
     public_status_manifest: PublicStatusManifest,
     public_probe: PublicProbe,
+}
+
+struct LaunchCertificateReports {
+    launch_package_bundle: LaunchPackageBundleReport,
+    validator_activation: ValidatorActivationReport,
+    validator_join: ValidatorJoinReport,
+    operator_join_confirmation: OperatorJoinConfirmationReport,
+    public_observer_confirmation: PublicObserverConfirmationReport,
+    runtime_surface: RuntimeSurfaceEvidenceReport,
+    genesis: GenesisManifestReport,
+    deployment: DeploymentAttestationReport,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -824,12 +1196,19 @@ pub fn hybrid_fee_policy() -> HybridFeePolicy {
         target_nxmr_per_nbla_denominator: NBLA_TARGET_NXMR_DENOMINATOR,
         target_nxmr_base_units_per_nxmr: TARGET_NXMR_BASE_UNITS_PER_NXMR,
         target_nxmr_to_nbla_rate_nebulai_per_unit: TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT,
-        bridged_fee_conversion: "nXMR fees are converted into NBLA accounting value before split",
+        minimum_gas_price_nebulai: MINIMUM_GAS_PRICE_NEBULAI,
+        bridged_fee_conversion:
+            "nXMR fees fund NBLA buybacks at the target rate, and bought NBLA rewards validators",
+        nxmr_buyback_bps: NXMR_BUYBACK_BPS,
         nxmr_reserve_backing_bps: NXMR_RESERVE_BACKING_BPS,
         nxmr_validator_reward_bps: NXMR_VALIDATOR_REWARD_BPS,
         nbla_validator_reward_bps: FEE_BASIS_POINTS,
         testnet_reward_unit: "non-transferable validator points",
     }
+}
+
+pub fn fee_policy_root() -> String {
+    stable_root(&json!(hybrid_fee_policy()))
 }
 
 pub fn quote_hybrid_fee(
@@ -859,6 +1238,7 @@ pub fn quote_hybrid_fee(
             nxmr_to_nbla_rate_nebulai_per_unit: None,
             paid_amount_units: required_fee_nebulai,
             converted_nbla_nebulai: required_fee_nebulai,
+            buyback_nebulai: 0,
             reserve_backing_nebulai: 0,
             validator_reward_nebulai: required_fee_nebulai,
             validator_points: required_fee_nebulai
@@ -876,9 +1256,11 @@ pub fn quote_hybrid_fee(
             let converted_nbla_nebulai = paid_amount_units
                 .checked_mul(rate)
                 .ok_or(FeeError::ArithmeticOverflow)?;
+            let buyback_nebulai = split_basis_points(converted_nbla_nebulai, NXMR_BUYBACK_BPS)?;
             let reserve_backing_nebulai =
                 split_basis_points(converted_nbla_nebulai, NXMR_RESERVE_BACKING_BPS)?;
-            let validator_reward_nebulai = converted_nbla_nebulai - reserve_backing_nebulai;
+            let validator_reward_nebulai =
+                split_basis_points(converted_nbla_nebulai, NXMR_VALIDATOR_REWARD_BPS)?;
 
             Ok(HybridFeeQuote {
                 payment_asset,
@@ -889,13 +1271,14 @@ pub fn quote_hybrid_fee(
                 nxmr_to_nbla_rate_nebulai_per_unit: Some(rate),
                 paid_amount_units,
                 converted_nbla_nebulai,
+                buyback_nebulai,
                 reserve_backing_nebulai,
                 validator_reward_nebulai,
                 validator_points: validator_reward_nebulai
                     .checked_mul(TESTNET_POINTS_PER_NEBULAI)
                     .ok_or(FeeError::ArithmeticOverflow)?,
                 settlement_note:
-                    "nXMR gas is converted to NBLA value: 90% backs NBLA, 10% rewards validators",
+                    "nXMR gas funds NBLA buybacks at 0.001 XMR/NBLA; bought NBLA rewards validators",
             })
         }
     }
@@ -961,18 +1344,7 @@ pub fn readiness_report() -> NebulaReadiness {
                     "guide-mirror"
                 ],
             })),
-            "economics": stable_root(&json!({
-                "native_fee_token": NBLA_SYMBOL,
-                "bridged_fee_token": NXMR_SYMBOL,
-                "native_base_unit": NEBULAI_UNIT,
-                "nebulai_per_nbla": NEBULAI_PER_NBLA,
-                "target_nxmr_per_nbla": "0.001",
-                "target_nxmr_base_units_per_nxmr": TARGET_NXMR_BASE_UNITS_PER_NXMR,
-                "target_nxmr_to_nbla_rate_nebulai_per_unit": TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT,
-                "nxmr_reserve_backing_bps": NXMR_RESERVE_BACKING_BPS,
-                "nxmr_validator_reward_bps": NXMR_VALIDATOR_REWARD_BPS,
-                "testnet_reward_unit": "non-transferable validator points",
-            })),
+            "economics": fee_policy_root(),
             "validator_admission": stable_root(&json!({
                 "minimum_validator_count": MIN_PUBLIC_TESTNET_VALIDATORS,
                 "minimum_operator_count": MIN_PUBLIC_TESTNET_OPERATORS,
@@ -1155,6 +1527,15 @@ pub fn readiness_report() -> NebulaReadiness {
                 "operator_acceptance_root_required": true,
                 "artifact_count": 7,
             })),
+            "public_testnet_peer_manifest": stable_root(&json!({
+                "launch_package_bundle_root_required": true,
+                "validator_set_root_required": true,
+                "deployment_bootstrap_roster_required": true,
+                "one_peer_per_admitted_validator": true,
+                "rpc_status_snapshot_urls_reported": true,
+                "sync_peer_quorum_reported": true,
+                "peer_regions_and_operator_coverage_required": true,
+            })),
             "validator_activation": stable_root(&json!({
                 "launch_package_bundle_root_required": true,
                 "launch_package_root_required": true,
@@ -1203,6 +1584,20 @@ pub fn readiness_report() -> NebulaReadiness {
                 "minimum_observer_region_count_required": MIN_PUBLIC_TESTNET_REGIONS,
                 "observer_confirmation_signature_roots_verified": true,
                 "observer_confirmation_signatures_verified": true,
+            })),
+            "public_testnet_launch_certificate": stable_root(&json!({
+                "launch_package_bundle_root_required": true,
+                "validator_activation_root_required": true,
+                "validator_join_root_required": true,
+                "operator_join_confirmation_root_required": true,
+                "public_observer_confirmation_root_required": true,
+                "public_status_manifest_root_required": true,
+                "public_probe_root_required": true,
+                "genesis_root_required": true,
+                "validator_set_root_required": true,
+                "certified_at_max_age_ms": PUBLIC_ATTESTATION_MAX_AGE_MS,
+                "operator_validator_observer_region_counts_bound": true,
+                "single_launch_candidate_root_reported": true,
             })),
             "public_status_surface": stable_root(&json!({
                 "status": "deployment-attested",
@@ -1269,6 +1664,1050 @@ pub fn readiness_summary() -> String {
         "Nebula local testnet is ready. Public launch is blocked by: {}",
         report.public_launch_readiness.blocking_gaps.join(", ")
     )
+}
+
+pub fn prove_local_public_testnet_rehearsal_json_pretty() -> Result<String, AttestationError> {
+    let report = prove_local_public_testnet_rehearsal()?;
+    serde_json::to_string_pretty(&report)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+pub fn prove_local_public_testnet_rehearsal(
+) -> Result<LocalPublicTestnetRehearsalReport, AttestationError> {
+    let readiness = readiness_report();
+    let public_launch_blocker = readiness
+        .public_launch_readiness
+        .blocking_gaps
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "none".to_string());
+
+    let public_status_json = sample_public_status_manifest_json_pretty();
+    let public_status_report = verify_public_status_manifest_json(&public_status_json)?;
+    let public_probe_json = sample_public_probe_json_pretty();
+    let public_probe_report = verify_public_probe_json(&public_probe_json)?;
+    let preflight_receipt_json = sample_preflight_receipt_json_pretty();
+    let preflight_report = verify_preflight_receipt_json(&preflight_receipt_json)?;
+    let runbook_receipt_json = sample_runbook_receipt_json_pretty();
+    let runbook_report = verify_runbook_receipt_json(&runbook_receipt_json)?;
+
+    let generated_at_unix_ms = unix_ms();
+    let deployment_attestation_json =
+        build_deployment_attestation_json_pretty(DeploymentAttestationBuildInput {
+            public_status_json: public_status_json.clone(),
+            public_probe_json: public_probe_json.clone(),
+            preflight_receipt_json: preflight_receipt_json.clone(),
+            runbook_receipt_json: runbook_receipt_json.clone(),
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+            generated_at_unix_ms,
+            expires_at_unix_ms: generated_at_unix_ms + PUBLIC_ATTESTATION_MAX_AGE_MS,
+            tls_pins: vec![
+                TlsEndpointPin {
+                    cert_sha256: hex_64("tls-cert-a"),
+                    public_key_sha256: hex_64("tls-key-a"),
+                    not_after_unix_ms: generated_at_unix_ms + 2_592_000_000,
+                },
+                TlsEndpointPin {
+                    cert_sha256: hex_64("tls-cert-b"),
+                    public_key_sha256: hex_64("tls-key-b"),
+                    not_after_unix_ms: generated_at_unix_ms + 2_592_000_000,
+                },
+            ],
+            bootstrap_nodes: vec![
+                BootstrapNodeBuildInput {
+                    node_id: "bootstrap-us-east-1".to_string(),
+                    operator_id: "operator-a".to_string(),
+                    region: "us-east".to_string(),
+                    endpoint: "https://bootstrap-a.testnet.nebula.example".to_string(),
+                },
+                BootstrapNodeBuildInput {
+                    node_id: "bootstrap-eu-west-1".to_string(),
+                    operator_id: "operator-b".to_string(),
+                    region: "eu-west".to_string(),
+                    endpoint: "https://bootstrap-b.testnet.nebula.example".to_string(),
+                },
+            ],
+            operators: vec![
+                OperatorBuildInput {
+                    operator_id: "operator-a".to_string(),
+                    region: "us-east".to_string(),
+                    public_key: sample_ed25519_public_key_hex(0xa1),
+                },
+                OperatorBuildInput {
+                    operator_id: "operator-b".to_string(),
+                    region: "eu-west".to_string(),
+                    public_key: sample_ed25519_public_key_hex(0xa2),
+                },
+            ],
+            observers: vec![
+                ObserverBuildInput {
+                    observer_id: "observer-us-east-1".to_string(),
+                    region: "us-east".to_string(),
+                    public_key: sample_ed25519_public_key_hex(0xb1),
+                    secret_key_hex: None,
+                },
+                ObserverBuildInput {
+                    observer_id: "observer-eu-west-1".to_string(),
+                    region: "eu-west".to_string(),
+                    public_key: sample_ed25519_public_key_hex(0xb2),
+                    secret_key_hex: None,
+                },
+            ],
+            rollback_plan_sha3_256: hex_64("rollback-plan"),
+            rollback_last_drill_unix_ms: generated_at_unix_ms,
+            rollback_recovery_point_root: hex_64("rollback-recovery-point"),
+        })?;
+    let deployment_report = verify_deployment_attestation_json(&deployment_attestation_json)?;
+
+    let validator_set_json = sample_validator_set_json_pretty();
+    let validator_set_report = verify_validator_set_json(&validator_set_json)?;
+    let operator_handoff_json =
+        build_operator_handoff_json_pretty(&deployment_attestation_json, &validator_set_json)?;
+    let operator_handoff_report = verify_operator_handoff_jsons(
+        &operator_handoff_json,
+        &deployment_attestation_json,
+        &validator_set_json,
+    )?;
+    let operator_acceptance_json = build_operator_acceptance_json_pretty(
+        &operator_handoff_json,
+        &deployment_attestation_json,
+        &validator_set_json,
+    )?;
+    let operator_acceptance_report = verify_operator_acceptance_jsons(
+        &operator_acceptance_json,
+        &operator_handoff_json,
+        &deployment_attestation_json,
+        &validator_set_json,
+    )?;
+    let genesis_manifest_json =
+        build_genesis_manifest_json_pretty(&deployment_attestation_json, &validator_set_json)?;
+    let genesis_report = verify_genesis_manifest_json(&genesis_manifest_json)?;
+    let launch_package_report = verify_launch_package_with_operator_acceptance_jsons(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let launch_package_bundle_json = build_launch_package_bundle_json_pretty(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let launch_package_bundle_report = verify_launch_package_bundle_jsons(
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let public_testnet_peer_manifest_json = build_public_testnet_peer_manifest_json_pretty(
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let public_testnet_peer_manifest_report = verify_public_testnet_peer_manifest_jsons(
+        &public_testnet_peer_manifest_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let sequencer_binding = build_runtime_launch_binding_from_jsons(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+        &launch_package_bundle_json,
+        "validator-a",
+    )?;
+    let follower_binding = build_runtime_launch_binding_from_jsons(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+        &launch_package_bundle_json,
+        "validator-b",
+    )?;
+    let (_live_rpc_report, runtime_surface_evidence) =
+        prove_live_rpc_devnet_rehearsal_with_bindings(sequencer_binding, follower_binding)?;
+    let runtime_surface_evidence_json = runtime_surface_evidence.to_string();
+    let runtime_surface_report =
+        verify_runtime_surface_evidence_json(&runtime_surface_evidence_json)?;
+    let validator_activation_json = build_validator_activation_json_pretty(
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let validator_activation_report = verify_validator_activation_jsons(
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let validator_join_json = build_validator_join_receipt_json_pretty(
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let validator_join_report = verify_validator_join_receipt_jsons(
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let operator_join_confirmation_json = build_operator_join_confirmation_json_pretty(
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let operator_join_confirmation_report = verify_operator_join_confirmation_jsons(
+        &operator_join_confirmation_json,
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let public_observer_confirmation_json = build_public_observer_confirmation_json_pretty(
+        &operator_join_confirmation_json,
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let public_observer_confirmation_report = verify_public_observer_confirmation_jsons(
+        &public_observer_confirmation_json,
+        &operator_join_confirmation_json,
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let public_testnet_launch_certificate_json =
+        build_public_testnet_launch_certificate_json_pretty(
+            &public_observer_confirmation_json,
+            &runtime_surface_evidence_json,
+            &operator_join_confirmation_json,
+            &validator_join_json,
+            &validator_activation_json,
+            &launch_package_bundle_json,
+            &deployment_attestation_json,
+            &public_status_json,
+            &public_probe_json,
+            &validator_set_json,
+            &operator_handoff_json,
+            &operator_acceptance_json,
+            &genesis_manifest_json,
+        )?;
+    let public_testnet_launch_certificate_report = verify_public_testnet_launch_certificate_jsons(
+        &public_testnet_launch_certificate_json,
+        &public_observer_confirmation_json,
+        &runtime_surface_evidence_json,
+        &operator_join_confirmation_json,
+        &validator_join_json,
+        &validator_activation_json,
+        &launch_package_bundle_json,
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+
+    let verified_artifacts = vec![
+        local_rehearsal_artifact(
+            "public_status",
+            public_status_report.level,
+            public_status_report.public_status_manifest_root,
+        ),
+        local_rehearsal_artifact(
+            "public_probe",
+            public_probe_report.level,
+            public_probe_report.public_probe_root,
+        ),
+        local_rehearsal_artifact(
+            "preflight_receipt",
+            preflight_report.level,
+            preflight_report.receipt_root,
+        ),
+        local_rehearsal_artifact(
+            "runbook_receipt",
+            runbook_report.level,
+            runbook_report.receipt_root,
+        ),
+        local_rehearsal_artifact(
+            "deployment_attestation",
+            deployment_report.level,
+            deployment_report.evidence_root,
+        ),
+        local_rehearsal_artifact(
+            "validator_set",
+            validator_set_report.level,
+            validator_set_report.validator_set_root,
+        ),
+        local_rehearsal_artifact(
+            "operator_handoff",
+            operator_handoff_report.level,
+            operator_handoff_report.operator_handoff_root,
+        ),
+        local_rehearsal_artifact(
+            "operator_acceptance",
+            operator_acceptance_report.level,
+            operator_acceptance_report.operator_acceptance_root,
+        ),
+        local_rehearsal_artifact(
+            "genesis_manifest",
+            genesis_report.level,
+            genesis_report.genesis_root,
+        ),
+        local_rehearsal_artifact(
+            "launch_package",
+            launch_package_report.level,
+            launch_package_bundle_report.launch_package_root.clone(),
+        ),
+        local_rehearsal_artifact(
+            "launch_package_bundle",
+            launch_package_bundle_report.level,
+            launch_package_bundle_report
+                .launch_package_bundle_root
+                .clone(),
+        ),
+        local_rehearsal_artifact(
+            "public_testnet_peer_manifest",
+            public_testnet_peer_manifest_report.level,
+            public_testnet_peer_manifest_report
+                .public_testnet_peer_manifest_root
+                .clone(),
+        ),
+        local_rehearsal_artifact(
+            "validator_activation",
+            validator_activation_report.level,
+            validator_activation_report
+                .validator_activation_root
+                .clone(),
+        ),
+        local_rehearsal_artifact(
+            "validator_join",
+            validator_join_report.level,
+            validator_join_report.validator_join_root.clone(),
+        ),
+        local_rehearsal_artifact(
+            "operator_join_confirmation",
+            operator_join_confirmation_report.level,
+            operator_join_confirmation_report
+                .operator_join_confirmation_root
+                .clone(),
+        ),
+        local_rehearsal_artifact(
+            "public_observer_confirmation",
+            public_observer_confirmation_report.level,
+            public_observer_confirmation_report
+                .public_observer_confirmation_root
+                .clone(),
+        ),
+        local_rehearsal_artifact(
+            "runtime_surface_evidence",
+            runtime_surface_report.level,
+            runtime_surface_report.runtime_surface_root.clone(),
+        ),
+        local_rehearsal_artifact(
+            "public_testnet_launch_certificate",
+            public_testnet_launch_certificate_report.level,
+            public_testnet_launch_certificate_report
+                .public_testnet_launch_certificate_root
+                .clone(),
+        ),
+    ];
+
+    let mut report = LocalPublicTestnetRehearsalReport {
+        local_public_testnet_rehearsed: true,
+        level: "local-public-testnet-rehearsal-ready",
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        public_launch_ready: readiness.public_launch_readiness.public_launch_ready,
+        public_launch_blocker,
+        verified_artifact_count: verified_artifacts.len(),
+        verified_artifacts,
+        public_testnet_launch_certificate_root: public_testnet_launch_certificate_report
+            .public_testnet_launch_certificate_root,
+        public_testnet_peer_manifest_root: public_testnet_peer_manifest_report
+            .public_testnet_peer_manifest_root,
+        launch_package_bundle_root: launch_package_bundle_report.launch_package_bundle_root,
+        launch_package_root: launch_package_bundle_report.launch_package_root,
+        validator_activation_root: validator_activation_report.validator_activation_root,
+        validator_join_root: validator_join_report.validator_join_root,
+        operator_join_confirmation_root: operator_join_confirmation_report
+            .operator_join_confirmation_root,
+        public_observer_confirmation_root: public_observer_confirmation_report
+            .public_observer_confirmation_root,
+        validator_count: public_testnet_launch_certificate_report.validator_count,
+        operator_count: public_testnet_launch_certificate_report.operator_count,
+        observer_count: public_testnet_launch_certificate_report.observer_count,
+        region_count: public_testnet_launch_certificate_report.region_count,
+        generated_at_unix_ms: unix_ms(),
+        rehearsal_root: String::new(),
+    };
+    report.rehearsal_root = local_public_testnet_rehearsal_root(&report);
+    Ok(report)
+}
+
+pub fn prove_live_rpc_devnet_rehearsal_json_pretty() -> Result<String, AttestationError> {
+    let report = prove_live_rpc_devnet_rehearsal()?;
+    serde_json::to_string_pretty(&report)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+pub fn prove_live_rpc_devnet_rehearsal() -> Result<LiveRpcDevnetRehearsalReport, AttestationError> {
+    let (report, _evidence) = prove_live_rpc_devnet_rehearsal_with_evidence()?;
+    Ok(report)
+}
+
+pub fn prove_live_rpc_devnet_rehearsal_with_evidence(
+) -> Result<(LiveRpcDevnetRehearsalReport, Value), AttestationError> {
+    let (sequencer_binding, follower_binding) = live_runtime_launch_bindings()?;
+    prove_live_rpc_devnet_rehearsal_with_bindings(sequencer_binding, follower_binding)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prove_live_rpc_devnet_rehearsal_with_jsons(
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<LiveRpcDevnetRehearsalReport, AttestationError> {
+    let (report, _evidence) = prove_live_rpc_devnet_rehearsal_with_jsons_and_evidence(
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    Ok(report)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prove_live_rpc_devnet_rehearsal_with_jsons_and_evidence(
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<(LiveRpcDevnetRehearsalReport, Value), AttestationError> {
+    let sequencer_binding = build_runtime_launch_binding_from_jsons(
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+        launch_package_bundle_json,
+        "validator-a",
+    )?;
+    let follower_binding = build_runtime_launch_binding_from_jsons(
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+        launch_package_bundle_json,
+        "validator-b",
+    )?;
+    prove_live_rpc_devnet_rehearsal_with_bindings(sequencer_binding, follower_binding)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_live_rpc_devnet_runtime_surface_evidence_json_pretty(
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<String, AttestationError> {
+    let sequencer_binding = build_runtime_launch_binding_from_jsons(
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+        launch_package_bundle_json,
+        "validator-a",
+    )?;
+    let follower_binding = build_runtime_launch_binding_from_jsons(
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+        launch_package_bundle_json,
+        "validator-b",
+    )?;
+    let (_report, evidence) =
+        prove_live_rpc_devnet_rehearsal_with_bindings(sequencer_binding, follower_binding)?;
+    serde_json::to_string_pretty(&evidence)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+fn prove_live_rpc_devnet_rehearsal_with_bindings(
+    sequencer_binding: runtime::RuntimeLaunchBinding,
+    follower_binding: runtime::RuntimeLaunchBinding,
+) -> Result<(LiveRpcDevnetRehearsalReport, Value), AttestationError> {
+    const ADMIN_TOKEN: &str = "live-rpc-devnet-rehearsal-admin";
+    let readiness = readiness_report();
+    let public_launch_blocker = readiness
+        .public_launch_readiness
+        .blocking_gaps
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "none".to_string());
+    let endpoint_url = sequencer_binding.endpoint_url.clone();
+    let sequencer_launch_binding = sequencer_binding.clone();
+    let block_millis = runtime::DEFAULT_SUBSECOND_BLOCK_MS;
+    let bridge_account_seed = 0x46;
+    let bridge_account = live_account_id(bridge_account_seed);
+
+    let mut sequencer_config = runtime::RuntimeConfig::public_testnet_default();
+    sequencer_config.block_target_ms = block_millis;
+    sequencer_config.validator_id = "validator-a".to_string();
+    sequencer_config.launch_binding = Some(sequencer_binding);
+    sequencer_config.faucet_nbla_nebulai = 0;
+    let initial_sequencer_secret_key_hex = "3c".repeat(32);
+    sequencer_config.sequencer_public_key_hex = live_account_id(0x3c);
+    let sequencer_data_dir = live_temp_data_dir("sequencer");
+    let sequencer_storage = runtime::RuntimeStorage::from_data_dir(&sequencer_data_dir);
+    let mut seeded_runtime = runtime::NebulaRuntime::with_sequencer_secret(
+        sequencer_config.clone(),
+        Some(initial_sequencer_secret_key_hex.clone()),
+    )
+    .map_err(|error| live_rehearsal_invalid(format!("failed to seed sequencer: {error}")))?;
+    seeded_runtime
+        .seed_local_rehearsal_nbla(&bridge_account, 10_000)
+        .map_err(|error| live_rehearsal_invalid(format!("failed to seed NBLA balance: {error}")))?;
+    seeded_runtime.try_produce_block().map_err(|error| {
+        live_rehearsal_invalid(format!("failed to commit seeded NBLA: {error}"))
+    })?;
+    sequencer_storage
+        .save_runtime(&seeded_runtime)
+        .map_err(|error| {
+            live_rehearsal_invalid(format!("failed to persist seeded sequencer: {error}"))
+        })?;
+    let (sequencer_rpc_addr, sequencer_admin_addr) = live_rpc_start_server_with_admin(
+        sequencer_config,
+        runtime::RuntimeNodeOptions {
+            admin_token: Some(ADMIN_TOKEN.to_string()),
+            sequencer_secret_key_hex: Some(initial_sequencer_secret_key_hex),
+            data_dir: Some(sequencer_data_dir),
+            auto_produce_blocks: false,
+            max_requests_per_minute: 10_000,
+            trusted_proxy_ips: vec!["127.0.0.1".to_string()],
+            ..runtime::RuntimeNodeOptions::default()
+        },
+    )?;
+
+    let initial_block = live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_produceBlock",
+        json!({ "admin_token": ADMIN_TOKEN }),
+    )?;
+    if live_rpc_result(&initial_block)?["height"]
+        .as_u64()
+        .unwrap_or(0)
+        == 0
+    {
+        return Err(live_rehearsal_invalid(
+            "initial block production did not advance height",
+        ));
+    }
+    live_wait_for_json_condition(
+        &sequencer_rpc_addr,
+        "/ops",
+        "sequencer public ops ready",
+        |ops| ops["public_ops_ready"] == true && ops["latest_height"].as_u64().unwrap_or(0) > 0,
+    )?;
+    let initial_status = live_rpc_call(&sequencer_rpc_addr, "nebula_status", json!({}))?;
+    let initial_status = live_rpc_result(&initial_status)?.clone();
+    let rotation_secret_key_hex = "4d".repeat(32);
+    let rotation_public_key_hex = live_account_id(0x4d);
+    let rotation_proof_root = hex_64("live-rotation-proof");
+    let rotation_activation_height = live_value_u64(&initial_status, "latest_height")?
+        .checked_add(1)
+        .ok_or_else(|| live_rehearsal_invalid("rotation activation height overflowed"))?;
+    let previous_key_history_root = initial_status["sequencer_key_history_root"]
+        .as_str()
+        .ok_or_else(|| live_rehearsal_invalid("initial status missing key history root"))?;
+    let old_public_key_hex = initial_status["sequencer_public_key_hex"]
+        .as_str()
+        .ok_or_else(|| live_rehearsal_invalid("initial status missing sequencer public key"))?;
+    let (rotation_operator_ids, rotation_approval_roots, rotation_approvals) =
+        live_rotation_operator_approval_quorum(
+            Some(&sequencer_launch_binding),
+            previous_key_history_root,
+            rotation_activation_height,
+            old_public_key_hex,
+            &rotation_public_key_hex,
+            &rotation_proof_root,
+        );
+
+    let rotation = live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_rotateSequencerKey",
+        json!({
+            "admin_token": ADMIN_TOKEN,
+            "new_sequencer_secret_key_hex": rotation_secret_key_hex,
+            "rotation_proof_root": rotation_proof_root,
+            "operator_approval_ids": rotation_operator_ids,
+            "operator_approval_roots": rotation_approval_roots,
+            "operator_approvals": rotation_approvals,
+        }),
+    )?;
+    let rotation = live_rpc_result(&rotation)?;
+    if rotation["rotated"] != true {
+        return Err(live_rehearsal_invalid(
+            "sequencer key rotation did not report rotated=true",
+        ));
+    }
+    if rotation["rotation"]["operator_approvals"]
+        .as_array()
+        .map(Vec::len)
+        != Some(2)
+    {
+        return Err(live_rehearsal_invalid(
+            "sequencer key rotation did not include signed operator approval quorum",
+        ));
+    }
+    let rotated_public_key = rotation["sequencer_public_key_hex"]
+        .as_str()
+        .ok_or_else(|| live_rehearsal_invalid("sequencer rotation response missing public key"))?
+        .to_string();
+
+    let disabled_faucet = live_rpc_call(
+        &sequencer_rpc_addr,
+        "nebula_faucet",
+        json!({ "account": bridge_account.clone() }),
+    )?;
+    let faucet_error = disabled_faucet
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !faucet_error.contains("NBLA faucet is disabled") {
+        return Err(live_rehearsal_invalid(
+            "launch-bound public NBLA faucet was not disabled",
+        ));
+    }
+
+    let bridge_deposit = live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_observeBridgeDeposit",
+        json!({
+            "admin_token": ADMIN_TOKEN,
+            "deposit": live_bridge_deposit(bridge_account_seed, 5_000),
+        }),
+    )?;
+    let bridge_deposit = live_rpc_result(&bridge_deposit)?;
+    if bridge_deposit["credited"] != true {
+        return Err(live_rehearsal_invalid(
+            "bridge deposit did not report credited=true",
+        ));
+    }
+
+    let nbla_tx = live_signed_transaction_with_fee_asset(
+        bridge_account_seed,
+        0,
+        "live-nbla-gas-recipient",
+        10,
+        5,
+        2,
+        NBLA_SYMBOL,
+    );
+    let nbla_submission = live_rpc_call(
+        &sequencer_rpc_addr,
+        "nebula_sendTransaction",
+        json!({ "tx": nbla_tx }),
+    )?;
+    let nbla_submission = live_rpc_result(&nbla_submission)?;
+    if nbla_submission["accepted_to_mempool"] != true {
+        return Err(live_rehearsal_invalid(
+            "NBLA gas transaction was not accepted to mempool",
+        ));
+    }
+    let nbla_tx_id = nbla_submission["tx_id"]
+        .as_str()
+        .ok_or_else(|| live_rehearsal_invalid("NBLA gas transaction response missing tx_id"))?
+        .to_string();
+    live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_produceBlock",
+        json!({ "admin_token": ADMIN_TOKEN }),
+    )?;
+    let nbla_receipt = live_rpc_call(
+        &sequencer_rpc_addr,
+        "nebula_getReceipt",
+        json!({ "tx_id": nbla_tx_id }),
+    )?;
+    let nbla_receipt = live_rpc_result(&nbla_receipt)?;
+    if nbla_receipt["status"].as_str() != Some("included")
+        || nbla_receipt["fee_asset"].as_str() != Some(NBLA_SYMBOL)
+        || live_value_u128(nbla_receipt, "paid_amount_units")? != 10
+        || live_value_u128(nbla_receipt, "buyback_nebulai")? != 0
+        || live_value_u128(nbla_receipt, "validator_reward_nebulai")? != 10
+    {
+        return Err(live_rehearsal_invalid(format!(
+            "NBLA gas receipt did not credit validator rewards directly: {nbla_receipt}"
+        )));
+    }
+
+    let nxmr_tx = live_signed_transaction_with_fee_asset(
+        bridge_account_seed,
+        1,
+        "live-nxmr-gas-recipient",
+        100,
+        100,
+        10,
+        NXMR_SYMBOL,
+    );
+    let nxmr_submission = live_rpc_call(
+        &sequencer_rpc_addr,
+        "nebula_sendTransaction",
+        json!({ "tx": nxmr_tx }),
+    )?;
+    let nxmr_submission = live_rpc_result(&nxmr_submission)?;
+    if nxmr_submission["accepted_to_mempool"] != true {
+        return Err(live_rehearsal_invalid(
+            "nXMR gas transaction was not accepted to mempool",
+        ));
+    }
+    let nxmr_tx_id = nxmr_submission["tx_id"]
+        .as_str()
+        .ok_or_else(|| live_rehearsal_invalid("nXMR gas transaction response missing tx_id"))?
+        .to_string();
+    live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_produceBlock",
+        json!({ "admin_token": ADMIN_TOKEN }),
+    )?;
+    let nxmr_receipt = live_rpc_call(
+        &sequencer_rpc_addr,
+        "nebula_getReceipt",
+        json!({ "tx_id": nxmr_tx_id }),
+    )?;
+    let nxmr_receipt = live_rpc_result(&nxmr_receipt)?;
+    if nxmr_receipt["status"].as_str() != Some("included")
+        || nxmr_receipt["fee_asset"].as_str() != Some(NXMR_SYMBOL)
+        || live_value_u128(nxmr_receipt, "paid_amount_units")? != 1_000
+        || live_value_u128(nxmr_receipt, "buyback_nebulai")? != 1_000
+        || live_value_u128(nxmr_receipt, "validator_reward_nebulai")? != 1_000
+    {
+        return Err(live_rehearsal_invalid(format!(
+            "nXMR gas receipt did not fund NBLA buyback and validator rewards: {nxmr_receipt}"
+        )));
+    }
+
+    let withdrawal = live_rpc_call(
+        &sequencer_rpc_addr,
+        "nebula_requestWithdrawal",
+        json!({
+            "account": bridge_account.clone(),
+            "monero_address": "9xTestnetMoneroAddressForNebulaWithdrawals",
+            "amount_nxmr_units": 2_000,
+            "nonce": 2,
+            "signature": live_withdrawal_signature(
+                bridge_account_seed,
+                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                2_000,
+                2,
+            ),
+        }),
+    )?;
+    let withdrawal = live_rpc_result(&withdrawal)?;
+    if withdrawal["accepted"] != true {
+        return Err(live_rehearsal_invalid(
+            "withdrawal request did not report accepted=true",
+        ));
+    }
+    let withdrawal_id = withdrawal["withdrawal"]["withdrawal_id"]
+        .as_str()
+        .ok_or_else(|| live_rehearsal_invalid("withdrawal response missing withdrawal_id"))?
+        .to_string();
+    let withdrawal_request = serde_json::from_value::<runtime::RuntimeWithdrawalRequest>(
+        withdrawal["withdrawal"].clone(),
+    )
+    .map_err(|error| live_rehearsal_invalid(format!("invalid withdrawal response: {error}")))?;
+    let finalized_monero_tx_id = hex_64("live-finalized-withdrawal");
+    let finalization_proof_root = hex_64("live-finalization-proof");
+    let (operator_approval_ids, operator_approval_roots, operator_approvals) =
+        live_operator_approval_quorum(
+            &withdrawal_request,
+            &finalized_monero_tx_id,
+            &finalization_proof_root,
+        );
+    let finalization = live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_finalizeWithdrawal",
+        json!({
+            "admin_token": ADMIN_TOKEN,
+            "withdrawal_id": withdrawal_id,
+            "finalized_monero_tx_id": finalized_monero_tx_id,
+            "finalization_proof_root": finalization_proof_root,
+            "operator_approval_ids": operator_approval_ids,
+            "operator_approval_roots": operator_approval_roots,
+            "operator_approvals": operator_approvals,
+        }),
+    )?;
+    if live_rpc_result(&finalization)?["finalized"] != true {
+        return Err(live_rehearsal_invalid(
+            "withdrawal finalization did not report finalized=true",
+        ));
+    }
+
+    let sequencer_status = live_wait_for_json_condition(
+        &sequencer_rpc_addr,
+        "/status",
+        "sequencer lifecycle state committed",
+        |status| {
+            status["sequencer_key_rotation_count"] == 1
+                && status["bridge_deposit_count"] == 1
+                && status["withdrawal_request_count"] == 1
+                && status["finalized_withdrawal_count"] == 1
+                && status["faucet_nbla_nebulai"] == 0
+                && status["total_nxmr_fees_units"] == 1_000
+                && status["buyback_pool_nebulai"] == 1_000
+                && status["validator_reward_nebulai"] == 1_010
+                && status["bridge_custody_reconciled"] == true
+        },
+    )?;
+
+    let snapshot_url = format!("http://{sequencer_rpc_addr}/snapshot");
+    let mut follower_config = runtime::RuntimeConfig::public_testnet_default();
+    follower_config.block_target_ms = block_millis;
+    follower_config.validator_id = "validator-b".to_string();
+    follower_config.produce_blocks = false;
+    follower_config.sequencer_public_key_hex = rotated_public_key;
+    follower_config.launch_binding = Some(follower_binding.clone());
+    follower_config.faucet_nbla_nebulai = 0;
+    let follower_rpc_addr = live_rpc_start_server(
+        follower_config,
+        runtime::RuntimeNodeOptions {
+            data_dir: Some(live_temp_data_dir("follower")),
+            bootstrap_rpc_url: Some(snapshot_url.clone()),
+            sync_rpc_url: Some(snapshot_url.clone()),
+            sync_peer_quorum: 1,
+            public_testnet_peer_manifest: Some(runtime::RuntimePublicTestnetPeerManifestBinding {
+                public_testnet_peer_manifest_root: hex_64("live-peer-manifest"),
+                launch_package_bundle_root: follower_binding.launch_package_bundle_root.clone(),
+                snapshot_peer_urls: vec![snapshot_url],
+                sync_peer_quorum: 1,
+            }),
+            max_requests_per_minute: 10_000,
+            trusted_proxy_ips: vec!["127.0.0.1".to_string()],
+            ..runtime::RuntimeNodeOptions::default()
+        },
+    )?;
+    live_rpc_call(
+        &sequencer_admin_addr,
+        "nebula_produceBlock",
+        json!({ "admin_token": ADMIN_TOKEN }),
+    )?;
+
+    let follower_ops = live_wait_for_json_condition(
+        &follower_rpc_addr,
+        "/ops",
+        "follower public ops ready",
+        |ops| {
+            let latest_height = ops["latest_height"].as_u64().unwrap_or(0);
+            ops["public_ops_ready"] == true
+                && ops["node_role"] == "follower"
+                && ops["sync_quorum_met"] == true
+                && ops["sync_successful_peer_count"].as_u64().unwrap_or(0) >= 1
+                && ops["sync_import_count"].as_u64().unwrap_or(0) >= 1
+                && ops["sync_last_import_height"].as_u64() == Some(latest_height)
+                && ops["sync_quorum_height"].as_u64() == Some(latest_height)
+                && ops["sync_quorum_latest_hash"] == ops["latest_hash"]
+                && ops["sync_quorum_state_root"] == ops["current_state_root"]
+                && latest_height >= 2
+        },
+    )?;
+    let evidence = live_wait_for_runtime_surface_evidence(&follower_rpc_addr, &endpoint_url)?;
+    let runtime_surface_report = verify_runtime_surface_evidence_json(&evidence.to_string())?;
+    if !runtime_surface_report.runtime_surface_ready {
+        return Err(live_rehearsal_invalid(
+            "runtime surface evidence did not report ready=true",
+        ));
+    }
+    if !runtime_surface_report.blocking_gaps.is_empty() {
+        return Err(live_rehearsal_invalid(format!(
+            "runtime surface evidence has blocking gaps: {}",
+            runtime_surface_report.blocking_gaps.join(", ")
+        )));
+    }
+    let status = &evidence["status"];
+    let produced_block_count = live_value_u64(status, "latest_height")?;
+    let mut report = LiveRpcDevnetRehearsalReport {
+        live_rpc_devnet_rehearsed: true,
+        level: "live-rpc-devnet-rehearsal-ready".to_string(),
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        public_launch_ready: readiness.public_launch_readiness.public_launch_ready,
+        public_launch_blocker,
+        endpoint_url,
+        sequencer_rpc_addr,
+        follower_rpc_addr,
+        block_millis,
+        sub_second_blocks: live_value_bool(status, "sub_second_blocks")?,
+        produced_block_count,
+        runtime_surface_ready: runtime_surface_report.runtime_surface_ready,
+        runtime_surface_root: runtime_surface_report.runtime_surface_root,
+        latest_height: runtime_surface_report.latest_height,
+        sync_quorum_met: live_value_bool(&follower_ops, "sync_quorum_met")?,
+        sync_successful_peer_count: live_value_u64(&follower_ops, "sync_successful_peer_count")?,
+        sync_import_count: live_value_u64(&follower_ops, "sync_import_count")?,
+        sync_last_import_height: live_value_u64(&follower_ops, "sync_last_import_height")?,
+        sync_quorum_height: live_value_u64(&follower_ops, "sync_quorum_height")?,
+        bridge_deposit_count: live_value_u64(status, "bridge_deposit_count")?,
+        withdrawal_request_count: live_value_u64(status, "withdrawal_request_count")?,
+        finalized_withdrawal_count: live_value_u64(status, "finalized_withdrawal_count")?,
+        bridge_replay_cache_count: live_value_u64(status, "bridge_replay_cache_count")?,
+        bridge_deposited_nxmr_units: live_value_u128(status, "bridge_deposited_nxmr_units")?,
+        account_nxmr_units: live_value_u128(status, "account_nxmr_units")?,
+        withdrawal_reserved_nxmr_units: live_value_u128(status, "withdrawal_reserved_nxmr_units")?,
+        total_nxmr_fees_units: runtime_surface_report.total_nxmr_fees_units,
+        buyback_pool_nebulai: runtime_surface_report.buyback_pool_nebulai,
+        validator_reward_nebulai: runtime_surface_report.validator_reward_nebulai,
+        bridge_custody_reconciled: live_value_bool(status, "bridge_custody_reconciled")?,
+        nxmr_custody_deficit_units: live_value_u128(status, "nxmr_custody_deficit_units")?,
+        sequencer_key_rotation_count: live_value_u64(status, "sequencer_key_rotation_count")?,
+        launch_package_bundle_root: follower_binding.launch_package_bundle_root,
+        rehearsal_root: String::new(),
+    };
+    if report.produced_block_count < 2 {
+        return Err(live_rehearsal_invalid(
+            "live RPC rehearsal produced fewer than two blocks",
+        ));
+    }
+    if !report.sub_second_blocks || report.block_millis >= 1_000 {
+        return Err(live_rehearsal_invalid(
+            "live RPC rehearsal did not prove sub-second blocks",
+        ));
+    }
+    if sequencer_status["nxmr_custody_deficit_units"] != 0
+        || !report.bridge_custody_reconciled
+        || report.nxmr_custody_deficit_units != 0
+    {
+        return Err(live_rehearsal_invalid(
+            "live RPC rehearsal did not reconcile nXMR custody",
+        ));
+    }
+    if report.sync_import_count == 0
+        || report.sync_last_import_height != report.latest_height
+        || report.sync_quorum_height != report.latest_height
+    {
+        return Err(live_rehearsal_invalid(
+            "live RPC rehearsal did not prove follower imported the served head",
+        ));
+    }
+    if report.total_nxmr_fees_units != 1_000
+        || report.buyback_pool_nebulai != 1_000
+        || report.validator_reward_nebulai != 1_010
+    {
+        return Err(live_rehearsal_invalid(
+            "live RPC rehearsal did not prove NBLA/nXMR gas economics",
+        ));
+    }
+    report.rehearsal_root = live_rpc_devnet_rehearsal_root(&report);
+    Ok((report, evidence))
 }
 
 pub fn sample_deployment_attestation_json_pretty() -> String {
@@ -1357,14 +2796,14 @@ pub fn sample_deployment_attestation_json_pretty() -> String {
                 OperatorAttestation {
                     operator_id: "operator-a".to_string(),
                     region: "us-east".to_string(),
-                    public_key: hex_64("operator-key-a"),
+                    public_key: sample_ed25519_public_key_hex(0xa1),
                     signed_evidence_root: witness_evidence_root.clone(),
                     signature_sha3_256: String::new(),
                 },
                 OperatorAttestation {
                     operator_id: "operator-b".to_string(),
                     region: "eu-west".to_string(),
-                    public_key: hex_64("operator-key-b"),
+                    public_key: sample_ed25519_public_key_hex(0xa2),
                     signed_evidence_root: witness_evidence_root.clone(),
                     signature_sha3_256: String::new(),
                 },
@@ -1384,9 +2823,10 @@ pub fn sample_deployment_attestation_json_pretty() -> String {
                     observed_evidence_root: witness_evidence_root.clone(),
                     signature: SignatureVerification {
                         algorithm: "ed25519-testnet-attestation".to_string(),
-                        public_key: hex_64("observer-key-a"),
+                        public_key: sample_ed25519_public_key_hex(0xb1),
                         signature_sha3_256: String::new(),
-                        verified: true,
+                        signature_hex: String::new(),
+                        verified: false,
                     },
                 },
                 ObserverAttestation {
@@ -1396,15 +2836,17 @@ pub fn sample_deployment_attestation_json_pretty() -> String {
                     observed_evidence_root: witness_evidence_root.clone(),
                     signature: SignatureVerification {
                         algorithm: "ed25519-testnet-attestation".to_string(),
-                        public_key: hex_64("observer-key-b"),
+                        public_key: sample_ed25519_public_key_hex(0xb2),
                         signature_sha3_256: String::new(),
-                        verified: true,
+                        signature_hex: String::new(),
+                        verified: false,
                     },
                 },
             ];
             for observer in &mut observers {
                 observer.signature.signature_sha3_256 =
                     observer_signature_root(observer, &witness_evidence_root);
+                complete_sample_signature(&mut observer.signature);
             }
             observers
         },
@@ -1427,6 +2869,193 @@ pub fn sample_public_status_manifest_json_pretty() -> String {
 pub fn sample_public_probe_json_pretty() -> String {
     let sample = sample_public_surface();
     serde_json::to_string_pretty(&sample.public_probe).expect("sample public probe serializes")
+}
+
+pub fn default_artifact_sha3_256() -> String {
+    hex_64("nebula-testnet-artifact")
+}
+
+pub fn default_cargo_lock_sha3_256() -> String {
+    hex_64("nebula-testnet-cargo-lock")
+}
+
+pub fn build_public_status_manifest_json_pretty(
+    input: PublicSurfaceBuildInput,
+) -> Result<String, AttestationError> {
+    let surface = build_public_surface(input)?;
+    serde_json::to_string_pretty(&surface.public_status_manifest)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+pub fn build_public_probe_json_pretty(
+    input: PublicSurfaceBuildInput,
+) -> Result<String, AttestationError> {
+    let surface = build_public_surface(input)?;
+    serde_json::to_string_pretty(&surface.public_probe)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+pub fn build_deployment_attestation_json_pretty(
+    input: DeploymentAttestationBuildInput,
+) -> Result<String, AttestationError> {
+    let readiness = readiness_report();
+    let runtime_root = readiness.status_roots["runtime"]
+        .as_str()
+        .expect("runtime root is a string")
+        .to_string();
+    let economics_root = readiness.status_roots["economics"]
+        .as_str()
+        .expect("economics root is a string")
+        .to_string();
+    let package_identity =
+        build_package_identity(&input.artifact_sha3_256, &input.cargo_lock_sha3_256)?;
+    let launch_bundle =
+        sample_launch_bundle(&package_identity.root, &runtime_root, &economics_root);
+    let public_status_manifest =
+        parse_public_status_manifest_json(&input.public_status_json, "public_status")?;
+    let public_probe = parse_public_probe_json(&input.public_probe_json, "public_probe")?;
+    let preflight_receipt = parse_receipt_json(&input.preflight_receipt_json, "preflight_receipt")?;
+    let runbook_receipt = parse_receipt_json(&input.runbook_receipt_json, "runbook_receipt")?;
+
+    let mut errors = Vec::new();
+    verify_public_status_manifest(
+        &mut errors,
+        &public_status_manifest,
+        &public_status_manifest.endpoint_url,
+        &launch_bundle.root,
+    );
+    verify_public_probe(
+        &mut errors,
+        &public_probe,
+        &public_status_manifest.endpoint_url,
+        &launch_bundle.root,
+        &economics_root,
+    );
+    verify_receipt(
+        &mut errors,
+        "preflight_receipt",
+        &preflight_receipt,
+        input.generated_at_unix_ms,
+    );
+    verify_receipt(
+        &mut errors,
+        "runbook_receipt",
+        &runbook_receipt,
+        input.generated_at_unix_ms,
+    );
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    let policy_claim = sample_policy_claim(
+        &readiness.public_launch_readiness.remediation_root,
+        &economics_root,
+    );
+    let public_endpoint = PublicEndpointEvidence {
+        url: public_status_manifest.endpoint_url.clone(),
+        public_status_manifest_root: public_status_manifest.root.clone(),
+        tls_pins: input.tls_pins,
+    };
+    let witness_evidence_root = deployment_witness_root(
+        &launch_bundle,
+        &public_status_manifest,
+        &public_endpoint,
+        &policy_claim,
+        &public_probe,
+    );
+    let bootstrap_nodes = input
+        .bootstrap_nodes
+        .into_iter()
+        .map(|node| {
+            let mut node = BootstrapNode {
+                node_id: node.node_id,
+                operator_id: node.operator_id,
+                region: node.region,
+                endpoint: node.endpoint,
+                attestation_root: String::new(),
+            };
+            node.attestation_root = bootstrap_node_root(&node, &witness_evidence_root);
+            node
+        })
+        .collect::<Vec<_>>();
+    let operators = input
+        .operators
+        .into_iter()
+        .map(|operator| {
+            let mut operator = OperatorAttestation {
+                operator_id: operator.operator_id,
+                region: operator.region,
+                public_key: operator.public_key,
+                signed_evidence_root: witness_evidence_root.clone(),
+                signature_sha3_256: String::new(),
+            };
+            operator.signature_sha3_256 =
+                operator_signature_root(&operator, &witness_evidence_root);
+            operator
+        })
+        .collect::<Vec<_>>();
+    let mut observers = Vec::new();
+    for observer in input.observers {
+        let observer_secret_key_hex = observer.secret_key_hex;
+        let mut observer = ObserverAttestation {
+            observer_id: observer.observer_id,
+            region: observer.region,
+            observed_endpoint: public_endpoint.url.clone(),
+            observed_evidence_root: witness_evidence_root.clone(),
+            signature: SignatureVerification {
+                algorithm: "ed25519-testnet-attestation".to_string(),
+                public_key: observer.public_key,
+                signature_sha3_256: String::new(),
+                signature_hex: String::new(),
+                verified: false,
+            },
+        };
+        observer.signature.signature_sha3_256 =
+            observer_signature_root(&observer, &witness_evidence_root);
+        if let Some(secret_key_hex) = observer_secret_key_hex {
+            let derived_public_key = public_key_hex_for_secret_key(&secret_key_hex)
+                .map_err(|error| AttestationError::Invalid(vec![error]))?;
+            if !derived_public_key.eq_ignore_ascii_case(&observer.signature.public_key) {
+                return Err(AttestationError::Invalid(vec![format!(
+                    "observer {} secret_key_hex does not match public_key",
+                    observer.observer_id
+                )]));
+            }
+            observer.signature.signature_hex =
+                sign_root_with_secret_key(&secret_key_hex, &observer.signature.signature_sha3_256)
+                    .map_err(|error| AttestationError::Invalid(vec![error]))?;
+            observer.signature.verified = true;
+        } else {
+            complete_sample_signature(&mut observer.signature);
+        }
+        observers.push(observer);
+    }
+    let attestation = DeploymentAttestation {
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        generated_at_unix_ms: input.generated_at_unix_ms,
+        expires_at_unix_ms: input.expires_at_unix_ms,
+        package_identity,
+        launch_bundle,
+        public_status_manifest,
+        public_endpoint,
+        policy_claim,
+        public_probe,
+        preflight_receipt,
+        runbook_receipt,
+        bootstrap_nodes,
+        operators,
+        observers,
+        rollback_evidence: RollbackEvidence {
+            rollback_plan_sha3_256: input.rollback_plan_sha3_256,
+            last_drill_unix_ms: input.rollback_last_drill_unix_ms,
+            recovery_point_root: input.rollback_recovery_point_root,
+        },
+    };
+    let output = serde_json::to_string_pretty(&attestation)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    verify_deployment_attestation_json(&output)?;
+    Ok(output)
 }
 
 pub fn verify_public_status_manifest_json(
@@ -1487,6 +3116,376 @@ pub fn verify_public_probe_json(input: &str) -> Result<PublicProbeReport, Attest
     })
 }
 
+pub fn build_runtime_surface_evidence_json_pretty(
+    input: RuntimeSurfaceEvidenceBuildInput,
+) -> Result<String, AttestationError> {
+    let status = parse_json_value(&input.status_json, "status")?;
+    let chain_id = json_string_field(&status, "status.chain_id")?;
+    let runtime_version = json_string_field(&status, "status.runtime_version")?;
+    let mut evidence = RuntimeSurfaceEvidence {
+        chain_id,
+        runtime_version,
+        endpoint_url: input.endpoint_url,
+        capture_mode: input.capture_mode,
+        tls_observation: input.tls_observation,
+        captured_at_unix_ms: input.captured_at_unix_ms,
+        health: parse_json_value(&input.health_json, "health")?,
+        status,
+        snapshot: parse_json_value(&input.snapshot_json, "snapshot")?,
+        ops: parse_json_value(&input.ops_json, "ops")?,
+        backup: parse_json_value(&input.backup_json, "backup")?,
+        rpc_status: parse_json_value(&input.rpc_status_json, "rpc_status")?,
+        rpc_ops_status: parse_json_value(&input.rpc_ops_status_json, "rpc_ops_status")?,
+        rpc_backup_manifest: parse_json_value(
+            &input.rpc_backup_manifest_json,
+            "rpc_backup_manifest",
+        )?,
+        metrics_text: input.metrics_text,
+        root: String::new(),
+    };
+    evidence.root = runtime_surface_evidence_root(&evidence);
+    let output = serde_json::to_string_pretty(&evidence)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    verify_runtime_surface_evidence_json(&output)?;
+    Ok(output)
+}
+
+pub fn verify_runtime_surface_evidence_json(
+    input: &str,
+) -> Result<RuntimeSurfaceEvidenceReport, AttestationError> {
+    let input = input.trim_start_matches('\u{feff}');
+    let evidence = serde_json::from_str::<RuntimeSurfaceEvidence>(input)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    verify_runtime_surface_evidence(&evidence)
+}
+
+fn verify_runtime_surface_evidence(
+    evidence: &RuntimeSurfaceEvidence,
+) -> Result<RuntimeSurfaceEvidenceReport, AttestationError> {
+    let mut errors = Vec::new();
+    let now = unix_ms();
+    require_https_endpoint(
+        &mut errors,
+        "runtime_surface.endpoint_url",
+        &evidence.endpoint_url,
+    );
+    require_eq(
+        &mut errors,
+        "runtime_surface.chain_id",
+        &evidence.chain_id,
+        CHAIN_ID,
+    );
+    require_eq(
+        &mut errors,
+        "runtime_surface.runtime_version",
+        &evidence.runtime_version,
+        VERSION,
+    );
+    match evidence.capture_mode.as_str() {
+        RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT => {
+            if evidence.tls_observation.is_none() {
+                errors.push(
+                    "runtime_surface.tls_observation is required for external-public-endpoint capture"
+                        .to_string(),
+                );
+            }
+        }
+        RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET => {}
+        _ => errors.push(format!(
+            "runtime_surface.capture_mode must be {RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT} or {RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET}"
+        )),
+    }
+    if let Some(tls_observation) = &evidence.tls_observation {
+        verify_runtime_surface_tls_observation(&mut errors, tls_observation, now);
+    }
+    if let Some(launch_endpoint_url) = evidence
+        .status
+        .get("launch_endpoint_url")
+        .and_then(Value::as_str)
+    {
+        require_eq(
+            &mut errors,
+            "runtime_surface.endpoint_url",
+            &evidence.endpoint_url,
+            launch_endpoint_url,
+        );
+    }
+    if evidence.captured_at_unix_ms > now + FUTURE_CLOCK_SKEW_MS {
+        errors.push(
+            "runtime_surface.captured_at_unix_ms is more than five minutes in the future"
+                .to_string(),
+        );
+    }
+    if evidence.captured_at_unix_ms < now.saturating_sub(PUBLIC_ATTESTATION_MAX_AGE_MS) {
+        errors.push("runtime_surface.captured_at_unix_ms is older than 24 hours".to_string());
+    }
+    require_root(
+        &mut errors,
+        "runtime_surface.root",
+        &evidence.root,
+        &runtime_surface_evidence_root(evidence),
+    );
+
+    let rpc_status = rpc_result_or_value(&mut errors, "rpc_status", &evidence.rpc_status);
+    let rpc_ops = rpc_result_or_value(&mut errors, "rpc_ops_status", &evidence.rpc_ops_status);
+    let rpc_backup = rpc_result_or_value(
+        &mut errors,
+        "rpc_backup_manifest",
+        &evidence.rpc_backup_manifest,
+    );
+
+    require_durable_field_set_eq(
+        &mut errors,
+        "rpc_status.result",
+        rpc_status,
+        "status",
+        &evidence.status,
+        RUNTIME_STATUS_DURABLE_FIELDS,
+    );
+    require_durable_field_set_eq(
+        &mut errors,
+        "rpc_ops_status.result",
+        rpc_ops,
+        "ops",
+        &evidence.ops,
+        RUNTIME_OPS_DURABLE_FIELDS,
+    );
+    require_durable_field_set_eq(
+        &mut errors,
+        "rpc_backup_manifest.result",
+        rpc_backup,
+        "backup",
+        &evidence.backup,
+        RUNTIME_BACKUP_DURABLE_FIELDS,
+    );
+
+    let snapshot = parse_surface_value::<runtime::RuntimeSnapshot>(
+        &mut errors,
+        "snapshot",
+        &evidence.snapshot,
+    );
+    let ops = parse_surface_value::<runtime::RuntimeOpsStatus>(&mut errors, "ops", &evidence.ops);
+    let backup = parse_surface_value::<runtime::RuntimeBackupManifest>(
+        &mut errors,
+        "backup",
+        &evidence.backup,
+    );
+
+    if let Some(snapshot) = &snapshot {
+        if let Err(error) = runtime::validate_runtime_snapshot(snapshot) {
+            errors.push(format!("snapshot validation failed: {error}"));
+        }
+        require_root(
+            &mut errors,
+            "snapshot.root",
+            &snapshot.root,
+            &runtime::runtime_snapshot_root(snapshot),
+        );
+    }
+    if let Some(ops) = &ops {
+        require_root(
+            &mut errors,
+            "ops.ops_root",
+            &ops.ops_root,
+            &runtime::runtime_ops_status_root(ops),
+        );
+    }
+    if let Some(backup) = &backup {
+        require_root(
+            &mut errors,
+            "backup.backup_root",
+            &backup.backup_root,
+            &runtime::runtime_backup_manifest_root(backup),
+        );
+    }
+
+    require_health_status_agreement(&mut errors, &evidence.health, &evidence.status);
+    require_ops_backup_snapshot_agreement(
+        &mut errors,
+        &evidence.health,
+        &evidence.status,
+        &evidence.snapshot,
+        &evidence.ops,
+        &evidence.backup,
+    );
+
+    if let Some(snapshot) = &snapshot {
+        require_metrics_agreement(
+            &mut errors,
+            &evidence.metrics_text,
+            &evidence.status,
+            snapshot,
+        );
+        require_runtime_surface_snapshot_economics(&mut errors, &evidence.status, snapshot);
+    }
+
+    let launch_package_bundle_root =
+        json_string_field(&evidence.status, "status.launch_package_bundle_root").ok();
+    let launch_package_root =
+        json_string_field(&evidence.status, "status.launch_package_root").ok();
+    let runtime_fee_policy_root =
+        json_string_field(&evidence.status, "status.fee_policy_root").ok();
+    let runtime_gas_price_nebulai =
+        json_u128_field(&evidence.status, "status.gas_price_nebulai").ok();
+    let validator_set_root = json_string_field(&evidence.status, "status.validator_set_root").ok();
+    let genesis_root = json_string_field(&evidence.status, "status.genesis_root").ok();
+    match &launch_package_bundle_root {
+        Some(root) => require_hex_root(&mut errors, "status.launch_package_bundle_root", root),
+        None => errors.push("status.launch_package_bundle_root must be a string".to_string()),
+    }
+    match &launch_package_root {
+        Some(root) => require_hex_root(&mut errors, "status.launch_package_root", root),
+        None => errors.push("status.launch_package_root must be a string".to_string()),
+    }
+    let expected_fee_policy_root = fee_policy_root();
+    match &runtime_fee_policy_root {
+        Some(root) => require_root(
+            &mut errors,
+            "status.fee_policy_root",
+            root,
+            &expected_fee_policy_root,
+        ),
+        None => errors.push("status.fee_policy_root must be a string".to_string()),
+    }
+    let expected_gas_price_nebulai = hybrid_fee_policy().minimum_gas_price_nebulai;
+    match runtime_gas_price_nebulai {
+        Some(gas_price_nebulai) if gas_price_nebulai == expected_gas_price_nebulai => {}
+        Some(gas_price_nebulai) => errors.push(format!(
+            "status.gas_price_nebulai expected {expected_gas_price_nebulai} but got {gas_price_nebulai}"
+        )),
+        None => errors.push("status.gas_price_nebulai must be a u128".to_string()),
+    }
+    match &validator_set_root {
+        Some(root) => require_hex_root(&mut errors, "status.validator_set_root", root),
+        None => errors.push("status.validator_set_root must be a string".to_string()),
+    }
+    match &genesis_root {
+        Some(root) => require_hex_root(&mut errors, "status.genesis_root", root),
+        None => errors.push("status.genesis_root must be a string".to_string()),
+    }
+
+    let health_ready = json_bool(&evidence.health, "public_ops_ready").unwrap_or(false);
+    let ops_ready = json_bool(&evidence.ops, "public_ops_ready").unwrap_or(false);
+    if !health_ready {
+        errors
+            .push("health.public_ops_ready must be true for runtime surface evidence".to_string());
+    }
+    if !ops_ready {
+        errors.push("ops.public_ops_ready must be true for runtime surface evidence".to_string());
+    }
+
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    let snapshot = snapshot.expect("snapshot was parsed when no errors were recorded");
+    let latest = snapshot
+        .blocks
+        .last()
+        .expect("validated snapshot always has a latest block");
+    let economics = runtime::derive_runtime_snapshot_economics(&snapshot)
+        .expect("snapshot economics were derived when no errors were recorded");
+    let ops = ops.expect("ops was parsed when no errors were recorded");
+    let backup = backup.expect("backup was parsed when no errors were recorded");
+
+    Ok(RuntimeSurfaceEvidenceReport {
+        runtime_surface_ready: true,
+        level: "runtime-surface-attested",
+        runtime_surface_root: evidence.root.clone(),
+        endpoint_url: evidence.endpoint_url.clone(),
+        capture_mode: evidence.capture_mode.clone(),
+        tls_observation: evidence.tls_observation.clone(),
+        chain_id: evidence.chain_id.clone(),
+        runtime_version: evidence.runtime_version.clone(),
+        launch_package_bundle_root: launch_package_bundle_root
+            .expect("launch package bundle root was parsed when no errors were recorded"),
+        launch_package_root: launch_package_root
+            .expect("launch package root was parsed when no errors were recorded"),
+        fee_policy_root: runtime_fee_policy_root
+            .expect("fee policy root was parsed when no errors were recorded"),
+        gas_price_nebulai: runtime_gas_price_nebulai
+            .expect("gas price was parsed when no errors were recorded"),
+        validator_set_root: validator_set_root
+            .expect("validator set root was parsed when no errors were recorded"),
+        genesis_root: genesis_root.expect("genesis root was parsed when no errors were recorded"),
+        latest_height: latest.height,
+        latest_hash: latest.block_hash.clone(),
+        snapshot_root: snapshot.root,
+        state_root: snapshot.state_root,
+        included_nbla_receipt_count: economics.included_nbla_receipt_count,
+        included_nxmr_receipt_count: economics.included_nxmr_receipt_count,
+        total_nxmr_fees_units: economics.total_nxmr_fees_units,
+        buyback_pool_nebulai: economics.buyback_pool_nebulai,
+        validator_reward_nebulai: economics.validator_reward_nebulai,
+        nxmr_validator_reward_nebulai: economics.nxmr_validator_reward_nebulai,
+        ops_root: ops.ops_root,
+        backup_root: backup.backup_root,
+        public_ops_ready: true,
+        blocking_gaps: ops.blocking_gaps,
+    })
+}
+
+fn verify_public_surface_jsons_for_deployment(
+    public_status_json: &str,
+    public_probe_json: &str,
+    deployment_attestation: &DeploymentAttestation,
+) -> Result<(PublicStatusReport, PublicProbeReport), AttestationError> {
+    let readiness = readiness_report();
+    let economics_root = readiness.status_roots["economics"]
+        .as_str()
+        .expect("economics root is a string");
+    let public_status_manifest =
+        parse_public_status_manifest_json(public_status_json, "public_status")?;
+    let public_probe = parse_public_probe_json(public_probe_json, "public_probe")?;
+    let mut errors = Vec::new();
+    verify_public_status_manifest(
+        &mut errors,
+        &public_status_manifest,
+        &deployment_attestation.public_endpoint.url,
+        &deployment_attestation.launch_bundle.root,
+    );
+    verify_public_probe(
+        &mut errors,
+        &public_probe,
+        &deployment_attestation.public_endpoint.url,
+        &deployment_attestation.launch_bundle.root,
+        economics_root,
+    );
+    require_root(
+        &mut errors,
+        "public_status_manifest.root",
+        &public_status_manifest.root,
+        &deployment_attestation.public_status_manifest.root,
+    );
+    require_root(
+        &mut errors,
+        "public_probe.root",
+        &public_probe.root,
+        &deployment_attestation.public_probe.root,
+    );
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    Ok((
+        PublicStatusReport {
+            public_status_ready: true,
+            level: "public-status-attested",
+            public_status_manifest_root: public_status_manifest.root,
+            endpoint_url: public_status_manifest.endpoint_url,
+            launch_bundle_root: public_status_manifest.launch_bundle_root,
+        },
+        PublicProbeReport {
+            public_probe_ready: true,
+            level: "public-probe-attested",
+            public_probe_root: public_probe.root,
+            endpoint_url: public_probe.url,
+            launch_bundle_root: public_probe.body.launch_bundle_root,
+            fee_policy_root: public_probe.body.fee_policy_root,
+        },
+    ))
+}
+
 pub fn sample_preflight_receipt_json_pretty() -> String {
     let receipt = sample_receipt("preflight-receipt", unix_ms());
     serde_json::to_string_pretty(&receipt).expect("sample preflight receipt serializes")
@@ -1519,8 +3518,8 @@ pub fn sample_validator_set_json_pretty() -> String {
             node_id: "bootstrap-us-east-1".to_string(),
             region: "us-east".to_string(),
             operator_contact: "mailto:operator-a@testnet.nebula.example".to_string(),
-            consensus_public_key: hex_64("consensus-key-a"),
-            network_public_key: hex_64("network-key-a"),
+            consensus_public_key: sample_ed25519_public_key_hex(0xc1),
+            network_public_key: sample_ed25519_public_key_hex(0xd1),
             p2p_endpoint: "tcp://bootstrap-a.testnet.nebula.example:26656".to_string(),
             reward_account: "nbla-reward-operator-a".to_string(),
             commission_bps: 500,
@@ -1533,8 +3532,8 @@ pub fn sample_validator_set_json_pretty() -> String {
             node_id: "bootstrap-eu-west-1".to_string(),
             region: "eu-west".to_string(),
             operator_contact: "mailto:operator-b@testnet.nebula.example".to_string(),
-            consensus_public_key: hex_64("consensus-key-b"),
-            network_public_key: hex_64("network-key-b"),
+            consensus_public_key: sample_ed25519_public_key_hex(0xc2),
+            network_public_key: sample_ed25519_public_key_hex(0xd2),
             p2p_endpoint: "tcp://bootstrap-b.testnet.nebula.example:26656".to_string(),
             reward_account: "nbla-reward-operator-b".to_string(),
             commission_bps: 500,
@@ -1900,11 +3899,21 @@ pub fn verify_operator_acceptance_jsons(
         verified_deployment_attestation_manifest(deployment_attestation_json)?;
     let mut errors = Vec::new();
     let now = unix_ms();
-    let expected = operator_acceptance_manifest(
+    let mut expected = operator_acceptance_manifest(
         &handoff,
         &deployment_attestation,
         manifest.accepted_at_unix_ms,
     );
+    for expected_entry in &mut expected.entries {
+        if let Some(entry) = manifest.entries.iter().find(|entry| {
+            entry.operator_id == expected_entry.operator_id
+                && entry.validator_id == expected_entry.validator_id
+                && entry.node_id == expected_entry.node_id
+        }) {
+            expected_entry.signature = entry.signature.clone();
+        }
+    }
+    expected.root = operator_acceptance_manifest_root(&expected);
 
     if manifest.accepted_at_unix_ms > now + FUTURE_CLOCK_SKEW_MS {
         errors.push("accepted_at_unix_ms is more than five minutes in the future".to_string());
@@ -1957,15 +3966,14 @@ pub fn verify_operator_acceptance_jsons(
                 manifest.accepted_at_unix_ms,
             ),
         );
-        require_root(
+        verify_signature_material(
             &mut errors,
-            &format!("entries[{index}].signature.signature_sha3_256"),
-            &entry.signature.signature_sha3_256,
+            &format!("entries[{index}].signature"),
+            &entry.signature,
+            "ed25519-testnet-operator-acceptance",
+            &entry.operator_public_key,
             &operator_acceptance_signature_root(entry),
         );
-        if !entry.signature.verified {
-            errors.push(format!("entries[{index}].signature.verified must be true"));
-        }
     }
     require_root(
         &mut errors,
@@ -2669,6 +4677,7 @@ pub fn build_launch_package_bundle_json_pretty(
         .map_err(|error| AttestationError::MalformedJson(error.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn verify_launch_package_bundle_jsons(
     launch_package_bundle_json: &str,
     deployment_attestation_json: &str,
@@ -2854,6 +4863,409 @@ pub fn verify_launch_package_bundle_jsons(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn build_public_testnet_peer_manifest_json_pretty(
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<String, AttestationError> {
+    let manifest = public_testnet_peer_manifest_from_jsons(
+        unix_ms(),
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    serde_json::to_string_pretty(&manifest)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn verify_public_testnet_peer_manifest_jsons(
+    public_testnet_peer_manifest_json: &str,
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<PublicTestnetPeerManifestReport, AttestationError> {
+    let manifest = serde_json::from_str::<PublicTestnetPeerManifest>(
+        public_testnet_peer_manifest_json.trim_start_matches('\u{feff}'),
+    )
+    .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    let expected = public_testnet_peer_manifest_from_jsons(
+        manifest.generated_at_unix_ms,
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let mut errors = Vec::new();
+    let now = unix_ms();
+
+    if manifest.generated_at_unix_ms > now + FUTURE_CLOCK_SKEW_MS {
+        errors.push("generated_at_unix_ms is more than five minutes in the future".to_string());
+    }
+    if manifest.generated_at_unix_ms < now.saturating_sub(PUBLIC_ATTESTATION_MAX_AGE_MS) {
+        errors.push("generated_at_unix_ms is older than 24 hours".to_string());
+    }
+    require_eq(&mut errors, "chain_id", &manifest.chain_id, CHAIN_ID);
+    require_eq(
+        &mut errors,
+        "runtime_version",
+        &manifest.runtime_version,
+        VERSION,
+    );
+    require_eq(
+        &mut errors,
+        "endpoint_url",
+        &manifest.endpoint_url,
+        &expected.endpoint_url,
+    );
+    require_root(
+        &mut errors,
+        "launch_package_bundle_root",
+        &manifest.launch_package_bundle_root,
+        &expected.launch_package_bundle_root,
+    );
+    require_root(
+        &mut errors,
+        "launch_package_root",
+        &manifest.launch_package_root,
+        &expected.launch_package_root,
+    );
+    require_root(
+        &mut errors,
+        "deployment_attestation_root",
+        &manifest.deployment_attestation_root,
+        &expected.deployment_attestation_root,
+    );
+    require_root(
+        &mut errors,
+        "validator_set_root",
+        &manifest.validator_set_root,
+        &expected.validator_set_root,
+    );
+    require_root(
+        &mut errors,
+        "operator_handoff_root",
+        &manifest.operator_handoff_root,
+        &expected.operator_handoff_root,
+    );
+    require_root(
+        &mut errors,
+        "operator_acceptance_root",
+        &manifest.operator_acceptance_root,
+        &expected.operator_acceptance_root,
+    );
+    require_root(
+        &mut errors,
+        "genesis_root",
+        &manifest.genesis_root,
+        &expected.genesis_root,
+    );
+    if manifest.sync_peer_quorum == 0 {
+        errors.push("sync_peer_quorum must be greater than zero".to_string());
+    }
+    let max_sync_quorum = manifest.peers.len().saturating_sub(1).max(1);
+    if manifest.sync_peer_quorum > max_sync_quorum {
+        errors.push(format!(
+            "sync_peer_quorum must be <= {max_sync_quorum} for {} peers",
+            manifest.peers.len()
+        ));
+    }
+    if manifest.peers != expected.peers {
+        errors.push(
+            "peers do not match verified launch validator and bootstrap artifacts".to_string(),
+        );
+    }
+    require_root(
+        &mut errors,
+        "root",
+        &manifest.root,
+        &public_testnet_peer_manifest_root(&manifest),
+    );
+    if manifest.root != public_testnet_peer_manifest_root(&expected) {
+        errors.push(format!(
+            "root does not match expected public testnet peer manifest root {}",
+            public_testnet_peer_manifest_root(&expected)
+        ));
+    }
+
+    let mut validator_ids = BTreeSet::new();
+    let mut node_ids = BTreeSet::new();
+    let mut operators = BTreeSet::new();
+    let mut regions = BTreeSet::new();
+    let mut p2p_endpoints = BTreeSet::new();
+    let mut bootstrap_endpoints = BTreeSet::new();
+    let mut rpc_urls = BTreeSet::new();
+    let mut status_urls = BTreeSet::new();
+    let mut snapshot_urls = BTreeSet::new();
+    for (index, peer) in manifest.peers.iter().enumerate() {
+        insert_unique(
+            &mut errors,
+            &mut validator_ids,
+            &format!("peers[{index}].validator_id"),
+            &peer.validator_id,
+        );
+        insert_unique(
+            &mut errors,
+            &mut node_ids,
+            &format!("peers[{index}].node_id"),
+            &peer.node_id,
+        );
+        operators.insert(peer.operator_id.clone());
+        regions.insert(peer.region.clone());
+        require_tcp_endpoint_with_port(
+            &mut errors,
+            &format!("peers[{index}].p2p_endpoint"),
+            &peer.p2p_endpoint,
+        );
+        require_https_endpoint_without_path(
+            &mut errors,
+            &format!("peers[{index}].bootstrap_endpoint"),
+            &peer.bootstrap_endpoint,
+        );
+        require_https_endpoint(
+            &mut errors,
+            &format!("peers[{index}].rpc_url"),
+            &peer.rpc_url,
+        );
+        require_https_endpoint(
+            &mut errors,
+            &format!("peers[{index}].status_url"),
+            &peer.status_url,
+        );
+        require_https_endpoint(
+            &mut errors,
+            &format!("peers[{index}].snapshot_url"),
+            &peer.snapshot_url,
+        );
+        require_hex_value(
+            &mut errors,
+            &format!("peers[{index}].consensus_public_key"),
+            &peer.consensus_public_key,
+        );
+        require_hex_value(
+            &mut errors,
+            &format!("peers[{index}].network_public_key"),
+            &peer.network_public_key,
+        );
+        require_hex_root(
+            &mut errors,
+            &format!("peers[{index}].bootstrap_attestation_root"),
+            &peer.bootstrap_attestation_root,
+        );
+        insert_unique(
+            &mut errors,
+            &mut p2p_endpoints,
+            &format!("peers[{index}].p2p_endpoint"),
+            &peer.p2p_endpoint,
+        );
+        insert_unique(
+            &mut errors,
+            &mut bootstrap_endpoints,
+            &format!("peers[{index}].bootstrap_endpoint"),
+            &peer.bootstrap_endpoint,
+        );
+        insert_unique(
+            &mut errors,
+            &mut rpc_urls,
+            &format!("peers[{index}].rpc_url"),
+            &peer.rpc_url,
+        );
+        insert_unique(
+            &mut errors,
+            &mut status_urls,
+            &format!("peers[{index}].status_url"),
+            &peer.status_url,
+        );
+        insert_unique(
+            &mut errors,
+            &mut snapshot_urls,
+            &format!("peers[{index}].snapshot_url"),
+            &peer.snapshot_url,
+        );
+    }
+    if manifest.peers.len() < MIN_PUBLIC_TESTNET_VALIDATORS {
+        errors.push(format!(
+            "peers must include at least {MIN_PUBLIC_TESTNET_VALIDATORS} validators"
+        ));
+    }
+    if operators.len() < MIN_PUBLIC_TESTNET_OPERATORS {
+        errors.push(format!(
+            "peers must cover at least {MIN_PUBLIC_TESTNET_OPERATORS} operators"
+        ));
+    }
+    if regions.len() < MIN_PUBLIC_TESTNET_REGIONS {
+        errors.push(format!(
+            "peers must cover at least {MIN_PUBLIC_TESTNET_REGIONS} regions"
+        ));
+    }
+
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    Ok(PublicTestnetPeerManifestReport {
+        public_testnet_peer_manifest_ready: true,
+        level: "public-testnet-peer-manifest-attested",
+        public_testnet_peer_manifest_root: manifest.root,
+        launch_package_bundle_root: manifest.launch_package_bundle_root,
+        launch_package_root: manifest.launch_package_root,
+        deployment_attestation_root: manifest.deployment_attestation_root,
+        validator_set_root: manifest.validator_set_root,
+        operator_handoff_root: manifest.operator_handoff_root,
+        operator_acceptance_root: manifest.operator_acceptance_root,
+        genesis_root: manifest.genesis_root,
+        endpoint_url: manifest.endpoint_url,
+        sync_peer_quorum: manifest.sync_peer_quorum,
+        peer_count: manifest.peers.len(),
+        operator_count: operators.len(),
+        region_count: regions.len(),
+        rpc_peer_urls: manifest
+            .peers
+            .iter()
+            .map(|peer| peer.rpc_url.clone())
+            .collect(),
+        snapshot_peer_urls: manifest
+            .peers
+            .iter()
+            .map(|peer| peer.snapshot_url.clone())
+            .collect(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_runtime_launch_binding_from_jsons(
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+    launch_package_bundle_json: &str,
+    validator_id: &str,
+) -> Result<runtime::RuntimeLaunchBinding, AttestationError> {
+    if validator_id.trim().is_empty() {
+        return Err(AttestationError::Invalid(vec![
+            "validator_id must not be empty for runtime launch binding".to_string(),
+        ]));
+    }
+    let launch_report = verify_launch_package_with_operator_acceptance_jsons(
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let bundle_report = verify_launch_package_bundle_jsons(
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let deployment_attestation = serde_json::from_str::<DeploymentAttestation>(
+        deployment_attestation_json.trim_start_matches('\u{feff}'),
+    )
+    .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    let validator_set_manifest = serde_json::from_str::<ValidatorSetManifest>(
+        validator_set_json.trim_start_matches('\u{feff}'),
+    )
+    .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    if !validator_set_manifest
+        .validators
+        .iter()
+        .any(|validator| validator.validator_id == validator_id)
+    {
+        return Err(AttestationError::Invalid(vec![format!(
+            "validator_id {validator_id} is not admitted in validator set"
+        )]));
+    }
+    let mut validator_reward_accounts = validator_set_manifest
+        .validators
+        .iter()
+        .map(|validator| runtime::RuntimeValidatorRewardAccount {
+            validator_id: validator.validator_id.clone(),
+            operator_id: validator.operator_id.clone(),
+            reward_account: validator.reward_account.clone(),
+        })
+        .collect::<Vec<_>>();
+    validator_reward_accounts.sort_by(|left, right| left.validator_id.cmp(&right.validator_id));
+    let mut bridge_operator_keys = deployment_attestation
+        .operators
+        .iter()
+        .map(|operator| runtime::RuntimeBridgeOperatorKey {
+            operator_id: operator.operator_id.clone(),
+            region: operator.region.clone(),
+            public_key: operator.public_key.clone(),
+        })
+        .collect::<Vec<_>>();
+    bridge_operator_keys.sort_by(|left, right| left.operator_id.cmp(&right.operator_id));
+    let mut bridge_observer_keys = deployment_attestation
+        .observers
+        .iter()
+        .map(|observer| runtime::RuntimeBridgeObserverKey {
+            observer_id: observer.observer_id.clone(),
+            region: observer.region.clone(),
+            public_key: observer.signature.public_key.clone(),
+        })
+        .collect::<Vec<_>>();
+    bridge_observer_keys.sort_by(|left, right| left.observer_id.cmp(&right.observer_id));
+
+    let binding = runtime::RuntimeLaunchBinding {
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        endpoint_url: launch_report.endpoint_url,
+        deployment_attestation_root: launch_report.deployment_attestation_root,
+        public_status_manifest_root: launch_report.public_status_manifest_root,
+        public_probe_root: launch_report.public_probe_root,
+        fee_policy_root: launch_report.fee_policy_root,
+        validator_set_root: launch_report.validator_set_root,
+        operator_handoff_root: launch_report.operator_handoff_root,
+        operator_acceptance_root: bundle_report.operator_acceptance_root,
+        genesis_root: launch_report.genesis_root,
+        launch_package_root: bundle_report.launch_package_root,
+        launch_package_bundle_root: bundle_report.launch_package_bundle_root,
+        activation_height: launch_report.activation_height,
+        validator_count: launch_report.validator_count,
+        operator_count: launch_report.matched_operator_count,
+        region_count: launch_report.matched_region_count,
+        validator_reward_accounts,
+        bridge_operator_keys,
+        bridge_observer_keys,
+    };
+    let mut validation_config = runtime::RuntimeConfig::public_testnet_default();
+    validation_config.validator_id = validator_id.to_string();
+    binding
+        .validate_against_config(&validation_config)
+        .map_err(|error| AttestationError::Invalid(vec![error]))?;
+    Ok(binding)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn build_validator_activation_json_pretty(
     launch_package_bundle_json: &str,
     deployment_attestation_json: &str,
@@ -2926,12 +5338,22 @@ pub fn verify_validator_activation_jsons(
         validator_set_json,
     )?;
     let validator_set = verified_validator_set_manifest(validator_set_json)?;
-    let expected = validator_activation_manifest(
+    let mut expected = validator_activation_manifest(
         &bundle_report,
         &acceptance_report,
         &validator_set,
         manifest.activated_at_unix_ms,
     );
+    for expected_entry in &mut expected.entries {
+        if let Some(entry) = manifest.entries.iter().find(|entry| {
+            entry.operator_id == expected_entry.operator_id
+                && entry.validator_id == expected_entry.validator_id
+                && entry.node_id == expected_entry.node_id
+        }) {
+            expected_entry.signature = entry.signature.clone();
+        }
+    }
+    expected.root = validator_activation_manifest_root(&expected);
     let now = unix_ms();
     let mut errors = Vec::new();
 
@@ -2993,15 +5415,14 @@ pub fn verify_validator_activation_jsons(
                 manifest.activated_at_unix_ms,
             ),
         );
-        require_root(
+        verify_signature_material(
             &mut errors,
-            &format!("entries[{index}].signature.signature_sha3_256"),
-            &entry.signature.signature_sha3_256,
+            &format!("entries[{index}].signature"),
+            &entry.signature,
+            "ed25519-testnet-validator-activation",
+            &entry.consensus_public_key,
             &validator_activation_signature_root(entry),
         );
-        if !entry.signature.verified {
-            errors.push(format!("entries[{index}].signature.verified must be true"));
-        }
     }
     require_root(
         &mut errors,
@@ -3009,10 +5430,10 @@ pub fn verify_validator_activation_jsons(
         &manifest.root,
         &validator_activation_manifest_root(&manifest),
     );
-    if manifest.root != validator_activation_manifest_root(&expected) {
+    if manifest.root != expected.root {
         errors.push(format!(
             "root does not match expected validator activation root {}",
-            validator_activation_manifest_root(&expected)
+            expected.root
         ));
     }
 
@@ -3313,7 +5734,7 @@ pub fn verify_operator_join_confirmation_jsons(
     let deployment_attestation =
         verified_deployment_attestation_manifest(deployment_attestation_json)?;
     let now = unix_ms();
-    let expected = operator_join_confirmation_manifest(
+    let mut expected = operator_join_confirmation_manifest(
         &receipt,
         &join_report,
         &acceptance,
@@ -3321,6 +5742,16 @@ pub fn verify_operator_join_confirmation_jsons(
         &deployment_attestation,
         manifest.confirmed_at_unix_ms,
     );
+    for expected_entry in &mut expected.entries {
+        if let Some(entry) = manifest.entries.iter().find(|entry| {
+            entry.operator_id == expected_entry.operator_id
+                && entry.validator_id == expected_entry.validator_id
+                && entry.node_id == expected_entry.node_id
+        }) {
+            expected_entry.signature = entry.signature.clone();
+        }
+    }
+    expected.root = operator_join_confirmation_manifest_root(&expected);
     let mut errors = Vec::new();
 
     if manifest.confirmed_at_unix_ms > now + FUTURE_CLOCK_SKEW_MS {
@@ -3388,15 +5819,14 @@ pub fn verify_operator_join_confirmation_jsons(
                 manifest.confirmed_at_unix_ms,
             ),
         );
-        require_root(
+        verify_signature_material(
             &mut errors,
-            &format!("entries[{index}].signature.signature_sha3_256"),
-            &entry.signature.signature_sha3_256,
+            &format!("entries[{index}].signature"),
+            &entry.signature,
+            "ed25519-testnet-operator-join-confirmation",
+            &entry.operator_public_key,
             &operator_join_confirmation_signature_root(entry),
         );
-        if !entry.signature.verified {
-            errors.push(format!("entries[{index}].signature.verified must be true"));
-        }
     }
     require_root(
         &mut errors,
@@ -3467,10 +5897,13 @@ pub fn build_public_observer_confirmation_json_pretty(
         operator_acceptance_json,
         genesis_manifest_json,
     )?;
-    let public_status_report = verify_public_status_manifest_json(public_status_json)?;
-    let public_probe_report = verify_public_probe_json(public_probe_json)?;
     let deployment_attestation =
         verified_deployment_attestation_manifest(deployment_attestation_json)?;
+    let (public_status_report, public_probe_report) = verify_public_surface_jsons_for_deployment(
+        public_status_json,
+        public_probe_json,
+        &deployment_attestation,
+    )?;
     let manifest = public_observer_confirmation_manifest(
         &deployment_attestation,
         &join_confirmation_report,
@@ -3515,18 +5948,39 @@ pub fn verify_public_observer_confirmation_jsons(
         operator_acceptance_json,
         genesis_manifest_json,
     )?;
-    let public_status_report = verify_public_status_manifest_json(public_status_json)?;
-    let public_probe_report = verify_public_probe_json(public_probe_json)?;
     let deployment_attestation =
         verified_deployment_attestation_manifest(deployment_attestation_json)?;
+    let (public_status_report, public_probe_report) = verify_public_surface_jsons_for_deployment(
+        public_status_json,
+        public_probe_json,
+        &deployment_attestation,
+    )?;
     let now = unix_ms();
-    let expected = public_observer_confirmation_manifest(
+    let mut expected = public_observer_confirmation_manifest(
         &deployment_attestation,
         &join_confirmation_report,
         &public_status_report,
         &public_probe_report,
         manifest.observed_at_unix_ms,
     );
+    for expected_entry in &mut expected.entries {
+        if let Some(entry) = manifest.entries.iter().find(|entry| {
+            entry.observer_id == expected_entry.observer_id && entry.region == expected_entry.region
+        }) {
+            expected_entry.signature = entry.signature.clone();
+        }
+    }
+    expected.root = public_observer_confirmation_manifest_root(&expected);
+    let observer_keys_by_id_region = deployment_attestation
+        .observers
+        .iter()
+        .map(|observer| {
+            (
+                (observer.observer_id.as_str(), observer.region.as_str()),
+                observer.signature.public_key.as_str(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut errors = Vec::new();
 
     if manifest.observed_at_unix_ms > now + FUTURE_CLOCK_SKEW_MS {
@@ -3614,15 +6068,17 @@ pub fn verify_public_observer_confirmation_jsons(
             &entry.observation_root,
             &public_observer_confirmation_entry_root(entry, manifest.observed_at_unix_ms),
         );
-        require_root(
+        verify_signature_material(
             &mut errors,
-            &format!("entries[{index}].signature.signature_sha3_256"),
-            &entry.signature.signature_sha3_256,
+            &format!("entries[{index}].signature"),
+            &entry.signature,
+            "ed25519-testnet-public-observer-confirmation",
+            observer_keys_by_id_region
+                .get(&(entry.observer_id.as_str(), entry.region.as_str()))
+                .copied()
+                .unwrap_or_default(),
             &public_observer_confirmation_signature_root(entry),
         );
-        if !entry.signature.verified {
-            errors.push(format!("entries[{index}].signature.verified must be true"));
-        }
     }
     require_root(
         &mut errors,
@@ -3665,6 +6121,767 @@ pub fn verify_public_observer_confirmation_jsons(
         confirmed_region_count: confirmed_regions.len(),
         observed_at_unix_ms: manifest.observed_at_unix_ms,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_public_testnet_launch_certificate_json_pretty(
+    public_observer_confirmation_json: &str,
+    runtime_surface_evidence_json: &str,
+    operator_join_confirmation_json: &str,
+    validator_join_receipt_json: &str,
+    validator_activation_json: &str,
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<String, AttestationError> {
+    let reports = verified_launch_certificate_reports(
+        public_observer_confirmation_json,
+        runtime_surface_evidence_json,
+        operator_join_confirmation_json,
+        validator_join_receipt_json,
+        validator_activation_json,
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let certificate = public_testnet_launch_certificate(&reports, unix_ms());
+
+    serde_json::to_string_pretty(&certificate)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn verify_public_testnet_launch_certificate_jsons(
+    public_testnet_launch_certificate_json: &str,
+    public_observer_confirmation_json: &str,
+    runtime_surface_evidence_json: &str,
+    operator_join_confirmation_json: &str,
+    validator_join_receipt_json: &str,
+    validator_activation_json: &str,
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<PublicTestnetLaunchCertificateReport, AttestationError> {
+    let certificate = serde_json::from_str::<PublicTestnetLaunchCertificate>(
+        public_testnet_launch_certificate_json.trim_start_matches('\u{feff}'),
+    )
+    .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    let reports = verified_launch_certificate_reports(
+        public_observer_confirmation_json,
+        runtime_surface_evidence_json,
+        operator_join_confirmation_json,
+        validator_join_receipt_json,
+        validator_activation_json,
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let expected = public_testnet_launch_certificate(&reports, certificate.certified_at_unix_ms);
+    let now = unix_ms();
+    let mut errors = Vec::new();
+
+    if certificate.certified_at_unix_ms > now + FUTURE_CLOCK_SKEW_MS {
+        errors.push("certified_at_unix_ms is more than five minutes in the future".to_string());
+    }
+    if certificate.certified_at_unix_ms < now.saturating_sub(PUBLIC_ATTESTATION_MAX_AGE_MS) {
+        errors.push("certified_at_unix_ms is older than 24 hours".to_string());
+    }
+    require_eq(
+        &mut errors,
+        "chain_id",
+        &certificate.chain_id,
+        &expected.chain_id,
+    );
+    require_eq(
+        &mut errors,
+        "runtime_version",
+        &certificate.runtime_version,
+        &expected.runtime_version,
+    );
+    require_root(
+        &mut errors,
+        "launch_package_bundle_root",
+        &certificate.launch_package_bundle_root,
+        &expected.launch_package_bundle_root,
+    );
+    require_root(
+        &mut errors,
+        "launch_package_root",
+        &certificate.launch_package_root,
+        &expected.launch_package_root,
+    );
+    require_root(
+        &mut errors,
+        "fee_policy_root",
+        &certificate.fee_policy_root,
+        &expected.fee_policy_root,
+    );
+    require_root(
+        &mut errors,
+        "validator_activation_root",
+        &certificate.validator_activation_root,
+        &expected.validator_activation_root,
+    );
+    require_root(
+        &mut errors,
+        "validator_join_root",
+        &certificate.validator_join_root,
+        &expected.validator_join_root,
+    );
+    require_root(
+        &mut errors,
+        "operator_join_confirmation_root",
+        &certificate.operator_join_confirmation_root,
+        &expected.operator_join_confirmation_root,
+    );
+    require_root(
+        &mut errors,
+        "public_observer_confirmation_root",
+        &certificate.public_observer_confirmation_root,
+        &expected.public_observer_confirmation_root,
+    );
+    require_root(
+        &mut errors,
+        "public_status_manifest_root",
+        &certificate.public_status_manifest_root,
+        &expected.public_status_manifest_root,
+    );
+    require_root(
+        &mut errors,
+        "public_probe_root",
+        &certificate.public_probe_root,
+        &expected.public_probe_root,
+    );
+    require_root(
+        &mut errors,
+        "runtime_surface_root",
+        &certificate.runtime_surface_root,
+        &expected.runtime_surface_root,
+    );
+    require_root(
+        &mut errors,
+        "validator_set_root",
+        &certificate.validator_set_root,
+        &expected.validator_set_root,
+    );
+    require_root(
+        &mut errors,
+        "genesis_root",
+        &certificate.genesis_root,
+        &expected.genesis_root,
+    );
+    require_eq(
+        &mut errors,
+        "endpoint_url",
+        &certificate.endpoint_url,
+        &expected.endpoint_url,
+    );
+    if certificate.validator_count != expected.validator_count {
+        errors.push(format!(
+            "validator_count expected {} but got {}",
+            expected.validator_count, certificate.validator_count
+        ));
+    }
+    if certificate.operator_count != expected.operator_count {
+        errors.push(format!(
+            "operator_count expected {} but got {}",
+            expected.operator_count, certificate.operator_count
+        ));
+    }
+    if certificate.observer_count != expected.observer_count {
+        errors.push(format!(
+            "observer_count expected {} but got {}",
+            expected.observer_count, certificate.observer_count
+        ));
+    }
+    if certificate.region_count != expected.region_count {
+        errors.push(format!(
+            "region_count expected {} but got {}",
+            expected.region_count, certificate.region_count
+        ));
+    }
+    require_root(
+        &mut errors,
+        "root",
+        &certificate.root,
+        &public_testnet_launch_certificate_root(&certificate),
+    );
+    if certificate.root != expected.root {
+        errors.push(format!(
+            "public testnet launch certificate root does not match expected root {}",
+            expected.root
+        ));
+    }
+
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    Ok(PublicTestnetLaunchCertificateReport {
+        public_testnet_launch_certificate_ready: true,
+        level: "public-testnet-launch-candidate-certified",
+        public_testnet_launch_certificate_root: certificate.root,
+        launch_package_bundle_root: certificate.launch_package_bundle_root,
+        launch_package_root: certificate.launch_package_root,
+        fee_policy_root: certificate.fee_policy_root,
+        validator_activation_root: certificate.validator_activation_root,
+        validator_join_root: certificate.validator_join_root,
+        operator_join_confirmation_root: certificate.operator_join_confirmation_root,
+        public_observer_confirmation_root: certificate.public_observer_confirmation_root,
+        public_status_manifest_root: certificate.public_status_manifest_root,
+        public_probe_root: certificate.public_probe_root,
+        runtime_surface_root: certificate.runtime_surface_root,
+        validator_set_root: certificate.validator_set_root,
+        genesis_root: certificate.genesis_root,
+        endpoint_url: certificate.endpoint_url,
+        validator_count: certificate.validator_count,
+        operator_count: certificate.operator_count,
+        observer_count: certificate.observer_count,
+        region_count: certificate.region_count,
+        certified_at_unix_ms: certificate.certified_at_unix_ms,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn verify_public_testnet_launch_readiness_jsons(
+    public_testnet_launch_certificate_json: &str,
+    public_observer_confirmation_json: &str,
+    runtime_surface_evidence_json: &str,
+    live_rpc_devnet_rehearsal_json: &str,
+    live_rpc_devnet_runtime_surface_evidence_json: &str,
+    operator_join_confirmation_json: &str,
+    validator_join_receipt_json: &str,
+    validator_activation_json: &str,
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<PublicTestnetLaunchReadinessReport, AttestationError> {
+    let certificate = verify_public_testnet_launch_certificate_jsons(
+        public_testnet_launch_certificate_json,
+        public_observer_confirmation_json,
+        runtime_surface_evidence_json,
+        operator_join_confirmation_json,
+        validator_join_receipt_json,
+        validator_activation_json,
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let runtime_surface = verify_runtime_surface_evidence_json(runtime_surface_evidence_json)?;
+    let live_rehearsal = verify_live_rpc_devnet_rehearsal_json(live_rpc_devnet_rehearsal_json)?;
+    let live_runtime_surface =
+        verify_runtime_surface_evidence_json(live_rpc_devnet_runtime_surface_evidence_json)?;
+    let runtime_surface_evidence = serde_json::from_str::<RuntimeSurfaceEvidence>(
+        runtime_surface_evidence_json.trim_start_matches('\u{feff}'),
+    )
+    .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    let deployment = verify_deployment_attestation_json(deployment_attestation_json)?;
+    let deployment_attestation = serde_json::from_str::<DeploymentAttestation>(
+        deployment_attestation_json.trim_start_matches('\u{feff}'),
+    )
+    .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    let mut errors = Vec::new();
+
+    if !certificate.public_testnet_launch_certificate_ready {
+        errors.push("public testnet launch certificate is not ready".to_string());
+    }
+    if !deployment.public_launch_ready {
+        errors.push("deployment attestation is not public-launch ready".to_string());
+    }
+    require_eq(
+        &mut errors,
+        "deployment.endpoint_url",
+        &certificate.endpoint_url,
+        &deployment.endpoint_url,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_rehearsal.endpoint_url",
+        &live_rehearsal.endpoint_url,
+        &certificate.endpoint_url,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_rehearsal.launch_package_bundle_root",
+        &live_rehearsal.launch_package_bundle_root,
+        &certificate.launch_package_bundle_root,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_runtime_surface.capture_mode",
+        &live_runtime_surface.capture_mode,
+        RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_runtime_surface.runtime_surface_root",
+        &live_runtime_surface.runtime_surface_root,
+        &live_rehearsal.runtime_surface_root,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_runtime_surface.endpoint_url",
+        &live_runtime_surface.endpoint_url,
+        &certificate.endpoint_url,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_runtime_surface.launch_package_bundle_root",
+        &live_runtime_surface.launch_package_bundle_root,
+        &certificate.launch_package_bundle_root,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_runtime_surface.launch_package_root",
+        &live_runtime_surface.launch_package_root,
+        &certificate.launch_package_root,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_runtime_surface.fee_policy_root",
+        &live_runtime_surface.fee_policy_root,
+        &certificate.fee_policy_root,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_runtime_surface.validator_set_root",
+        &live_runtime_surface.validator_set_root,
+        &certificate.validator_set_root,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_runtime_surface.genesis_root",
+        &live_runtime_surface.genesis_root,
+        &certificate.genesis_root,
+    );
+    if live_runtime_surface.latest_height != live_rehearsal.latest_height {
+        errors.push(format!(
+            "live_rpc_devnet_runtime_surface.latest_height expected {} but got {}",
+            live_rehearsal.latest_height, live_runtime_surface.latest_height
+        ));
+    }
+    if live_runtime_surface.total_nxmr_fees_units != live_rehearsal.total_nxmr_fees_units {
+        errors.push(format!(
+            "live_rpc_devnet_runtime_surface.total_nxmr_fees_units expected {} but got {}",
+            live_rehearsal.total_nxmr_fees_units, live_runtime_surface.total_nxmr_fees_units
+        ));
+    }
+    if live_runtime_surface.buyback_pool_nebulai != live_rehearsal.buyback_pool_nebulai {
+        errors.push(format!(
+            "live_rpc_devnet_runtime_surface.buyback_pool_nebulai expected {} but got {}",
+            live_rehearsal.buyback_pool_nebulai, live_runtime_surface.buyback_pool_nebulai
+        ));
+    }
+    if live_runtime_surface.validator_reward_nebulai != live_rehearsal.validator_reward_nebulai {
+        errors.push(format!(
+            "live_rpc_devnet_runtime_surface.validator_reward_nebulai expected {} but got {}",
+            live_rehearsal.validator_reward_nebulai, live_runtime_surface.validator_reward_nebulai
+        ));
+    }
+    require_eq(
+        &mut errors,
+        "runtime_surface.capture_mode",
+        &runtime_surface.capture_mode,
+        RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT,
+    );
+    match runtime_surface.tls_observation.as_ref() {
+        Some(observed)
+            if deployment_attestation
+                .public_endpoint
+                .tls_pins
+                .iter()
+                .any(|pin| tls_endpoint_pins_match(observed, pin)) => {}
+        Some(_) => errors.push(
+            "runtime_surface.tls_observation does not match deployment public_endpoint.tls_pins"
+                .to_string(),
+        ),
+        None => errors.push(
+            "runtime_surface.tls_observation is required for public launch readiness".to_string(),
+        ),
+    }
+    if certificate.operator_count < MIN_PUBLIC_TESTNET_OPERATORS {
+        errors.push(format!(
+            "operator_count must be at least {MIN_PUBLIC_TESTNET_OPERATORS}"
+        ));
+    }
+    if certificate.observer_count < MIN_PUBLIC_TESTNET_OBSERVERS {
+        errors.push(format!(
+            "observer_count must be at least {MIN_PUBLIC_TESTNET_OBSERVERS}"
+        ));
+    }
+    if certificate.region_count < MIN_PUBLIC_TESTNET_REGIONS {
+        errors.push(format!(
+            "region_count must be at least {MIN_PUBLIC_TESTNET_REGIONS}"
+        ));
+    }
+    let runtime_surface_snapshot = serde_json::from_value::<runtime::RuntimeSnapshot>(
+        runtime_surface_evidence.snapshot.clone(),
+    )
+    .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    if let Some(economics) = require_runtime_surface_snapshot_economics(
+        &mut errors,
+        &runtime_surface_evidence.status,
+        &runtime_surface_snapshot,
+    ) {
+        require_public_launch_economics_trial(&mut errors, &economics);
+    }
+
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    let mut report = PublicTestnetLaunchReadinessReport {
+        public_launch_ready: true,
+        level: "public-testnet-launch-ready",
+        blocking_gaps: Vec::new(),
+        satisfied_attestation:
+            "operator-signed public endpoint, runtime surface, observer, rollback, and launch certificate evidence",
+        public_launch_readiness_root: String::new(),
+        public_testnet_launch_certificate_root: certificate.public_testnet_launch_certificate_root,
+        deployment_attestation_root: deployment.evidence_root,
+        launch_package_bundle_root: certificate.launch_package_bundle_root,
+        launch_package_root: certificate.launch_package_root,
+        fee_policy_root: certificate.fee_policy_root,
+        validator_activation_root: certificate.validator_activation_root,
+        validator_join_root: certificate.validator_join_root,
+        operator_join_confirmation_root: certificate.operator_join_confirmation_root,
+        public_observer_confirmation_root: certificate.public_observer_confirmation_root,
+        public_status_manifest_root: certificate.public_status_manifest_root,
+        public_probe_root: certificate.public_probe_root,
+        runtime_surface_root: certificate.runtime_surface_root,
+        runtime_surface_capture_mode: runtime_surface.capture_mode,
+        live_rpc_devnet_rehearsal_root: live_rehearsal.rehearsal_root,
+        live_rpc_devnet_runtime_surface_root: live_runtime_surface.runtime_surface_root,
+        validator_set_root: certificate.validator_set_root,
+        genesis_root: certificate.genesis_root,
+        endpoint_url: certificate.endpoint_url,
+        validator_count: certificate.validator_count,
+        operator_count: certificate.operator_count,
+        observer_count: certificate.observer_count,
+        region_count: certificate.region_count,
+        certified_at_unix_ms: certificate.certified_at_unix_ms,
+        generated_at_unix_ms: unix_ms(),
+    };
+    report.public_launch_readiness_root = public_testnet_launch_readiness_root(&report);
+
+    Ok(report)
+}
+
+pub fn public_testnet_launch_readiness_rejection_report(
+    errors: &[String],
+) -> PublicTestnetLaunchReadinessRejectionReport {
+    let blocking_gaps = if errors.is_empty() {
+        vec!["public-testnet-launch-readiness-unknown-blocker".to_string()]
+    } else {
+        errors.to_vec()
+    };
+    let mut report = PublicTestnetLaunchReadinessRejectionReport {
+        public_launch_ready: false,
+        level: "public-testnet-launch-readiness-rejected",
+        blocking_gaps,
+        errors: errors.to_vec(),
+        required_attestation:
+            "operator-signed public endpoint, runtime surface, observer, rollback, and launch certificate evidence",
+        public_launch_readiness_rejection_root: String::new(),
+        generated_at_unix_ms: unix_ms(),
+    };
+    report.public_launch_readiness_rejection_root =
+        public_testnet_launch_readiness_rejection_root(&report);
+    report
+}
+
+pub fn verify_live_rpc_devnet_rehearsal_json(
+    input: &str,
+) -> Result<LiveRpcDevnetRehearsalReport, AttestationError> {
+    let report =
+        serde_json::from_str::<LiveRpcDevnetRehearsalReport>(input.trim_start_matches('\u{feff}'))
+            .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    let mut errors = Vec::new();
+    let expected_root = live_rpc_devnet_rehearsal_root(&report);
+
+    if !report.live_rpc_devnet_rehearsed {
+        errors.push("live_rpc_devnet_rehearsed must be true".to_string());
+    }
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_rehearsal.level",
+        &report.level,
+        "live-rpc-devnet-rehearsal-ready",
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_rehearsal.chain_id",
+        &report.chain_id,
+        CHAIN_ID,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_rehearsal.runtime_version",
+        &report.runtime_version,
+        VERSION,
+    );
+    if report.public_launch_ready {
+        errors.push("live_rpc_devnet_rehearsal.public_launch_ready must be false".to_string());
+    }
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_rehearsal.public_launch_blocker",
+        &report.public_launch_blocker,
+        PUBLIC_LAUNCH_BLOCKER,
+    );
+    if report.block_millis >= 1_000 || !report.sub_second_blocks {
+        errors.push("live_rpc_devnet_rehearsal must prove sub-second blocks".to_string());
+    }
+    if report.produced_block_count < 2 {
+        errors
+            .push("live_rpc_devnet_rehearsal.produced_block_count must be at least 2".to_string());
+    }
+    if report.latest_height != report.produced_block_count {
+        errors.push(format!(
+            "live_rpc_devnet_rehearsal.latest_height expected {} but got {}",
+            report.produced_block_count, report.latest_height
+        ));
+    }
+    if !report.runtime_surface_ready {
+        errors.push("live_rpc_devnet_rehearsal.runtime_surface_ready must be true".to_string());
+    }
+    require_hex_root(
+        &mut errors,
+        "live_rpc_devnet_rehearsal.runtime_surface_root",
+        &report.runtime_surface_root,
+    );
+    if !report.sync_quorum_met {
+        errors.push("live_rpc_devnet_rehearsal.sync_quorum_met must be true".to_string());
+    }
+    if report.sync_successful_peer_count < 1 {
+        errors.push(
+            "live_rpc_devnet_rehearsal.sync_successful_peer_count must be at least 1".to_string(),
+        );
+    }
+    if report.sync_import_count < 1 {
+        errors.push("live_rpc_devnet_rehearsal.sync_import_count must be at least 1".to_string());
+    }
+    if report.sync_last_import_height != report.latest_height {
+        errors.push(format!(
+            "live_rpc_devnet_rehearsal.sync_last_import_height expected {} but got {}",
+            report.latest_height, report.sync_last_import_height
+        ));
+    }
+    if report.sync_quorum_height != report.latest_height {
+        errors.push(format!(
+            "live_rpc_devnet_rehearsal.sync_quorum_height expected {} but got {}",
+            report.latest_height, report.sync_quorum_height
+        ));
+    }
+    if report.bridge_deposit_count != 1 {
+        errors.push(format!(
+            "live_rpc_devnet_rehearsal.bridge_deposit_count expected 1 but got {}",
+            report.bridge_deposit_count
+        ));
+    }
+    if report.withdrawal_request_count != 1 {
+        errors.push(format!(
+            "live_rpc_devnet_rehearsal.withdrawal_request_count expected 1 but got {}",
+            report.withdrawal_request_count
+        ));
+    }
+    if report.finalized_withdrawal_count != 1 {
+        errors.push(format!(
+            "live_rpc_devnet_rehearsal.finalized_withdrawal_count expected 1 but got {}",
+            report.finalized_withdrawal_count
+        ));
+    }
+    if !report.bridge_custody_reconciled || report.nxmr_custody_deficit_units != 0 {
+        errors.push("live_rpc_devnet_rehearsal must prove reconciled nXMR custody".to_string());
+    }
+    if report.total_nxmr_fees_units != 1_000
+        || report.buyback_pool_nebulai != 1_000
+        || report.validator_reward_nebulai != 1_010
+    {
+        errors.push("live_rpc_devnet_rehearsal must prove NBLA and nXMR gas economics".to_string());
+    }
+    if report.sequencer_key_rotation_count != 1 {
+        errors.push(format!(
+            "live_rpc_devnet_rehearsal.sequencer_key_rotation_count expected 1 but got {}",
+            report.sequencer_key_rotation_count
+        ));
+    }
+    require_hex_root(
+        &mut errors,
+        "live_rpc_devnet_rehearsal.launch_package_bundle_root",
+        &report.launch_package_bundle_root,
+    );
+    require_eq(
+        &mut errors,
+        "live_rpc_devnet_rehearsal.rehearsal_root",
+        &report.rehearsal_root,
+        &expected_root,
+    );
+
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    Ok(report)
+}
+
+fn require_runtime_surface_snapshot_economics(
+    errors: &mut Vec<String>,
+    status: &Value,
+    snapshot: &runtime::RuntimeSnapshot,
+) -> Option<runtime::RuntimeSnapshotEconomics> {
+    let economics = match runtime::derive_runtime_snapshot_economics(snapshot) {
+        Ok(economics) => economics,
+        Err(error) => {
+            errors.push(format!("runtime_surface.snapshot.economics: {error}"));
+            return None;
+        }
+    };
+
+    require_status_counter_matches_snapshot(
+        errors,
+        status,
+        "total_nxmr_fees_units",
+        snapshot.total_nxmr_fees_units,
+    );
+    require_status_counter_matches_snapshot(
+        errors,
+        status,
+        "buyback_pool_nebulai",
+        snapshot.buyback_pool_nebulai,
+    );
+    require_status_counter_matches_snapshot(
+        errors,
+        status,
+        "validator_reward_nebulai",
+        snapshot.validator_reward_nebulai,
+    );
+
+    Some(economics)
+}
+
+fn require_status_counter_matches_snapshot(
+    errors: &mut Vec<String>,
+    status: &Value,
+    field: &str,
+    expected: u128,
+) {
+    match json_u128_field(status, &format!("runtime_surface.status.{field}")) {
+        Ok(value) if value == expected => {}
+        Ok(value) => errors.push(format!(
+            "runtime_surface.status.{field} expected snapshot {expected} but got {value}"
+        )),
+        Err(AttestationError::Invalid(mut field_errors)) => errors.append(&mut field_errors),
+        Err(AttestationError::MalformedJson(error)) => errors.push(error),
+    }
+}
+
+fn require_public_launch_economics_trial(
+    errors: &mut Vec<String>,
+    economics: &runtime::RuntimeSnapshotEconomics,
+) {
+    if economics.total_nxmr_fees_units == 0 {
+        errors.push(
+            "runtime_surface.snapshot.total_nxmr_fees_units must be greater than zero to prove nXMR gas was exercised"
+                .to_string(),
+        );
+    }
+    if economics.included_nxmr_receipt_count == 0 {
+        errors.push(
+            "runtime_surface.snapshot must include at least one signed-block nXMR gas receipt"
+                .to_string(),
+        );
+    }
+    if economics.included_nbla_receipt_count == 0 {
+        errors.push(
+            "runtime_surface.snapshot must include at least one signed-block NBLA gas receipt"
+                .to_string(),
+        );
+    }
+
+    let converted_nbla_nebulai = match economics
+        .total_nxmr_fees_units
+        .checked_mul(TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT)
+    {
+        Some(value) => value,
+        None => {
+            errors.push(
+                "runtime_surface.snapshot.total_nxmr_fees_units conversion overflowed".to_string(),
+            );
+            return;
+        }
+    };
+    let expected_buyback_nebulai =
+        match split_basis_points(converted_nbla_nebulai, NXMR_BUYBACK_BPS) {
+            Ok(value) => value,
+            Err(_) => {
+                errors.push(
+                    "runtime_surface.snapshot.buyback_pool_nebulai accounting overflowed"
+                        .to_string(),
+                );
+                return;
+            }
+        };
+    let expected_nxmr_validator_reward_nebulai =
+        match split_basis_points(converted_nbla_nebulai, NXMR_VALIDATOR_REWARD_BPS) {
+            Ok(value) => value,
+            Err(_) => {
+                errors.push(
+                    "runtime_surface.snapshot.validator_reward_nebulai accounting overflowed"
+                        .to_string(),
+                );
+                return;
+            }
+        };
+
+    if economics.buyback_pool_nebulai != expected_buyback_nebulai {
+        errors.push(format!(
+            "runtime_surface.snapshot.buyback_pool_nebulai expected {expected_buyback_nebulai} from {} nXMR fee units at 0.001 XMR/NBLA but got {}",
+            economics.total_nxmr_fees_units, economics.buyback_pool_nebulai
+        ));
+    }
+    if economics.nxmr_validator_reward_nebulai < expected_nxmr_validator_reward_nebulai {
+        errors.push(format!(
+            "runtime_surface.snapshot.nxmr_validator_reward_nebulai expected at least {expected_nxmr_validator_reward_nebulai} from nXMR gas rewards but got {}",
+            economics.nxmr_validator_reward_nebulai
+        ));
+    }
+    if economics.validator_reward_nebulai <= expected_nxmr_validator_reward_nebulai {
+        errors.push(
+            "runtime_surface.snapshot.validator_reward_nebulai must exceed nXMR-derived rewards to prove NBLA gas was exercised"
+                .to_string(),
+        );
+    }
 }
 
 pub fn verify_deployment_attestation_json(
@@ -3810,6 +7027,7 @@ pub fn verify_deployment_attestation_json(
         public_launch_ready: true,
         level: "public-launch-attested",
         evidence_root: stable_root(&value),
+        endpoint_url: attestation.public_endpoint.url.clone(),
         witness_evidence_root,
         public_surface_root: deployment_public_surface_root(&attestation),
         operator_approval_root: deployment_operator_approval_root(&attestation),
@@ -3837,6 +7055,636 @@ fn sample_package_identity() -> PackageIdentity {
     };
     package_identity.root = package_identity_root(&package_identity);
     package_identity
+}
+
+fn local_rehearsal_artifact(
+    name: &'static str,
+    level: &'static str,
+    root: String,
+) -> LocalPublicTestnetRehearsalArtifact {
+    LocalPublicTestnetRehearsalArtifact { name, level, root }
+}
+
+fn local_public_testnet_rehearsal_root(report: &LocalPublicTestnetRehearsalReport) -> String {
+    stable_root(&json!({
+        "local_public_testnet_rehearsal_domain": "nebula-local-public-testnet-rehearsal-v1",
+        "chain_id": report.chain_id,
+        "runtime_version": report.runtime_version,
+        "level": report.level,
+        "local_public_testnet_rehearsed": report.local_public_testnet_rehearsed,
+        "public_launch_ready": report.public_launch_ready,
+        "public_launch_blocker": report.public_launch_blocker,
+        "verified_artifact_count": report.verified_artifact_count,
+        "verified_artifacts": report.verified_artifacts,
+        "public_testnet_launch_certificate_root": report.public_testnet_launch_certificate_root,
+        "public_testnet_peer_manifest_root": report.public_testnet_peer_manifest_root,
+        "launch_package_bundle_root": report.launch_package_bundle_root,
+        "launch_package_root": report.launch_package_root,
+        "validator_activation_root": report.validator_activation_root,
+        "validator_join_root": report.validator_join_root,
+        "operator_join_confirmation_root": report.operator_join_confirmation_root,
+        "public_observer_confirmation_root": report.public_observer_confirmation_root,
+        "validator_count": report.validator_count,
+        "operator_count": report.operator_count,
+        "observer_count": report.observer_count,
+        "region_count": report.region_count,
+        "generated_at_unix_ms": report.generated_at_unix_ms,
+    }))
+}
+
+fn live_rehearsal_invalid(error: impl Into<String>) -> AttestationError {
+    AttestationError::Invalid(vec![error.into()])
+}
+
+fn live_runtime_launch_bindings(
+) -> Result<(runtime::RuntimeLaunchBinding, runtime::RuntimeLaunchBinding), AttestationError> {
+    let deployment_attestation_json = sample_deployment_attestation_json_pretty();
+    let public_status_json = sample_public_status_manifest_json_pretty();
+    let public_probe_json = sample_public_probe_json_pretty();
+    let validator_set_json = sample_validator_set_json_pretty();
+    let operator_handoff_json =
+        build_operator_handoff_json_pretty(&deployment_attestation_json, &validator_set_json)?;
+    let operator_acceptance_json = build_operator_acceptance_json_pretty(
+        &operator_handoff_json,
+        &deployment_attestation_json,
+        &validator_set_json,
+    )?;
+    let genesis_manifest_json =
+        build_genesis_manifest_json_pretty(&deployment_attestation_json, &validator_set_json)?;
+    let launch_package_bundle_json = build_launch_package_bundle_json_pretty(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+    )?;
+    let sequencer_binding = build_runtime_launch_binding_from_jsons(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+        &launch_package_bundle_json,
+        "validator-a",
+    )?;
+    let follower_binding = build_runtime_launch_binding_from_jsons(
+        &deployment_attestation_json,
+        &public_status_json,
+        &public_probe_json,
+        &validator_set_json,
+        &operator_handoff_json,
+        &operator_acceptance_json,
+        &genesis_manifest_json,
+        &launch_package_bundle_json,
+        "validator-b",
+    )?;
+    Ok((sequencer_binding, follower_binding))
+}
+
+fn live_rpc_start_server(
+    config: runtime::RuntimeConfig,
+    options: runtime::RuntimeNodeOptions,
+) -> Result<String, AttestationError> {
+    let rpc_addr = live_reserve_local_addr().map_err(live_rehearsal_invalid)?;
+    let served_addr = rpc_addr.clone();
+    thread::spawn(move || {
+        if let Err(error) = runtime::serve_runtime_rpc_with_options(&served_addr, config, options) {
+            eprintln!("live RPC rehearsal server failed on {served_addr}: {error}");
+        }
+    });
+    live_wait_for_rpc(&rpc_addr).map_err(live_rehearsal_invalid)?;
+    Ok(rpc_addr)
+}
+
+fn live_rpc_start_server_with_admin(
+    config: runtime::RuntimeConfig,
+    mut options: runtime::RuntimeNodeOptions,
+) -> Result<(String, String), AttestationError> {
+    let rpc_addr = live_reserve_local_addr().map_err(live_rehearsal_invalid)?;
+    let admin_addr = live_reserve_local_addr().map_err(live_rehearsal_invalid)?;
+    options.admin_rpc_bind_addr = Some(admin_addr.clone());
+    let served_addr = rpc_addr.clone();
+    thread::spawn(move || {
+        if let Err(error) = runtime::serve_runtime_rpc_with_options(&served_addr, config, options) {
+            eprintln!("live RPC rehearsal server failed on {served_addr}: {error}");
+        }
+    });
+    live_wait_for_rpc(&rpc_addr).map_err(live_rehearsal_invalid)?;
+    live_wait_for_rpc(&admin_addr).map_err(live_rehearsal_invalid)?;
+    Ok((rpc_addr, admin_addr))
+}
+
+fn live_reserve_local_addr() -> Result<String, String> {
+    let listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|error| format!("bind local port: {error}"))?;
+    listener
+        .local_addr()
+        .map(|addr| addr.to_string())
+        .map_err(|error| format!("read local port: {error}"))
+}
+
+fn live_wait_for_rpc(rpc_addr: &str) -> Result<(), String> {
+    let deadline = unix_ms().saturating_add(5_000);
+    loop {
+        match live_http_json(rpc_addr, "/health") {
+            Ok(health) if health["chain_id"] == CHAIN_ID => return Ok(()),
+            Ok(_) | Err(_) if unix_ms() < deadline => thread::sleep(Duration::from_millis(25)),
+            Ok(health) => {
+                return Err(format!(
+                    "RPC {rpc_addr} returned unexpected health response {health}"
+                ));
+            }
+            Err(error) => return Err(format!("RPC {rpc_addr} did not become ready: {error}")),
+        }
+    }
+}
+
+fn live_wait_for_json_condition<F>(
+    rpc_addr: &str,
+    path: &str,
+    description: &str,
+    condition: F,
+) -> Result<Value, AttestationError>
+where
+    F: Fn(&Value) -> bool,
+{
+    let deadline = unix_ms().saturating_add(5_000);
+    loop {
+        match live_http_json(rpc_addr, path) {
+            Ok(value) if condition(&value) => return Ok(value),
+            Ok(value) => {
+                if unix_ms() >= deadline {
+                    return Err(live_rehearsal_invalid(format!(
+                        "{description} not satisfied by {value}"
+                    )));
+                }
+            }
+            Err(error) => {
+                if unix_ms() >= deadline {
+                    return Err(live_rehearsal_invalid(error));
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn live_wait_for_runtime_surface_evidence(
+    rpc_addr: &str,
+    endpoint_url: &str,
+) -> Result<Value, AttestationError> {
+    let deadline = unix_ms().saturating_add(5_000);
+    loop {
+        match live_capture_runtime_surface_evidence(rpc_addr, endpoint_url) {
+            Ok(evidence) => return Ok(evidence),
+            Err(error) => {
+                if unix_ms() >= deadline {
+                    return Err(live_rehearsal_invalid(error));
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn live_capture_runtime_surface_evidence(
+    rpc_addr: &str,
+    endpoint_url: &str,
+) -> Result<Value, String> {
+    let health = live_http_json(rpc_addr, "/health")?;
+    let status = live_http_json(rpc_addr, "/status")?;
+    let snapshot = live_http_json(rpc_addr, "/snapshot")?;
+    let ops = live_http_json(rpc_addr, "/ops")?;
+    let backup = live_http_json(rpc_addr, "/backup")?;
+    let (_content_type, metrics_text) = live_http_text(rpc_addr, "/metrics")?;
+    let rpc_status = live_rpc_request_value(rpc_addr, "nebula_status", json!({}))?;
+    let rpc_ops_status = live_rpc_request_value(rpc_addr, "nebula_opsStatus", json!({}))?;
+    let rpc_backup_manifest = live_rpc_request_value(rpc_addr, "nebula_backupManifest", json!({}))?;
+    let evidence_json =
+        build_runtime_surface_evidence_json_pretty(RuntimeSurfaceEvidenceBuildInput {
+            endpoint_url: endpoint_url.to_string(),
+            capture_mode: RUNTIME_SURFACE_CAPTURE_MODE_LOOPBACK_DEVNET.to_string(),
+            tls_observation: None,
+            captured_at_unix_ms: unix_ms(),
+            health_json: health.to_string(),
+            status_json: status.to_string(),
+            snapshot_json: snapshot.to_string(),
+            ops_json: ops.to_string(),
+            backup_json: backup.to_string(),
+            rpc_status_json: rpc_status.to_string(),
+            rpc_ops_status_json: rpc_ops_status.to_string(),
+            rpc_backup_manifest_json: rpc_backup_manifest.to_string(),
+            metrics_text,
+        })
+        .map_err(|error| match error {
+            AttestationError::MalformedJson(error) => error,
+            AttestationError::Invalid(errors) => errors.join("; "),
+        })?;
+
+    serde_json::from_str::<Value>(&evidence_json).map_err(|error| error.to_string())
+}
+
+fn live_rpc_call(rpc_addr: &str, method: &str, params: Value) -> Result<Value, AttestationError> {
+    live_rpc_request_value(rpc_addr, method, params).map_err(live_rehearsal_invalid)
+}
+
+fn live_rpc_request_value(rpc_addr: &str, method: &str, params: Value) -> Result<Value, String> {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": params,
+    })
+    .to_string();
+    let (_content_type, response) = live_http_request(rpc_addr, "/rpc", "POST", Some(body))?;
+    serde_json::from_str::<Value>(&response)
+        .map_err(|error| format!("invalid JSON-RPC response for {method}: {error}: {response}"))
+}
+
+fn live_rpc_result(response: &Value) -> Result<&Value, AttestationError> {
+    if let Some(error) = response.get("error") {
+        return Err(live_rehearsal_invalid(format!("JSON-RPC error: {error}")));
+    }
+    response.get("result").ok_or_else(|| {
+        live_rehearsal_invalid(format!("JSON-RPC response missing result: {response}"))
+    })
+}
+
+fn live_http_json(rpc_addr: &str, path: &str) -> Result<Value, String> {
+    let (_content_type, body) = live_http_text(rpc_addr, path)?;
+    serde_json::from_str::<Value>(&body)
+        .map_err(|error| format!("invalid JSON from {path}: {error}: {body}"))
+}
+
+fn live_http_text(rpc_addr: &str, path: &str) -> Result<(String, String), String> {
+    live_http_request(rpc_addr, path, "GET", None)
+}
+
+fn live_http_request(
+    rpc_addr: &str,
+    path: &str,
+    method: &str,
+    body: Option<String>,
+) -> Result<(String, String), String> {
+    let mut stream =
+        TcpStream::connect(rpc_addr).map_err(|error| format!("connect {rpc_addr}: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| format!("set read timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| format!("set write timeout: {error}"))?;
+    let body = body.unwrap_or_default();
+    let request = if method == "POST" {
+        format!(
+            "POST {path} HTTP/1.1\r\nHost: {rpc_addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    } else {
+        format!("GET {path} HTTP/1.1\r\nHost: {rpc_addr}\r\nConnection: close\r\n\r\n")
+    };
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| format!("write request {path}: {error}"))?;
+    stream
+        .flush()
+        .map_err(|error| format!("flush request {path}: {error}"))?;
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| format!("read response {path}: {error}"))?;
+    let Some((head, response_body)) = response.split_once("\r\n\r\n") else {
+        return Err(format!("malformed HTTP response from {path}: {response}"));
+    };
+    let mut header_lines = head.lines();
+    let status_line = header_lines.next().unwrap_or_default();
+    if !status_line.contains(" 200 ") {
+        return Err(format!(
+            "HTTP {path} failed with {status_line}: {response_body}"
+        ));
+    }
+    let content_type = header_lines
+        .find_map(|line| {
+            line.split_once(':').and_then(|(name, value)| {
+                name.eq_ignore_ascii_case("content-type")
+                    .then(|| value.trim().to_string())
+            })
+        })
+        .unwrap_or_default();
+    Ok((content_type, response_body.to_string()))
+}
+
+fn live_signing_key(seed: u8) -> SigningKey {
+    SigningKey::from_bytes(&[seed; 32])
+}
+
+fn live_account_id(seed: u8) -> String {
+    hex::encode(live_signing_key(seed).verifying_key().to_bytes())
+}
+
+fn live_sign_root(seed: u8, root: &str) -> String {
+    hex::encode(live_signing_key(seed).sign(root.as_bytes()).to_bytes())
+}
+
+fn live_signed_transaction_with_fee_asset(
+    seed: u8,
+    nonce: u64,
+    to: &str,
+    amount_nebulai: u128,
+    gas_units: u128,
+    gas_price_nebulai: u128,
+    fee_asset: &str,
+) -> runtime::RuntimeTransaction {
+    let mut tx = runtime::RuntimeTransaction {
+        from: live_account_id(seed),
+        to: to.to_string(),
+        amount_nebulai,
+        gas_units,
+        gas_price_nebulai,
+        fee_asset: fee_asset.to_string(),
+        nonce,
+        signature: String::new(),
+        memo: None,
+    };
+    tx.signature = live_sign_root(seed, &tx.signing_root());
+    tx
+}
+
+fn live_withdrawal_signature(
+    seed: u8,
+    monero_address: &str,
+    amount_nxmr_units: u128,
+    nonce: u64,
+) -> String {
+    let root = runtime::withdrawal_authorization_root(
+        &live_account_id(seed),
+        monero_address,
+        amount_nxmr_units,
+        nonce,
+    );
+    live_sign_root(seed, &root)
+}
+
+fn live_bridge_deposit(seed: u8, amount_nxmr_units: u128) -> Value {
+    let mut deposit = runtime::RuntimeBridgeDeposit {
+        monero_tx_id: hex_64("live-rpc-devnet-monero-deposit"),
+        account: live_account_id(seed),
+        amount_nxmr_units,
+        confirmations: runtime::MIN_BRIDGE_CONFIRMATIONS,
+        observer_id: "observer-us-east-1".to_string(),
+        observer_ids: vec![
+            "observer-us-east-1".to_string(),
+            "observer-eu-west-1".to_string(),
+        ],
+        proof_root: hex_64("live-rpc-devnet-deposit-proof"),
+        custody_proof_root: hex_64("live-rpc-devnet-custody-proof"),
+        relayer_set_root: hex_64("live-rpc-devnet-relayer-set"),
+        observer_signature_roots: Vec::new(),
+        observer_evidence: Vec::new(),
+        observed_at_unix_ms: 1,
+    };
+    let observer_a = live_observer_evidence(&deposit, "observer-us-east-1", 0xb1);
+    let observer_b = live_observer_evidence(&deposit, "observer-eu-west-1", 0xb2);
+    deposit.observer_signature_roots = vec![
+        observer_a.evidence_root.clone(),
+        observer_b.evidence_root.clone(),
+    ];
+    deposit.observer_evidence = vec![observer_a, observer_b];
+    json!(deposit)
+}
+
+fn live_observer_evidence(
+    deposit: &runtime::RuntimeBridgeDeposit,
+    observer_id: &str,
+    seed: u8,
+) -> runtime::RuntimeBridgeObserverEvidence {
+    let payload_root = runtime::bridge_observer_deposit_payload_root(deposit);
+    let mut evidence = runtime::RuntimeBridgeObserverEvidence {
+        observer_id: observer_id.to_string(),
+        observer_public_key_hex: live_account_id(seed),
+        payload_root: payload_root.clone(),
+        signature: live_sign_root(seed, &payload_root),
+        signed_at_unix_ms: 1,
+        evidence_root: String::new(),
+    };
+    evidence.evidence_root = runtime::bridge_observer_evidence_root(&evidence);
+    evidence
+}
+
+fn live_operator_approval_quorum(
+    withdrawal: &runtime::RuntimeWithdrawalRequest,
+    finalized_monero_tx_id: &str,
+    finalization_proof_root: &str,
+) -> (
+    Vec<String>,
+    Vec<String>,
+    Vec<runtime::RuntimeWithdrawalOperatorApproval>,
+) {
+    let approval_a = live_operator_approval(
+        withdrawal,
+        finalized_monero_tx_id,
+        finalization_proof_root,
+        "operator-a",
+        0xa1,
+    );
+    let approval_b = live_operator_approval(
+        withdrawal,
+        finalized_monero_tx_id,
+        finalization_proof_root,
+        "operator-b",
+        0xa2,
+    );
+    (
+        vec![
+            approval_a.operator_id.clone(),
+            approval_b.operator_id.clone(),
+        ],
+        vec![
+            approval_a.approval_root.clone(),
+            approval_b.approval_root.clone(),
+        ],
+        vec![approval_a, approval_b],
+    )
+}
+
+fn live_operator_approval(
+    withdrawal: &runtime::RuntimeWithdrawalRequest,
+    finalized_monero_tx_id: &str,
+    finalization_proof_root: &str,
+    operator_id: &str,
+    seed: u8,
+) -> runtime::RuntimeWithdrawalOperatorApproval {
+    let payload_root = runtime::withdrawal_operator_finalization_payload_root(
+        withdrawal,
+        finalized_monero_tx_id,
+        finalization_proof_root,
+    );
+    let mut approval = runtime::RuntimeWithdrawalOperatorApproval {
+        operator_id: operator_id.to_string(),
+        operator_public_key_hex: live_account_id(seed),
+        payload_root: payload_root.clone(),
+        signature: live_sign_root(seed, &payload_root),
+        signed_at_unix_ms: 1,
+        approval_root: String::new(),
+    };
+    approval.approval_root = runtime::withdrawal_operator_approval_root(&approval);
+    approval
+}
+
+fn live_rotation_operator_approval_quorum(
+    launch_binding: Option<&runtime::RuntimeLaunchBinding>,
+    previous_sequencer_key_history_root: &str,
+    activation_height: u64,
+    old_public_key_hex: &str,
+    new_public_key_hex: &str,
+    rotation_proof_root: &str,
+) -> (
+    Vec<String>,
+    Vec<String>,
+    Vec<runtime::RuntimeSequencerKeyRotationApproval>,
+) {
+    let approval_a = live_rotation_operator_approval(
+        launch_binding,
+        previous_sequencer_key_history_root,
+        activation_height,
+        old_public_key_hex,
+        new_public_key_hex,
+        rotation_proof_root,
+        "operator-a",
+        0xa1,
+    );
+    let approval_b = live_rotation_operator_approval(
+        launch_binding,
+        previous_sequencer_key_history_root,
+        activation_height,
+        old_public_key_hex,
+        new_public_key_hex,
+        rotation_proof_root,
+        "operator-b",
+        0xa2,
+    );
+    (
+        vec![
+            approval_a.operator_id.clone(),
+            approval_b.operator_id.clone(),
+        ],
+        vec![
+            approval_a.approval_root.clone(),
+            approval_b.approval_root.clone(),
+        ],
+        vec![approval_a, approval_b],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn live_rotation_operator_approval(
+    launch_binding: Option<&runtime::RuntimeLaunchBinding>,
+    previous_sequencer_key_history_root: &str,
+    activation_height: u64,
+    old_public_key_hex: &str,
+    new_public_key_hex: &str,
+    rotation_proof_root: &str,
+    operator_id: &str,
+    seed: u8,
+) -> runtime::RuntimeSequencerKeyRotationApproval {
+    let payload_root = runtime::sequencer_key_rotation_payload_root(
+        launch_binding,
+        previous_sequencer_key_history_root,
+        activation_height,
+        old_public_key_hex,
+        new_public_key_hex,
+        rotation_proof_root,
+    );
+    let mut approval = runtime::RuntimeSequencerKeyRotationApproval {
+        operator_id: operator_id.to_string(),
+        operator_public_key_hex: live_account_id(seed),
+        payload_root: payload_root.clone(),
+        signature: live_sign_root(seed, &payload_root),
+        signed_at_unix_ms: 1,
+        approval_root: String::new(),
+    };
+    approval.approval_root = runtime::sequencer_key_rotation_approval_root(&approval);
+    approval
+}
+
+fn live_value_u64(value: &Value, field: &str) -> Result<u64, AttestationError> {
+    value[field]
+        .as_u64()
+        .ok_or_else(|| live_rehearsal_invalid(format!("{field} must be an unsigned integer")))
+}
+
+fn live_value_u128(value: &Value, field: &str) -> Result<u128, AttestationError> {
+    value[field]
+        .as_u64()
+        .map(u128::from)
+        .ok_or_else(|| live_rehearsal_invalid(format!("{field} must be an unsigned integer")))
+}
+
+fn live_value_bool(value: &Value, field: &str) -> Result<bool, AttestationError> {
+    value[field]
+        .as_bool()
+        .ok_or_else(|| live_rehearsal_invalid(format!("{field} must be a boolean")))
+}
+
+fn live_temp_data_dir(label: &str) -> String {
+    let mut path: PathBuf = std::env::temp_dir();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let thread_id = format!("{:?}", thread::current().id())
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    path.push(format!(
+        "nebula-live-rpc-devnet-{label}-{}-{thread_id}-{nanos}",
+        std::process::id()
+    ));
+    path.to_string_lossy().into_owned()
+}
+
+fn live_rpc_devnet_rehearsal_root(report: &LiveRpcDevnetRehearsalReport) -> String {
+    stable_root(&json!({
+        "live_rpc_devnet_rehearsal_domain": "nebula-live-rpc-devnet-rehearsal-v1",
+        "chain_id": report.chain_id,
+        "runtime_version": report.runtime_version,
+        "level": report.level,
+        "live_rpc_devnet_rehearsed": report.live_rpc_devnet_rehearsed,
+        "public_launch_ready": report.public_launch_ready,
+        "public_launch_blocker": report.public_launch_blocker,
+        "endpoint_url": report.endpoint_url,
+        "block_millis": report.block_millis,
+        "sub_second_blocks": report.sub_second_blocks,
+        "produced_block_count": report.produced_block_count,
+        "runtime_surface_ready": report.runtime_surface_ready,
+        "runtime_surface_root": report.runtime_surface_root,
+        "latest_height": report.latest_height,
+        "sync_quorum_met": report.sync_quorum_met,
+        "sync_successful_peer_count": report.sync_successful_peer_count,
+        "sync_import_count": report.sync_import_count,
+        "sync_last_import_height": report.sync_last_import_height,
+        "sync_quorum_height": report.sync_quorum_height,
+        "bridge_deposit_count": report.bridge_deposit_count,
+        "withdrawal_request_count": report.withdrawal_request_count,
+        "finalized_withdrawal_count": report.finalized_withdrawal_count,
+        "bridge_replay_cache_count": report.bridge_replay_cache_count,
+        "bridge_deposited_nxmr_units": report.bridge_deposited_nxmr_units,
+        "account_nxmr_units": report.account_nxmr_units,
+        "withdrawal_reserved_nxmr_units": report.withdrawal_reserved_nxmr_units,
+        "total_nxmr_fees_units": report.total_nxmr_fees_units,
+        "buyback_pool_nebulai": report.buyback_pool_nebulai,
+        "validator_reward_nebulai": report.validator_reward_nebulai,
+        "bridge_custody_reconciled": report.bridge_custody_reconciled,
+        "nxmr_custody_deficit_units": report.nxmr_custody_deficit_units,
+        "sequencer_key_rotation_count": report.sequencer_key_rotation_count,
+        "launch_package_bundle_root": report.launch_package_bundle_root,
+    }))
 }
 
 fn sample_launch_bundle(
@@ -3879,6 +7727,1048 @@ fn sample_public_surface() -> PublicSurfaceSample {
         economics_root,
         public_status_manifest,
         public_probe,
+    }
+}
+
+fn build_public_surface(
+    input: PublicSurfaceBuildInput,
+) -> Result<PublicSurfaceSample, AttestationError> {
+    let package_identity =
+        build_package_identity(&input.artifact_sha3_256, &input.cargo_lock_sha3_256)?;
+    let readiness = readiness_report();
+    let runtime_root = readiness.status_roots["runtime"]
+        .as_str()
+        .expect("runtime root is a string")
+        .to_string();
+    let economics_root = readiness.status_roots["economics"]
+        .as_str()
+        .expect("economics root is a string")
+        .to_string();
+    let launch_bundle =
+        sample_launch_bundle(&package_identity.root, &runtime_root, &economics_root);
+    let public_status_manifest =
+        sample_public_status_manifest(&launch_bundle.root, &input.endpoint_url);
+    let public_probe =
+        sample_public_probe(&input.endpoint_url, &launch_bundle.root, &economics_root);
+    let mut errors = Vec::new();
+    verify_public_status_manifest(
+        &mut errors,
+        &public_status_manifest,
+        &input.endpoint_url,
+        &launch_bundle.root,
+    );
+    verify_public_probe(
+        &mut errors,
+        &public_probe,
+        &input.endpoint_url,
+        &launch_bundle.root,
+        &economics_root,
+    );
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    Ok(PublicSurfaceSample {
+        endpoint_url: input.endpoint_url,
+        launch_bundle_root: launch_bundle.root,
+        economics_root,
+        public_status_manifest,
+        public_probe,
+    })
+}
+
+fn build_package_identity(
+    artifact_sha3_256: &str,
+    cargo_lock_sha3_256: &str,
+) -> Result<PackageIdentity, AttestationError> {
+    let mut package_identity = PackageIdentity {
+        package_name: "nebula-testnet".to_string(),
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        artifact_sha3_256: artifact_sha3_256.to_string(),
+        cargo_lock_sha3_256: cargo_lock_sha3_256.to_string(),
+        root: String::new(),
+    };
+    package_identity.root = package_identity_root(&package_identity);
+    let mut errors = Vec::new();
+    verify_package_identity(&mut errors, &package_identity);
+    if errors.is_empty() {
+        Ok(package_identity)
+    } else {
+        Err(AttestationError::Invalid(errors))
+    }
+}
+
+fn parse_public_status_manifest_json(
+    input: &str,
+    label: &str,
+) -> Result<PublicStatusManifest, AttestationError> {
+    serde_json::from_str::<PublicStatusManifest>(input.trim_start_matches('\u{feff}'))
+        .map_err(|error| AttestationError::MalformedJson(format!("{label}: {error}")))
+}
+
+fn parse_public_probe_json(input: &str, label: &str) -> Result<PublicProbe, AttestationError> {
+    serde_json::from_str::<PublicProbe>(input.trim_start_matches('\u{feff}'))
+        .map_err(|error| AttestationError::MalformedJson(format!("{label}: {error}")))
+}
+
+fn parse_receipt_json(input: &str, label: &str) -> Result<Receipt, AttestationError> {
+    serde_json::from_str::<Receipt>(input.trim_start_matches('\u{feff}'))
+        .map_err(|error| AttestationError::MalformedJson(format!("{label}: {error}")))
+}
+
+const RUNTIME_STATUS_DURABLE_FIELDS: &[&str] = &[
+    "chain_id",
+    "runtime_version",
+    "launch_binding_present",
+    "launch_endpoint_url",
+    "deployment_attestation_root",
+    "public_status_manifest_root",
+    "public_probe_root",
+    "fee_policy_root",
+    "validator_set_root",
+    "operator_handoff_root",
+    "operator_acceptance_root",
+    "genesis_root",
+    "launch_package_root",
+    "launch_package_bundle_root",
+    "launch_activation_height",
+    "launch_validator_count",
+    "launch_operator_count",
+    "launch_region_count",
+    "node_role",
+    "latest_height",
+    "latest_hash",
+    "latest_state_root",
+    "current_state_root",
+    "block_target_ms",
+    "sub_second_blocks",
+    "gas_price_nebulai",
+    "block_production_enabled",
+    "sequencer_public_key_hex",
+    "sequencer_key_history_root",
+    "accountability_report_count",
+    "accountability_root",
+    "sequencer_accountability_clean",
+    "sync_peer_count",
+    "sync_peer_quorum",
+    "public_testnet_peer_manifest_present",
+    "public_testnet_peer_manifest_root",
+    "public_testnet_peer_manifest_launch_package_bundle_root",
+    "public_testnet_peer_manifest_snapshot_peer_count",
+    "public_testnet_peer_manifest_sync_peer_quorum",
+    "sync_quorum_met",
+    "sync_quorum_peer_count",
+    "sync_quorum_height",
+    "sync_quorum_latest_hash",
+    "sync_quorum_state_root",
+    "sync_successful_peer_count",
+    "sync_failed_peer_count",
+    "rpc_max_request_bytes",
+    "rpc_max_requests_per_minute",
+    "rpc_max_active_connections",
+    "admin_rpc_max_active_connections",
+    "sync_max_snapshot_response_bytes",
+    "rpc_client_identity_mode",
+    "rpc_client_identity_proxy_aware",
+    "rpc_trust_private_proxy_headers",
+    "rpc_trusted_proxy_count",
+    "admin_rpc_enabled",
+    "admin_rpc_private_listener",
+    "public_rpc_admin_methods_enabled",
+    "default_dev_sequencer_key",
+    "max_mempool_transactions",
+    "mempool_size",
+    "mempool_capacity_remaining",
+    "mempool_full_rejection_count",
+    "mempool_admission_rejection_count",
+    "total_nxmr_fees_units",
+    "buyback_pool_nebulai",
+    "validator_reward_nebulai",
+    "validator_reward_account",
+    "faucet_nbla_nebulai",
+    "faucet_nxmr_units",
+    "bridge_only_nxmr",
+    "bridge_deposited_nxmr_units",
+    "account_nxmr_units",
+    "withdrawal_reserved_nxmr_units",
+    "nxmr_fee_units",
+    "nxmr_custody_required_units",
+    "nxmr_custody_surplus_units",
+    "bridge_custody_reconciled",
+    "nxmr_custody_deficit_units",
+    "bridge_policy_root",
+    "bridge_min_deposit_confirmations",
+    "bridge_deposit_observer_quorum",
+    "bridge_withdrawal_operator_quorum",
+    "bridge_live_value_enabled",
+    "bridge_deposit_count",
+    "withdrawal_request_count",
+    "finalized_withdrawal_count",
+];
+
+const RUNTIME_OPS_DURABLE_FIELDS: &[&str] = &[
+    "service",
+    "chain_id",
+    "runtime_version",
+    "launch_binding_present",
+    "launch_endpoint_url",
+    "deployment_attestation_root",
+    "public_status_manifest_root",
+    "public_probe_root",
+    "fee_policy_root",
+    "validator_set_root",
+    "operator_handoff_root",
+    "operator_acceptance_root",
+    "genesis_root",
+    "launch_package_root",
+    "launch_package_bundle_root",
+    "launch_activation_height",
+    "launch_validator_count",
+    "launch_operator_count",
+    "launch_region_count",
+    "node_role",
+    "latest_height",
+    "latest_hash",
+    "block_target_ms",
+    "sub_second_blocks",
+    "gas_price_nebulai",
+    "block_production_enabled",
+    "snapshot_version",
+    "snapshot_root",
+    "state_root",
+    "current_state_root",
+    "storage_snapshot_path",
+    "storage_snapshot_present",
+    "storage_snapshot_root",
+    "storage_snapshot_height",
+    "storage_snapshot_matches_runtime",
+    "sync_peer_count",
+    "sync_peer_quorum",
+    "public_testnet_peer_manifest_present",
+    "public_testnet_peer_manifest_root",
+    "public_testnet_peer_manifest_launch_package_bundle_root",
+    "public_testnet_peer_manifest_snapshot_peer_count",
+    "public_testnet_peer_manifest_sync_peer_quorum",
+    "sync_quorum_met",
+    "sync_quorum_peer_count",
+    "sync_quorum_height",
+    "sync_quorum_latest_hash",
+    "sync_quorum_state_root",
+    "sync_successful_peer_count",
+    "sync_failed_peer_count",
+    "rpc_max_request_bytes",
+    "rpc_max_requests_per_minute",
+    "rpc_max_active_connections",
+    "admin_rpc_max_active_connections",
+    "sync_max_snapshot_response_bytes",
+    "rpc_client_identity_mode",
+    "rpc_client_identity_proxy_aware",
+    "rpc_trust_private_proxy_headers",
+    "rpc_trusted_proxy_count",
+    "admin_rpc_enabled",
+    "admin_rpc_private_listener",
+    "public_rpc_admin_methods_enabled",
+    "default_dev_sequencer_key",
+    "max_mempool_transactions",
+    "mempool_size",
+    "mempool_capacity_remaining",
+    "mempool_full_rejection_count",
+    "mempool_admission_rejection_count",
+    "sequencer_public_key_hex",
+    "sequencer_key_rotation_count",
+    "sequencer_latest_rotation_activation_height",
+    "sequencer_key_history_root",
+    "accountability_report_count",
+    "accountability_root",
+    "sequencer_accountability_clean",
+    "bridge_policy_root",
+    "bridge_live_value_enabled",
+    "faucet_nbla_nebulai",
+    "faucet_nxmr_units",
+    "bridge_only_nxmr",
+    "bridge_deposited_nxmr_units",
+    "account_nxmr_units",
+    "withdrawal_reserved_nxmr_units",
+    "nxmr_fee_units",
+    "nxmr_custody_required_units",
+    "nxmr_custody_surplus_units",
+    "nxmr_custody_deficit_units",
+    "bridge_custody_reconciled",
+    "public_ops_ready",
+    "blocking_gaps",
+];
+
+const RUNTIME_BACKUP_DURABLE_FIELDS: &[&str] = &[
+    "manifest_version",
+    "chain_id",
+    "runtime_version",
+    "launch_binding_present",
+    "launch_endpoint_url",
+    "deployment_attestation_root",
+    "public_status_manifest_root",
+    "public_probe_root",
+    "fee_policy_root",
+    "validator_set_root",
+    "operator_handoff_root",
+    "operator_acceptance_root",
+    "genesis_root",
+    "launch_package_root",
+    "launch_package_bundle_root",
+    "launch_activation_height",
+    "launch_validator_count",
+    "launch_operator_count",
+    "launch_region_count",
+    "latest_height",
+    "latest_hash",
+    "snapshot_version",
+    "snapshot_root",
+    "state_root",
+    "current_state_root",
+    "gas_price_nebulai",
+    "snapshot_path",
+    "snapshot_persisted",
+    "storage_snapshot_root",
+    "storage_snapshot_matches_runtime",
+    "sequencer_public_key_hex",
+    "sequencer_key_rotation_count",
+    "sequencer_latest_rotation_activation_height",
+    "sequencer_key_history_root",
+    "accountability_report_count",
+    "accountability_root",
+    "sequencer_accountability_clean",
+    "bridge_policy_root",
+    "sync_peer_count",
+    "sync_peer_quorum",
+    "public_testnet_peer_manifest_present",
+    "public_testnet_peer_manifest_root",
+    "public_testnet_peer_manifest_launch_package_bundle_root",
+    "public_testnet_peer_manifest_snapshot_peer_count",
+    "public_testnet_peer_manifest_sync_peer_quorum",
+    "sync_quorum_met",
+    "sync_quorum_peer_count",
+    "sync_quorum_height",
+    "sync_quorum_latest_hash",
+    "sync_quorum_state_root",
+    "sync_successful_peer_count",
+    "sync_failed_peer_count",
+    "rpc_max_request_bytes",
+    "rpc_max_requests_per_minute",
+    "rpc_max_active_connections",
+    "admin_rpc_max_active_connections",
+    "sync_max_snapshot_response_bytes",
+    "rpc_client_identity_mode",
+    "rpc_client_identity_proxy_aware",
+    "rpc_trust_private_proxy_headers",
+    "rpc_trusted_proxy_count",
+    "admin_rpc_enabled",
+    "admin_rpc_private_listener",
+    "public_rpc_admin_methods_enabled",
+    "default_dev_sequencer_key",
+    "max_mempool_transactions",
+    "mempool_size",
+    "mempool_capacity_remaining",
+    "mempool_full_rejection_count",
+    "mempool_admission_rejection_count",
+    "faucet_nbla_nebulai",
+    "faucet_nxmr_units",
+    "bridge_only_nxmr",
+    "bridge_deposited_nxmr_units",
+    "account_nxmr_units",
+    "withdrawal_reserved_nxmr_units",
+    "nxmr_fee_units",
+    "nxmr_custody_required_units",
+    "nxmr_custody_surplus_units",
+    "nxmr_custody_deficit_units",
+    "bridge_custody_reconciled",
+];
+
+fn parse_json_value(input: &str, label: &str) -> Result<Value, AttestationError> {
+    serde_json::from_str::<Value>(input.trim_start_matches('\u{feff}'))
+        .map_err(|error| AttestationError::MalformedJson(format!("{label}: {error}")))
+}
+
+fn json_string_field(value: &Value, label: &str) -> Result<String, AttestationError> {
+    let field = label.rsplit('.').next().unwrap_or(label);
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| AttestationError::Invalid(vec![format!("{label} must be a string")]))
+}
+
+fn json_u128_field(value: &Value, label: &str) -> Result<u128, AttestationError> {
+    let field = label.rsplit('.').next().unwrap_or(label);
+    let Some(value) = value.get(field) else {
+        return Err(AttestationError::Invalid(vec![format!(
+            "{label} must be a u128"
+        )]));
+    };
+    if let Some(number) = value.as_u64() {
+        return Ok(u128::from(number));
+    }
+    if let Some(text) = value.as_str() {
+        return text.parse::<u128>().map_err(|error| {
+            AttestationError::Invalid(vec![format!("{label} must be a u128: {error}")])
+        });
+    }
+    Err(AttestationError::Invalid(vec![format!(
+        "{label} must be a u128"
+    )]))
+}
+
+fn runtime_surface_evidence_root(evidence: &RuntimeSurfaceEvidence) -> String {
+    stable_root(&json!({
+        "runtime_surface_domain": "nebula-runtime-surface-evidence-v1",
+        "chain_id": evidence.chain_id,
+        "runtime_version": evidence.runtime_version,
+        "endpoint_url": evidence.endpoint_url,
+        "capture_mode": evidence.capture_mode,
+        "tls_observation": evidence.tls_observation,
+        "captured_at_unix_ms": evidence.captured_at_unix_ms,
+        "health": evidence.health,
+        "status": evidence.status,
+        "snapshot": evidence.snapshot,
+        "ops": evidence.ops,
+        "backup": evidence.backup,
+        "rpc_status": evidence.rpc_status,
+        "rpc_ops_status": evidence.rpc_ops_status,
+        "rpc_backup_manifest": evidence.rpc_backup_manifest,
+        "metrics_text": evidence.metrics_text,
+    }))
+}
+
+fn rpc_result_or_value<'a>(errors: &mut Vec<String>, label: &str, value: &'a Value) -> &'a Value {
+    if value.get("error").is_some() {
+        errors.push(format!("{label} contains a JSON-RPC error"));
+    }
+    value.get("result").unwrap_or(value)
+}
+
+fn require_value_eq(errors: &mut Vec<String>, label: &str, actual: &Value, expected: &Value) {
+    if actual != expected {
+        errors.push(format!("{label} does not match expected captured value"));
+    }
+}
+
+fn verify_runtime_surface_tls_observation(
+    errors: &mut Vec<String>,
+    tls_observation: &TlsEndpointPin,
+    now: u128,
+) {
+    require_hex_root(
+        errors,
+        "runtime_surface.tls_observation.cert_sha256",
+        &tls_observation.cert_sha256,
+    );
+    require_hex_root(
+        errors,
+        "runtime_surface.tls_observation.public_key_sha256",
+        &tls_observation.public_key_sha256,
+    );
+    if tls_observation.cert_sha256 == tls_observation.public_key_sha256 {
+        errors.push(
+            "runtime_surface.tls_observation.public_key_sha256 must differ from cert_sha256"
+                .to_string(),
+        );
+    }
+    if tls_observation.not_after_unix_ms <= now {
+        errors.push("runtime_surface.tls_observation.not_after_unix_ms is stale".to_string());
+    }
+}
+
+fn tls_endpoint_pins_match(left: &TlsEndpointPin, right: &TlsEndpointPin) -> bool {
+    left.cert_sha256.eq_ignore_ascii_case(&right.cert_sha256)
+        && left
+            .public_key_sha256
+            .eq_ignore_ascii_case(&right.public_key_sha256)
+        && left.not_after_unix_ms == right.not_after_unix_ms
+}
+
+fn require_durable_field_set_eq(
+    errors: &mut Vec<String>,
+    left_label: &str,
+    left: &Value,
+    right_label: &str,
+    right: &Value,
+    fields: &[&str],
+) {
+    for field in fields {
+        let actual = left.get(*field).unwrap_or(&Value::Null);
+        let expected = right.get(*field).unwrap_or(&Value::Null);
+        if actual != expected {
+            errors.push(format!(
+                "{left_label}.{field} does not match {right_label}.{field}"
+            ));
+        }
+    }
+}
+
+fn parse_surface_value<T: serde::de::DeserializeOwned>(
+    errors: &mut Vec<String>,
+    label: &str,
+    value: &Value,
+) -> Option<T> {
+    match serde_json::from_value::<T>(value.clone()) {
+        Ok(parsed) => Some(parsed),
+        Err(error) => {
+            errors.push(format!("{label} failed typed decode: {error}"));
+            None
+        }
+    }
+}
+
+fn json_bool(value: &Value, field: &str) -> Option<bool> {
+    value.get(field).and_then(Value::as_bool)
+}
+
+fn require_health_status_agreement(errors: &mut Vec<String>, health: &Value, status: &Value) {
+    for field in [
+        "chain_id",
+        "runtime_version",
+        "launch_binding_present",
+        "launch_endpoint_url",
+        "deployment_attestation_root",
+        "public_status_manifest_root",
+        "public_probe_root",
+        "fee_policy_root",
+        "validator_set_root",
+        "operator_handoff_root",
+        "operator_acceptance_root",
+        "genesis_root",
+        "launch_package_root",
+        "launch_package_bundle_root",
+        "launch_activation_height",
+        "launch_validator_count",
+        "launch_operator_count",
+        "launch_region_count",
+        "node_role",
+        "latest_height",
+        "latest_hash",
+        "latest_state_root",
+        "current_state_root",
+        "block_target_ms",
+        "sub_second_blocks",
+        "gas_price_nebulai",
+        "block_production_enabled",
+        "sequencer_public_key_hex",
+        "sequencer_key_history_root",
+        "accountability_root",
+        "bridge_policy_root",
+        "sync_peer_count",
+        "sync_peer_quorum",
+        "public_testnet_peer_manifest_present",
+        "public_testnet_peer_manifest_root",
+        "public_testnet_peer_manifest_launch_package_bundle_root",
+        "public_testnet_peer_manifest_snapshot_peer_count",
+        "public_testnet_peer_manifest_sync_peer_quorum",
+        "sync_quorum_met",
+        "sync_quorum_peer_count",
+        "sync_quorum_height",
+        "sync_quorum_latest_hash",
+        "sync_quorum_state_root",
+        "sync_successful_peer_count",
+        "admin_rpc_enabled",
+        "admin_rpc_private_listener",
+        "public_rpc_admin_methods_enabled",
+        "default_dev_sequencer_key",
+        "max_mempool_transactions",
+        "mempool_size",
+        "mempool_capacity_remaining",
+        "mempool_full_rejection_count",
+        "mempool_admission_rejection_count",
+        "faucet_nbla_nebulai",
+        "faucet_nxmr_units",
+        "bridge_only_nxmr",
+        "bridge_custody_reconciled",
+        "nxmr_custody_deficit_units",
+        "bridge_deposit_count",
+        "withdrawal_request_count",
+        "finalized_withdrawal_count",
+    ] {
+        let actual = health.get(field).unwrap_or(&Value::Null);
+        let expected = status.get(field).unwrap_or(&Value::Null);
+        if actual != expected {
+            errors.push(format!("health.{field} does not match status.{field}"));
+        }
+    }
+    if health.get("ok") != Some(&Value::Bool(true)) {
+        errors.push("health.ok must be true".to_string());
+    }
+    require_hex_root_from_value(errors, "health.ops_root", health.get("ops_root"));
+    require_hex_root_from_value(errors, "health.backup_root", health.get("backup_root"));
+}
+
+fn require_ops_backup_snapshot_agreement(
+    errors: &mut Vec<String>,
+    health: &Value,
+    status: &Value,
+    snapshot: &Value,
+    ops: &Value,
+    backup: &Value,
+) {
+    let latest_block = snapshot
+        .get("blocks")
+        .and_then(Value::as_array)
+        .and_then(|blocks| blocks.last());
+    require_value_eq(
+        errors,
+        "snapshot.config.chain_id",
+        snapshot.pointer("/config/chain_id").unwrap_or(&Value::Null),
+        status.get("chain_id").unwrap_or(&Value::Null),
+    );
+    require_value_eq(
+        errors,
+        "snapshot.config.runtime_version",
+        snapshot
+            .pointer("/config/runtime_version")
+            .unwrap_or(&Value::Null),
+        status.get("runtime_version").unwrap_or(&Value::Null),
+    );
+    let snapshot_launch_binding_present = Value::Bool(
+        snapshot
+            .pointer("/config/launch_binding")
+            .is_some_and(|value| !value.is_null()),
+    );
+    require_value_eq(
+        errors,
+        "snapshot.config.launch_binding_present",
+        &snapshot_launch_binding_present,
+        status.get("launch_binding_present").unwrap_or(&Value::Null),
+    );
+    require_value_eq(
+        errors,
+        "snapshot.config.gas_price_nebulai",
+        snapshot
+            .pointer("/config/gas_price_nebulai")
+            .unwrap_or(&Value::Null),
+        status.get("gas_price_nebulai").unwrap_or(&Value::Null),
+    );
+    if let Some(launch_binding) = snapshot
+        .pointer("/config/launch_binding")
+        .and_then(Value::as_object)
+    {
+        for (snapshot_field, status_field) in [
+            ("endpoint_url", "launch_endpoint_url"),
+            ("deployment_attestation_root", "deployment_attestation_root"),
+            ("public_status_manifest_root", "public_status_manifest_root"),
+            ("public_probe_root", "public_probe_root"),
+            ("fee_policy_root", "fee_policy_root"),
+            ("validator_set_root", "validator_set_root"),
+            ("operator_handoff_root", "operator_handoff_root"),
+            ("operator_acceptance_root", "operator_acceptance_root"),
+            ("genesis_root", "genesis_root"),
+            ("launch_package_root", "launch_package_root"),
+            ("launch_package_bundle_root", "launch_package_bundle_root"),
+            ("activation_height", "launch_activation_height"),
+            ("validator_count", "launch_validator_count"),
+            ("operator_count", "launch_operator_count"),
+            ("region_count", "launch_region_count"),
+        ] {
+            require_value_eq(
+                errors,
+                &format!("snapshot.config.launch_binding.{snapshot_field}"),
+                launch_binding.get(snapshot_field).unwrap_or(&Value::Null),
+                status.get(status_field).unwrap_or(&Value::Null),
+            );
+        }
+    }
+    if let Some(latest_block) = latest_block {
+        require_value_eq(
+            errors,
+            "status.latest_height",
+            status.get("latest_height").unwrap_or(&Value::Null),
+            latest_block.get("height").unwrap_or(&Value::Null),
+        );
+        require_value_eq(
+            errors,
+            "status.latest_hash",
+            status.get("latest_hash").unwrap_or(&Value::Null),
+            latest_block.get("block_hash").unwrap_or(&Value::Null),
+        );
+        require_value_eq(
+            errors,
+            "status.latest_state_root",
+            status.get("latest_state_root").unwrap_or(&Value::Null),
+            latest_block.get("state_root").unwrap_or(&Value::Null),
+        );
+    } else {
+        errors.push("snapshot.blocks must contain a latest block".to_string());
+    }
+    require_value_eq(
+        errors,
+        "status.current_state_root",
+        status.get("current_state_root").unwrap_or(&Value::Null),
+        snapshot.get("state_root").unwrap_or(&Value::Null),
+    );
+    require_value_eq(
+        errors,
+        "health.snapshot_root",
+        health.get("snapshot_root").unwrap_or(&Value::Null),
+        snapshot.get("root").unwrap_or(&Value::Null),
+    );
+    require_value_eq(
+        errors,
+        "ops.snapshot_root",
+        ops.get("snapshot_root").unwrap_or(&Value::Null),
+        snapshot.get("root").unwrap_or(&Value::Null),
+    );
+    require_value_eq(
+        errors,
+        "backup.snapshot_root",
+        backup.get("snapshot_root").unwrap_or(&Value::Null),
+        snapshot.get("root").unwrap_or(&Value::Null),
+    );
+    for field in ["latest_height", "latest_hash", "current_state_root"] {
+        require_value_eq(
+            errors,
+            &format!("ops.{field}"),
+            ops.get(field).unwrap_or(&Value::Null),
+            status.get(field).unwrap_or(&Value::Null),
+        );
+        require_value_eq(
+            errors,
+            &format!("backup.{field}"),
+            backup.get(field).unwrap_or(&Value::Null),
+            status.get(field).unwrap_or(&Value::Null),
+        );
+    }
+    for field in [
+        "storage_snapshot_matches_runtime",
+        "sync_peer_count",
+        "sync_peer_quorum",
+        "public_testnet_peer_manifest_present",
+        "public_testnet_peer_manifest_root",
+        "public_testnet_peer_manifest_launch_package_bundle_root",
+        "public_testnet_peer_manifest_snapshot_peer_count",
+        "public_testnet_peer_manifest_sync_peer_quorum",
+        "sync_successful_peer_count",
+        "rpc_max_request_bytes",
+        "rpc_max_requests_per_minute",
+        "rpc_max_active_connections",
+        "admin_rpc_max_active_connections",
+        "sync_max_snapshot_response_bytes",
+        "rpc_client_identity_mode",
+        "rpc_client_identity_proxy_aware",
+        "rpc_trust_private_proxy_headers",
+        "rpc_trusted_proxy_count",
+        "admin_rpc_enabled",
+        "admin_rpc_private_listener",
+        "public_rpc_admin_methods_enabled",
+        "default_dev_sequencer_key",
+        "gas_price_nebulai",
+        "mempool_capacity_remaining",
+        "bridge_policy_root",
+        "bridge_custody_reconciled",
+        "launch_binding_present",
+        "launch_endpoint_url",
+        "deployment_attestation_root",
+        "public_status_manifest_root",
+        "public_probe_root",
+        "fee_policy_root",
+        "validator_set_root",
+        "operator_handoff_root",
+        "operator_acceptance_root",
+        "genesis_root",
+        "launch_package_root",
+        "launch_package_bundle_root",
+        "launch_activation_height",
+        "launch_validator_count",
+        "launch_operator_count",
+        "launch_region_count",
+    ] {
+        let backup_field = field;
+        require_value_eq(
+            errors,
+            &format!("health.{field}"),
+            health.get(field).unwrap_or(&Value::Null),
+            ops.get(field).unwrap_or(&Value::Null),
+        );
+        require_value_eq(
+            errors,
+            &format!("backup.{backup_field}"),
+            backup.get(backup_field).unwrap_or(&Value::Null),
+            ops.get(field).unwrap_or(&Value::Null),
+        );
+    }
+    require_value_eq(
+        errors,
+        "health.public_ops_ready",
+        health.get("public_ops_ready").unwrap_or(&Value::Null),
+        ops.get("public_ops_ready").unwrap_or(&Value::Null),
+    );
+    require_value_eq(
+        errors,
+        "health.public_ops_blocking_gaps",
+        health
+            .get("public_ops_blocking_gaps")
+            .unwrap_or(&Value::Null),
+        ops.get("blocking_gaps").unwrap_or(&Value::Null),
+    );
+}
+
+fn require_metrics_agreement(
+    errors: &mut Vec<String>,
+    metrics_text: &str,
+    status: &Value,
+    snapshot: &runtime::RuntimeSnapshot,
+) {
+    let latest_height = snapshot.latest_height();
+    require_metric_value(errors, metrics_text, "nebula_latest_height", latest_height);
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_sub_second_blocks",
+        u8::from(json_bool(status, "sub_second_blocks").unwrap_or(false)),
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_gas_price_nebulai",
+        status,
+        "gas_price_nebulai",
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_launch_binding_present",
+        u8::from(json_bool(status, "launch_binding_present").unwrap_or(false)),
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_launch_validator_count",
+        status,
+        "launch_validator_count",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_launch_operator_count",
+        status,
+        "launch_operator_count",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_launch_region_count",
+        status,
+        "launch_region_count",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_sync_peer_quorum",
+        status,
+        "sync_peer_quorum",
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_public_testnet_peer_manifest_present",
+        u8::from(json_bool(status, "public_testnet_peer_manifest_present").unwrap_or(false)),
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_public_testnet_peer_manifest_snapshot_peer_count",
+        status,
+        "public_testnet_peer_manifest_snapshot_peer_count",
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_public_testnet_peer_manifest_sync_peer_quorum",
+        status
+            .get("public_testnet_peer_manifest_sync_peer_quorum")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_sync_quorum_met",
+        u8::from(json_bool(status, "sync_quorum_met").unwrap_or(false)),
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_sync_quorum_peer_count",
+        status,
+        "sync_quorum_peer_count",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_sync_successful_peer_count",
+        status,
+        "sync_successful_peer_count",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_mempool_capacity_remaining",
+        status,
+        "mempool_capacity_remaining",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_total_nxmr_fees_units",
+        status,
+        "total_nxmr_fees_units",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_buyback_pool_nebulai",
+        status,
+        "buyback_pool_nebulai",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_validator_reward_nebulai",
+        status,
+        "validator_reward_nebulai",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_rpc_max_request_bytes",
+        status,
+        "rpc_max_request_bytes",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_rpc_max_requests_per_minute",
+        status,
+        "rpc_max_requests_per_minute",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_rpc_max_active_connections",
+        status,
+        "rpc_max_active_connections",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_admin_rpc_max_active_connections",
+        status,
+        "admin_rpc_max_active_connections",
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_sync_max_snapshot_response_bytes",
+        status,
+        "sync_max_snapshot_response_bytes",
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_rpc_client_identity_proxy_aware",
+        u8::from(json_bool(status, "rpc_client_identity_proxy_aware").unwrap_or(false)),
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_rpc_trust_private_proxy_headers",
+        u8::from(json_bool(status, "rpc_trust_private_proxy_headers").unwrap_or(false)),
+    );
+    require_metric_from_json(
+        errors,
+        metrics_text,
+        "nebula_rpc_trusted_proxy_count",
+        status,
+        "rpc_trusted_proxy_count",
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_admin_rpc_enabled",
+        u8::from(json_bool(status, "admin_rpc_enabled").unwrap_or(false)),
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_admin_rpc_private_listener",
+        u8::from(json_bool(status, "admin_rpc_private_listener").unwrap_or(false)),
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_public_rpc_admin_methods_enabled",
+        u8::from(json_bool(status, "public_rpc_admin_methods_enabled").unwrap_or(false)),
+    );
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_default_dev_sequencer_key",
+        u8::from(json_bool(status, "default_dev_sequencer_key").unwrap_or(false)),
+    );
+    require_metric_value(errors, metrics_text, "nebula_bridge_custody_reconciled", 1);
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_storage_snapshot_matches_runtime",
+        1,
+    );
+    require_metric_value(errors, metrics_text, "nebula_public_ops_ready", 1);
+    require_metric_value(
+        errors,
+        metrics_text,
+        "nebula_public_ops_blocking_gap_count",
+        0,
+    );
+}
+
+fn require_metric_from_json(
+    errors: &mut Vec<String>,
+    metrics_text: &str,
+    metric_name: &str,
+    json: &Value,
+    field: &str,
+) {
+    match json.get(field) {
+        Some(value) => require_metric_value(errors, metrics_text, metric_name, value),
+        None => errors.push(format!("{field} is missing from status JSON")),
+    }
+}
+
+fn require_metric_value<T: ToString>(
+    errors: &mut Vec<String>,
+    metrics_text: &str,
+    metric_name: &str,
+    expected: T,
+) {
+    let expected = expected.to_string();
+    match metric_value(metrics_text, metric_name) {
+        Some(actual) if actual == expected => {}
+        Some(actual) => errors.push(format!(
+            "metric {metric_name} expected {expected} but got {actual}"
+        )),
+        None => errors.push(format!("metric {metric_name} is missing")),
+    }
+}
+
+fn metric_value<'a>(metrics_text: &'a str, metric_name: &str) -> Option<&'a str> {
+    metrics_text.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        match (parts.next(), parts.next()) {
+            (Some(name), Some(value)) if name == metric_name => Some(value),
+            _ => None,
+        }
+    })
+}
+
+fn require_hex_root_from_value(errors: &mut Vec<String>, label: &str, value: Option<&Value>) {
+    match value.and_then(Value::as_str) {
+        Some(root) => require_hex_root(errors, label, root),
+        None => errors.push(format!("{label} must be a 64-character hex root")),
     }
 }
 
@@ -4733,11 +9623,6 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &observer.observed_evidence_root,
             &witness_evidence_root,
         );
-        require_hex_root(
-            errors,
-            &format!("observers[{index}].signature.signature_sha3_256"),
-            &observer.signature.signature_sha3_256,
-        );
         require_eq(
             errors,
             &format!("observers[{index}].signature.algorithm"),
@@ -4771,11 +9656,14 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &observer.signature.signature_sha3_256,
             &observer_signature_root(observer, &witness_evidence_root),
         );
-        if !observer.signature.verified {
-            errors.push(format!(
-                "observers[{index}].signature.verified must be true"
-            ));
-        }
+        verify_signature_material(
+            errors,
+            &format!("observers[{index}].signature"),
+            &observer.signature,
+            "ed25519-testnet-attestation",
+            &observer.signature.public_key,
+            &observer_signature_root(observer, &witness_evidence_root),
+        );
     }
     if observer_ids.len() < MIN_PUBLIC_TESTNET_OBSERVERS {
         errors.push(format!(
@@ -4900,6 +9788,7 @@ fn verify_validator_deployment_binding(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verify_validator_admission(
     errors: &mut Vec<String>,
     index: usize,
@@ -5388,6 +10277,7 @@ fn deployment_observer_confirmation_root(attestation: &DeploymentAttestation) ->
                 observer.signature.algorithm.as_str(),
                 observer.signature.public_key.as_str(),
                 observer.signature.signature_sha3_256.as_str(),
+                observer.signature.signature_hex.as_str(),
                 observer.signature.verified,
             )
         })
@@ -5404,6 +10294,7 @@ fn deployment_observer_confirmation_root(attestation: &DeploymentAttestation) ->
                 algorithm,
                 public_key,
                 signature_sha3_256,
+                signature_hex,
                 verified,
             )| {
                 json!({
@@ -5414,6 +10305,7 @@ fn deployment_observer_confirmation_root(attestation: &DeploymentAttestation) ->
                     "algorithm": algorithm,
                     "public_key": public_key,
                     "signature_sha3_256": signature_sha3_256,
+                    "signature_hex": signature_hex,
                     "verified": verified,
                 })
             },
@@ -5754,7 +10646,7 @@ fn validator_deployment_binding_root(
             })
         })
         .collect::<Vec<_>>();
-    bindings.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+    bindings.sort_by_key(|left| left.to_string());
 
     stable_root(&json!({
         "binding_domain": "nebula-validator-deployment-binding-v1",
@@ -5912,7 +10804,8 @@ fn operator_acceptance_manifest(
                     algorithm: "ed25519-testnet-operator-acceptance".to_string(),
                     public_key: String::new(),
                     signature_sha3_256: String::new(),
-                    verified: true,
+                    signature_hex: String::new(),
+                    verified: false,
                 },
             };
             entry.signature.public_key = entry.operator_public_key.clone();
@@ -5923,6 +10816,7 @@ fn operator_acceptance_manifest(
                 accepted_at_unix_ms,
             );
             entry.signature.signature_sha3_256 = operator_acceptance_signature_root(&entry);
+            complete_sample_signature(&mut entry.signature);
             entry
         })
         .collect::<Vec<_>>();
@@ -6087,6 +10981,130 @@ fn launch_package_bundle_root(manifest: &LaunchPackageBundleManifest) -> String 
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn public_testnet_peer_manifest_from_jsons(
+    generated_at_unix_ms: u128,
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<PublicTestnetPeerManifest, AttestationError> {
+    let launch_report = verify_launch_package_with_operator_acceptance_jsons(
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let bundle_report = verify_launch_package_bundle_jsons(
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let deployment_attestation =
+        verified_deployment_attestation_manifest(deployment_attestation_json)?;
+    let validator_set = verified_validator_set_manifest(validator_set_json)?;
+    let bootstrap_nodes_by_id = deployment_attestation
+        .bootstrap_nodes
+        .iter()
+        .map(|node| (node.node_id.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    let mut errors = Vec::new();
+    let mut peers = Vec::new();
+
+    for validator in &validator_set.validators {
+        let Some(bootstrap_node) = bootstrap_nodes_by_id.get(validator.node_id.as_str()) else {
+            errors.push(format!(
+                "validator {} node_id {} is not present in deployment bootstrap_nodes",
+                validator.validator_id, validator.node_id
+            ));
+            continue;
+        };
+        let bootstrap_endpoint = bootstrap_node.endpoint.trim_end_matches('/');
+        peers.push(PublicTestnetPeer {
+            validator_id: validator.validator_id.clone(),
+            operator_id: validator.operator_id.clone(),
+            node_id: validator.node_id.clone(),
+            region: validator.region.clone(),
+            p2p_endpoint: validator.p2p_endpoint.clone(),
+            bootstrap_endpoint: bootstrap_node.endpoint.clone(),
+            rpc_url: format!("{bootstrap_endpoint}/rpc"),
+            status_url: format!("{bootstrap_endpoint}/status"),
+            snapshot_url: format!("{bootstrap_endpoint}/snapshot"),
+            consensus_public_key: validator.consensus_public_key.clone(),
+            network_public_key: validator.network_public_key.clone(),
+            reward_account: validator.reward_account.clone(),
+            bootstrap_attestation_root: bootstrap_node.attestation_root.clone(),
+        });
+    }
+
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    peers.sort_by(|left, right| {
+        (
+            left.operator_id.as_str(),
+            left.validator_id.as_str(),
+            left.node_id.as_str(),
+        )
+            .cmp(&(
+                right.operator_id.as_str(),
+                right.validator_id.as_str(),
+                right.node_id.as_str(),
+            ))
+    });
+    let sync_peer_quorum = peers.len().saturating_sub(1).max(1);
+    let mut manifest = PublicTestnetPeerManifest {
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        generated_at_unix_ms,
+        endpoint_url: launch_report.endpoint_url,
+        launch_package_bundle_root: bundle_report.launch_package_bundle_root,
+        launch_package_root: bundle_report.launch_package_root,
+        deployment_attestation_root: bundle_report.deployment_attestation_root,
+        validator_set_root: bundle_report.validator_set_root,
+        operator_handoff_root: bundle_report.operator_handoff_root,
+        operator_acceptance_root: bundle_report.operator_acceptance_root,
+        genesis_root: bundle_report.genesis_root,
+        sync_peer_quorum,
+        peers,
+        root: String::new(),
+    };
+    manifest.root = public_testnet_peer_manifest_root(&manifest);
+    Ok(manifest)
+}
+
+fn public_testnet_peer_manifest_root(manifest: &PublicTestnetPeerManifest) -> String {
+    stable_root(&json!({
+        "peer_manifest_domain": "nebula-public-testnet-peer-manifest-v1",
+        "chain_id": manifest.chain_id,
+        "runtime_version": manifest.runtime_version,
+        "generated_at_unix_ms": manifest.generated_at_unix_ms,
+        "endpoint_url": manifest.endpoint_url,
+        "launch_package_bundle_root": manifest.launch_package_bundle_root,
+        "launch_package_root": manifest.launch_package_root,
+        "deployment_attestation_root": manifest.deployment_attestation_root,
+        "validator_set_root": manifest.validator_set_root,
+        "operator_handoff_root": manifest.operator_handoff_root,
+        "operator_acceptance_root": manifest.operator_acceptance_root,
+        "genesis_root": manifest.genesis_root,
+        "sync_peer_quorum": manifest.sync_peer_quorum,
+        "peers": manifest.peers,
+    }))
+}
+
 fn validator_activation_manifest(
     bundle_report: &LaunchPackageBundleReport,
     acceptance_report: &OperatorAcceptanceReport,
@@ -6113,7 +11131,8 @@ fn validator_activation_manifest(
                     algorithm: "ed25519-testnet-validator-activation".to_string(),
                     public_key: validator.consensus_public_key.clone(),
                     signature_sha3_256: String::new(),
-                    verified: true,
+                    signature_hex: String::new(),
+                    verified: false,
                 },
             };
             entry.activation_root = validator_activation_entry_root(
@@ -6123,6 +11142,7 @@ fn validator_activation_manifest(
                 activated_at_unix_ms,
             );
             entry.signature.signature_sha3_256 = validator_activation_signature_root(&entry);
+            complete_sample_signature(&mut entry.signature);
             entry
         })
         .collect::<Vec<_>>();
@@ -6228,12 +11248,14 @@ fn validator_join_receipt(
                     algorithm: "ed25519-testnet-validator-join".to_string(),
                     public_key: activation_entry.consensus_public_key.clone(),
                     signature_sha3_256: String::new(),
-                    verified: true,
+                    signature_hex: String::new(),
+                    verified: false,
                 },
             };
             entry.join_root =
                 validator_join_entry_root(&entry, activation_height, joined_at_unix_ms);
             entry.signature.signature_sha3_256 = validator_join_signature_root(&entry);
+            complete_sample_signature(&mut entry.signature);
             entry
         })
         .collect::<Vec<_>>();
@@ -6355,15 +11377,14 @@ fn verify_validator_join_entries(
             &entry.join_root,
             &validator_join_entry_root(entry, receipt.activation_height, receipt.joined_at_unix_ms),
         );
-        require_root(
+        verify_signature_material(
             errors,
-            &format!("entries[{index}].signature.signature_sha3_256"),
-            &entry.signature.signature_sha3_256,
+            &format!("entries[{index}].signature"),
+            &entry.signature,
+            "ed25519-testnet-validator-join",
+            &entry.consensus_public_key,
             &validator_join_signature_root(entry),
         );
-        if !entry.signature.verified {
-            errors.push(format!("entries[{index}].signature.verified must be true"));
-        }
     }
 }
 
@@ -6469,7 +11490,8 @@ fn operator_join_confirmation_manifest(
                     algorithm: "ed25519-testnet-operator-join-confirmation".to_string(),
                     public_key: String::new(),
                     signature_sha3_256: String::new(),
-                    verified: true,
+                    signature_hex: String::new(),
+                    verified: false,
                 },
             };
             entry.signature.public_key = entry.operator_public_key.clone();
@@ -6482,6 +11504,7 @@ fn operator_join_confirmation_manifest(
                 confirmed_at_unix_ms,
             );
             entry.signature.signature_sha3_256 = operator_join_confirmation_signature_root(&entry);
+            complete_sample_signature(&mut entry.signature);
             entry
         })
         .collect::<Vec<_>>();
@@ -6592,13 +11615,15 @@ fn public_observer_confirmation_manifest(
                     algorithm: "ed25519-testnet-public-observer-confirmation".to_string(),
                     public_key: observer.signature.public_key.clone(),
                     signature_sha3_256: String::new(),
-                    verified: true,
+                    signature_hex: String::new(),
+                    verified: false,
                 },
             };
             entry.observation_root =
                 public_observer_confirmation_entry_root(&entry, observed_at_unix_ms);
             entry.signature.signature_sha3_256 =
                 public_observer_confirmation_signature_root(&entry);
+            complete_sample_signature(&mut entry.signature);
             entry
         })
         .collect::<Vec<_>>();
@@ -6669,6 +11694,264 @@ fn public_observer_confirmation_manifest_root(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn verified_launch_certificate_reports(
+    public_observer_confirmation_json: &str,
+    runtime_surface_evidence_json: &str,
+    operator_join_confirmation_json: &str,
+    validator_join_receipt_json: &str,
+    validator_activation_json: &str,
+    launch_package_bundle_json: &str,
+    deployment_attestation_json: &str,
+    public_status_json: &str,
+    public_probe_json: &str,
+    validator_set_json: &str,
+    operator_handoff_json: &str,
+    operator_acceptance_json: &str,
+    genesis_manifest_json: &str,
+) -> Result<LaunchCertificateReports, AttestationError> {
+    let launch_package_bundle = verify_launch_package_bundle_jsons(
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let validator_activation = verify_validator_activation_jsons(
+        validator_activation_json,
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let validator_join = verify_validator_join_receipt_jsons(
+        validator_join_receipt_json,
+        validator_activation_json,
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let operator_join_confirmation = verify_operator_join_confirmation_jsons(
+        operator_join_confirmation_json,
+        validator_join_receipt_json,
+        validator_activation_json,
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let public_observer_confirmation = verify_public_observer_confirmation_jsons(
+        public_observer_confirmation_json,
+        operator_join_confirmation_json,
+        validator_join_receipt_json,
+        validator_activation_json,
+        launch_package_bundle_json,
+        deployment_attestation_json,
+        public_status_json,
+        public_probe_json,
+        validator_set_json,
+        operator_handoff_json,
+        operator_acceptance_json,
+        genesis_manifest_json,
+    )?;
+    let runtime_surface = verify_runtime_surface_evidence_json(runtime_surface_evidence_json)?;
+    let genesis = verify_genesis_manifest_json(genesis_manifest_json)?;
+    let deployment = verify_deployment_attestation_json(deployment_attestation_json)?;
+    let public_probe = parse_public_probe_json(public_probe_json, "public_probe")?;
+    let mut errors = Vec::new();
+    require_eq(
+        &mut errors,
+        "runtime_surface.endpoint_url",
+        &runtime_surface.endpoint_url,
+        &public_observer_confirmation.endpoint_url,
+    );
+    require_root(
+        &mut errors,
+        "runtime_surface.launch_package_bundle_root",
+        &runtime_surface.launch_package_bundle_root,
+        &launch_package_bundle.launch_package_bundle_root,
+    );
+    require_root(
+        &mut errors,
+        "runtime_surface.launch_package_root",
+        &runtime_surface.launch_package_root,
+        &launch_package_bundle.launch_package_root,
+    );
+    require_root(
+        &mut errors,
+        "runtime_surface.fee_policy_root",
+        &runtime_surface.fee_policy_root,
+        &public_probe.body.fee_policy_root,
+    );
+    require_root(
+        &mut errors,
+        "runtime_surface.validator_set_root",
+        &runtime_surface.validator_set_root,
+        &launch_package_bundle.validator_set_root,
+    );
+    require_root(
+        &mut errors,
+        "runtime_surface.genesis_root",
+        &runtime_surface.genesis_root,
+        &genesis.genesis_root,
+    );
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    Ok(LaunchCertificateReports {
+        launch_package_bundle,
+        validator_activation,
+        validator_join,
+        operator_join_confirmation,
+        public_observer_confirmation,
+        runtime_surface,
+        genesis,
+        deployment,
+    })
+}
+
+fn public_testnet_launch_certificate(
+    reports: &LaunchCertificateReports,
+    certified_at_unix_ms: u128,
+) -> PublicTestnetLaunchCertificate {
+    let mut certificate = PublicTestnetLaunchCertificate {
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        launch_package_bundle_root: reports
+            .launch_package_bundle
+            .launch_package_bundle_root
+            .clone(),
+        launch_package_root: reports.launch_package_bundle.launch_package_root.clone(),
+        fee_policy_root: reports.runtime_surface.fee_policy_root.clone(),
+        validator_activation_root: reports
+            .validator_activation
+            .validator_activation_root
+            .clone(),
+        validator_join_root: reports.validator_join.validator_join_root.clone(),
+        operator_join_confirmation_root: reports
+            .operator_join_confirmation
+            .operator_join_confirmation_root
+            .clone(),
+        public_observer_confirmation_root: reports
+            .public_observer_confirmation
+            .public_observer_confirmation_root
+            .clone(),
+        public_status_manifest_root: reports
+            .public_observer_confirmation
+            .public_status_manifest_root
+            .clone(),
+        public_probe_root: reports
+            .public_observer_confirmation
+            .public_probe_root
+            .clone(),
+        runtime_surface_root: reports.runtime_surface.runtime_surface_root.clone(),
+        validator_set_root: reports.launch_package_bundle.validator_set_root.clone(),
+        genesis_root: reports.genesis.genesis_root.clone(),
+        endpoint_url: reports.public_observer_confirmation.endpoint_url.clone(),
+        certified_at_unix_ms,
+        validator_count: reports.validator_join.joined_validator_count,
+        operator_count: reports.operator_join_confirmation.confirmed_operator_count,
+        observer_count: reports
+            .public_observer_confirmation
+            .confirmed_observer_count,
+        region_count: reports.deployment.verified_region_count,
+        root: String::new(),
+    };
+    certificate.root = public_testnet_launch_certificate_root(&certificate);
+    certificate
+}
+
+fn public_testnet_launch_certificate_root(certificate: &PublicTestnetLaunchCertificate) -> String {
+    stable_root(&json!({
+        "launch_certificate_domain": "nebula-public-testnet-launch-certificate-v1",
+        "chain_id": certificate.chain_id,
+        "runtime_version": certificate.runtime_version,
+        "launch_package_bundle_root": certificate.launch_package_bundle_root,
+        "launch_package_root": certificate.launch_package_root,
+        "fee_policy_root": certificate.fee_policy_root,
+        "validator_activation_root": certificate.validator_activation_root,
+        "validator_join_root": certificate.validator_join_root,
+        "operator_join_confirmation_root": certificate.operator_join_confirmation_root,
+        "public_observer_confirmation_root": certificate.public_observer_confirmation_root,
+        "public_status_manifest_root": certificate.public_status_manifest_root,
+        "public_probe_root": certificate.public_probe_root,
+        "runtime_surface_root": certificate.runtime_surface_root,
+        "validator_set_root": certificate.validator_set_root,
+        "genesis_root": certificate.genesis_root,
+        "endpoint_url": certificate.endpoint_url,
+        "certified_at_unix_ms": certificate.certified_at_unix_ms,
+        "validator_count": certificate.validator_count,
+        "operator_count": certificate.operator_count,
+        "observer_count": certificate.observer_count,
+        "region_count": certificate.region_count,
+    }))
+}
+
+fn public_testnet_launch_readiness_root(report: &PublicTestnetLaunchReadinessReport) -> String {
+    stable_root(&json!({
+        "launch_readiness_domain": "nebula-public-testnet-launch-readiness-v1",
+        "level": report.level,
+        "public_launch_ready": report.public_launch_ready,
+        "blocking_gaps": report.blocking_gaps,
+        "satisfied_attestation": report.satisfied_attestation,
+        "public_testnet_launch_certificate_root": report.public_testnet_launch_certificate_root,
+        "deployment_attestation_root": report.deployment_attestation_root,
+        "launch_package_bundle_root": report.launch_package_bundle_root,
+        "launch_package_root": report.launch_package_root,
+        "fee_policy_root": report.fee_policy_root,
+        "validator_activation_root": report.validator_activation_root,
+        "validator_join_root": report.validator_join_root,
+        "operator_join_confirmation_root": report.operator_join_confirmation_root,
+        "public_observer_confirmation_root": report.public_observer_confirmation_root,
+        "public_status_manifest_root": report.public_status_manifest_root,
+        "public_probe_root": report.public_probe_root,
+        "runtime_surface_root": report.runtime_surface_root,
+        "runtime_surface_capture_mode": report.runtime_surface_capture_mode,
+        "live_rpc_devnet_rehearsal_root": report.live_rpc_devnet_rehearsal_root,
+        "live_rpc_devnet_runtime_surface_root": report.live_rpc_devnet_runtime_surface_root,
+        "validator_set_root": report.validator_set_root,
+        "genesis_root": report.genesis_root,
+        "endpoint_url": report.endpoint_url,
+        "validator_count": report.validator_count,
+        "operator_count": report.operator_count,
+        "observer_count": report.observer_count,
+        "region_count": report.region_count,
+        "certified_at_unix_ms": report.certified_at_unix_ms,
+        "generated_at_unix_ms": report.generated_at_unix_ms,
+    }))
+}
+
+fn public_testnet_launch_readiness_rejection_root(
+    report: &PublicTestnetLaunchReadinessRejectionReport,
+) -> String {
+    stable_root(&json!({
+        "launch_readiness_rejection_domain": "nebula-public-testnet-launch-readiness-rejection-v1",
+        "level": report.level,
+        "public_launch_ready": report.public_launch_ready,
+        "blocking_gaps": report.blocking_gaps,
+        "errors": report.errors,
+        "required_attestation": report.required_attestation,
+        "generated_at_unix_ms": report.generated_at_unix_ms,
+    }))
+}
+
 fn genesis_manifest_root(manifest: &GenesisManifest) -> String {
     stable_root(&json!({
         "chain_id": manifest.chain_id,
@@ -6723,6 +12006,102 @@ fn require_hex_root(errors: &mut Vec<String>, label: &str, value: &str) {
 fn require_hex_value(errors: &mut Vec<String>, label: &str, value: &str) {
     if value.len() != 64 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
         errors.push(format!("{label} must be a 64-character hex value"));
+    }
+}
+
+fn require_signature_hex(errors: &mut Vec<String>, label: &str, value: &str) {
+    if value.len() != 128 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
+        errors.push(format!(
+            "{label} must be a 128-character hex Ed25519 signature"
+        ));
+    }
+}
+
+fn decode_fixed_hex(value: &str, label: &str, expected_len: usize) -> Result<Vec<u8>, String> {
+    let decoded = hex::decode(value).map_err(|error| format!("{label} must be hex: {error}"))?;
+    if decoded.len() != expected_len {
+        return Err(format!("{label} must decode to {expected_len} bytes"));
+    }
+    Ok(decoded)
+}
+
+fn verifying_key_from_hex(public_key_hex: &str, label: &str) -> Result<VerifyingKey, String> {
+    let bytes = decode_fixed_hex(public_key_hex, label, 32)?;
+    let bytes: [u8; 32] = bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| format!("{label} must decode to 32 bytes"))?;
+    VerifyingKey::from_bytes(&bytes)
+        .map_err(|error| format!("{label} is not an Ed25519 key: {error}"))
+}
+
+fn verify_ed25519_signature(
+    public_key_hex: &str,
+    signing_root: &str,
+    signature_hex: &str,
+    signature_label: &str,
+) -> Result<(), String> {
+    if signing_root.len() != 64 || !signing_root.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("signing root must be a 64-character hex root".to_string());
+    }
+    let verifying_key = verifying_key_from_hex(public_key_hex, "public_key")?;
+    let signature_bytes = decode_fixed_hex(signature_hex, signature_label, 64)?;
+    let signature_bytes: [u8; 64] = signature_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| format!("{signature_label} must decode to 64 bytes"))?;
+    let signature = Signature::from_bytes(&signature_bytes);
+    verifying_key
+        .verify(signing_root.as_bytes(), &signature)
+        .map_err(|error| format!("{signature_label} Ed25519 verification failed: {error}"))
+}
+
+fn verify_signature_material(
+    errors: &mut Vec<String>,
+    label: &str,
+    signature: &SignatureVerification,
+    expected_algorithm: &str,
+    expected_public_key: &str,
+    expected_signature_root: &str,
+) {
+    require_eq(
+        errors,
+        &format!("{label}.algorithm"),
+        &signature.algorithm,
+        expected_algorithm,
+    );
+    require_eq(
+        errors,
+        &format!("{label}.public_key"),
+        &signature.public_key,
+        expected_public_key,
+    );
+    require_hex_value(
+        errors,
+        &format!("{label}.public_key"),
+        &signature.public_key,
+    );
+    require_root(
+        errors,
+        &format!("{label}.signature_sha3_256"),
+        &signature.signature_sha3_256,
+        expected_signature_root,
+    );
+    require_signature_hex(
+        errors,
+        &format!("{label}.signature_hex"),
+        &signature.signature_hex,
+    );
+    if !signature.verified {
+        errors.push(format!("{label}.verified must be true"));
+    }
+    if let Err(error) = verify_ed25519_signature(
+        &signature.public_key,
+        expected_signature_root,
+        &signature.signature_hex,
+        &format!("{label}.signature_hex"),
+    ) {
+        errors.push(error);
     }
 }
 
@@ -6875,6 +12254,68 @@ fn hex_64(label: &str) -> String {
     stable_root(&json!({ "sample": label }))
 }
 
+fn sample_ed25519_public_key_hex(seed: u8) -> String {
+    hex::encode(
+        SigningKey::from_bytes(&[seed; 32])
+            .verifying_key()
+            .to_bytes(),
+    )
+}
+
+fn sample_ed25519_secret_key_hex(seed: u8) -> String {
+    hex::encode([seed; 32])
+}
+
+fn sign_root_with_secret_key(secret_key_hex: &str, signing_root: &str) -> Result<String, String> {
+    if signing_root.len() != 64 || !signing_root.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("signing root must be a 64-character hex root".to_string());
+    }
+    let bytes = decode_fixed_hex(secret_key_hex, "secret_key_hex", 32)?;
+    let bytes: [u8; 32] = bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "secret_key_hex must decode to 32 bytes".to_string())?;
+    let signing_key = SigningKey::from_bytes(&bytes);
+    Ok(hex::encode(
+        signing_key.sign(signing_root.as_bytes()).to_bytes(),
+    ))
+}
+
+fn public_key_hex_for_secret_key(secret_key_hex: &str) -> Result<String, String> {
+    let bytes = decode_fixed_hex(secret_key_hex, "secret_key_hex", 32)?;
+    let bytes: [u8; 32] = bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "secret_key_hex must decode to 32 bytes".to_string())?;
+    Ok(hex::encode(
+        SigningKey::from_bytes(&bytes).verifying_key().to_bytes(),
+    ))
+}
+
+fn sample_secret_key_for_public_key(public_key_hex: &str) -> Option<String> {
+    [0xa1, 0xa2, 0xb1, 0xb2, 0xc1, 0xc2, 0xd1, 0xd2, 0xe1, 0xe2]
+        .into_iter()
+        .find(|seed| sample_ed25519_public_key_hex(*seed) == public_key_hex)
+        .map(sample_ed25519_secret_key_hex)
+}
+
+fn sample_signature_for_public_key(public_key_hex: &str, signing_root: &str) -> Option<String> {
+    sample_secret_key_for_public_key(public_key_hex)
+        .and_then(|secret_key| sign_root_with_secret_key(&secret_key, signing_root).ok())
+}
+
+fn complete_sample_signature(signature: &mut SignatureVerification) {
+    if let Some(signature_hex) =
+        sample_signature_for_public_key(&signature.public_key, &signature.signature_sha3_256)
+    {
+        signature.signature_hex = signature_hex;
+        signature.verified = true;
+    } else {
+        signature.signature_hex.clear();
+        signature.verified = false;
+    }
+}
+
 fn stable_root(value: &Value) -> String {
     let bytes = serde_json::to_vec(value).expect("status root input serializes");
     let digest = Sha3_256::digest(bytes);
@@ -6894,7 +12335,7 @@ fn split_basis_points(amount: u128, bps: u128) -> Result<u128, FeeError> {
 }
 
 fn ceil_div(numerator: u128, denominator: u128) -> u128 {
-    numerator / denominator + u128::from(numerator % denominator != 0)
+    numerator / denominator + u128::from(!numerator.is_multiple_of(denominator))
 }
 
 fn unix_ms() -> u128 {
@@ -6907,6 +12348,334 @@ fn unix_ms() -> u128 {
 #[cfg(test)]
 mod public_launch {
     use super::*;
+
+    fn external_public_runtime_surface_from(
+        runtime_surface_json: &str,
+        tls_observation: Option<TlsEndpointPin>,
+    ) -> Result<String, AttestationError> {
+        let evidence = serde_json::from_str::<RuntimeSurfaceEvidence>(runtime_surface_json)
+            .expect("runtime surface evidence parses");
+        build_runtime_surface_evidence_json_pretty(RuntimeSurfaceEvidenceBuildInput {
+            endpoint_url: evidence.endpoint_url,
+            capture_mode: RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT.to_string(),
+            tls_observation,
+            captured_at_unix_ms: unix_ms(),
+            health_json: evidence.health.to_string(),
+            status_json: evidence.status.to_string(),
+            snapshot_json: evidence.snapshot.to_string(),
+            ops_json: evidence.ops.to_string(),
+            backup_json: evidence.backup.to_string(),
+            rpc_status_json: evidence.rpc_status.to_string(),
+            rpc_ops_status_json: evidence.rpc_ops_status.to_string(),
+            rpc_backup_manifest_json: evidence.rpc_backup_manifest.to_string(),
+            metrics_text: evidence.metrics_text,
+        })
+    }
+
+    fn runtime_surface_with_endpoint_url(
+        runtime_surface_json: &str,
+        endpoint_url: &str,
+    ) -> Result<String, AttestationError> {
+        let mut evidence = serde_json::from_str::<RuntimeSurfaceEvidence>(runtime_surface_json)
+            .expect("runtime surface evidence parses");
+        evidence.endpoint_url = endpoint_url.to_string();
+        evidence.status["launch_endpoint_url"] = json!(endpoint_url);
+
+        let mut snapshot =
+            serde_json::from_value::<runtime::RuntimeSnapshot>(evidence.snapshot.clone())
+                .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+        if let Some(launch_binding) = snapshot.config.launch_binding.as_mut() {
+            launch_binding.endpoint_url = endpoint_url.to_string();
+        }
+        snapshot.root = runtime::runtime_snapshot_root(&snapshot);
+        evidence.snapshot = serde_json::to_value(&snapshot)
+            .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+
+        let mut ops = serde_json::from_value::<runtime::RuntimeOpsStatus>(evidence.ops.clone())
+            .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+        ops.launch_endpoint_url = Some(endpoint_url.to_string());
+        ops.snapshot_root = snapshot.root.clone();
+        ops.ops_root = runtime::runtime_ops_status_root(&ops);
+        evidence.ops = serde_json::to_value(&ops)
+            .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+
+        let mut backup =
+            serde_json::from_value::<runtime::RuntimeBackupManifest>(evidence.backup.clone())
+                .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+        backup.launch_endpoint_url = Some(endpoint_url.to_string());
+        backup.snapshot_root = snapshot.root.clone();
+        backup.backup_root = runtime::runtime_backup_manifest_root(&backup);
+        evidence.backup = serde_json::to_value(&backup)
+            .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+
+        evidence.health["launch_endpoint_url"] = json!(endpoint_url);
+        evidence.health["snapshot_root"] = json!(snapshot.root);
+        evidence.health["ops_root"] = json!(ops.ops_root);
+        evidence.health["backup_root"] = json!(backup.backup_root);
+
+        match evidence.rpc_status.get_mut("result") {
+            Some(result) => *result = evidence.status.clone(),
+            None => evidence.rpc_status = evidence.status.clone(),
+        }
+        match evidence.rpc_ops_status.get_mut("result") {
+            Some(result) => *result = evidence.ops.clone(),
+            None => evidence.rpc_ops_status = evidence.ops.clone(),
+        }
+        match evidence.rpc_backup_manifest.get_mut("result") {
+            Some(result) => *result = evidence.backup.clone(),
+            None => evidence.rpc_backup_manifest = evidence.backup.clone(),
+        }
+        evidence.root = runtime_surface_evidence_root(&evidence);
+        let output = serde_json::to_string_pretty(&evidence)
+            .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+        verify_runtime_surface_evidence_json(&output)?;
+        Ok(output)
+    }
+
+    fn runtime_surface_with_economics_counters(
+        runtime_surface_json: &str,
+        total_nxmr_fees_units: u128,
+        buyback_pool_nebulai: u128,
+        validator_reward_nebulai: u128,
+    ) -> Result<String, AttestationError> {
+        let mut evidence = serde_json::from_str::<RuntimeSurfaceEvidence>(runtime_surface_json)
+            .expect("runtime surface evidence parses");
+        evidence.status["total_nxmr_fees_units"] = json!(total_nxmr_fees_units);
+        evidence.status["buyback_pool_nebulai"] = json!(buyback_pool_nebulai);
+        evidence.status["validator_reward_nebulai"] = json!(validator_reward_nebulai);
+        match evidence.rpc_status.get_mut("result") {
+            Some(result) => *result = evidence.status.clone(),
+            None => evidence.rpc_status = evidence.status.clone(),
+        }
+        evidence.metrics_text = metrics_text_with_value(
+            &evidence.metrics_text,
+            "nebula_total_nxmr_fees_units",
+            total_nxmr_fees_units,
+        );
+        evidence.metrics_text = metrics_text_with_value(
+            &evidence.metrics_text,
+            "nebula_buyback_pool_nebulai",
+            buyback_pool_nebulai,
+        );
+        evidence.metrics_text = metrics_text_with_value(
+            &evidence.metrics_text,
+            "nebula_validator_reward_nebulai",
+            validator_reward_nebulai,
+        );
+        evidence.root = runtime_surface_evidence_root(&evidence);
+        let output = serde_json::to_string_pretty(&evidence)
+            .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+        verify_runtime_surface_evidence_json(&output)?;
+        Ok(output)
+    }
+
+    fn runtime_surface_with_snapshot_economics_counters(
+        runtime_surface_json: &str,
+        total_nxmr_fees_units: u128,
+        buyback_pool_nebulai: u128,
+        validator_reward_nebulai: u128,
+    ) -> String {
+        let mut evidence = serde_json::from_str::<RuntimeSurfaceEvidence>(runtime_surface_json)
+            .expect("runtime surface evidence parses");
+        let mut snapshot =
+            serde_json::from_value::<runtime::RuntimeSnapshot>(evidence.snapshot.clone())
+                .expect("snapshot parses");
+        snapshot.total_nxmr_fees_units = total_nxmr_fees_units;
+        snapshot.buyback_pool_nebulai = buyback_pool_nebulai;
+        snapshot.validator_reward_nebulai = validator_reward_nebulai;
+        snapshot.state_root = runtime_snapshot_state_root_for_test(&snapshot);
+        let active_sequencer_secret_key_hex = "4d".repeat(32);
+        assert_eq!(
+            public_key_hex_for_secret_key(&active_sequencer_secret_key_hex)
+                .expect("sequencer public key"),
+            snapshot.config.sequencer_public_key_hex
+        );
+        let latest_block = snapshot
+            .blocks
+            .last_mut()
+            .expect("snapshot has a latest block");
+        latest_block.state_root = snapshot.state_root.clone();
+        latest_block.block_hash = runtime_block_root_for_test(latest_block);
+        latest_block.signature =
+            sign_root_with_secret_key(&active_sequencer_secret_key_hex, &latest_block.block_hash)
+                .expect("latest block signature");
+        let latest_hash = latest_block.block_hash.clone();
+        snapshot.root = runtime::runtime_snapshot_root(&snapshot);
+
+        evidence.status["total_nxmr_fees_units"] = json!(total_nxmr_fees_units);
+        evidence.status["buyback_pool_nebulai"] = json!(buyback_pool_nebulai);
+        evidence.status["validator_reward_nebulai"] = json!(validator_reward_nebulai);
+        evidence.status["latest_hash"] = json!(latest_hash);
+        evidence.status["latest_state_root"] = json!(snapshot.state_root.clone());
+        evidence.status["current_state_root"] = json!(snapshot.state_root.clone());
+        evidence.status["sync_quorum_latest_hash"] = evidence.status["latest_hash"].clone();
+        evidence.status["sync_quorum_state_root"] = json!(snapshot.state_root.clone());
+
+        evidence.health["latest_hash"] = evidence.status["latest_hash"].clone();
+        evidence.health["latest_state_root"] = evidence.status["latest_state_root"].clone();
+        evidence.health["current_state_root"] = evidence.status["current_state_root"].clone();
+        evidence.health["snapshot_root"] = json!(snapshot.root.clone());
+
+        let ops_root = update_surface_ops_like_for_snapshot_economics(
+            &mut evidence.ops,
+            &evidence.status,
+            &snapshot,
+        );
+        let backup_root = update_surface_ops_like_for_snapshot_economics(
+            &mut evidence.backup,
+            &evidence.status,
+            &snapshot,
+        );
+        evidence.health["ops_root"] = json!(ops_root);
+        evidence.health["backup_root"] = json!(backup_root);
+
+        evidence.snapshot = serde_json::to_value(&snapshot).expect("snapshot serializes");
+        match evidence.rpc_status.get_mut("result") {
+            Some(result) => *result = evidence.status.clone(),
+            None => evidence.rpc_status = evidence.status.clone(),
+        }
+        match evidence.rpc_ops_status.get_mut("result") {
+            Some(result) => *result = evidence.ops.clone(),
+            None => evidence.rpc_ops_status = evidence.ops.clone(),
+        }
+        match evidence.rpc_backup_manifest.get_mut("result") {
+            Some(result) => *result = evidence.backup.clone(),
+            None => evidence.rpc_backup_manifest = evidence.backup.clone(),
+        }
+        evidence.metrics_text = metrics_text_with_value(
+            &evidence.metrics_text,
+            "nebula_total_nxmr_fees_units",
+            total_nxmr_fees_units,
+        );
+        evidence.metrics_text = metrics_text_with_value(
+            &evidence.metrics_text,
+            "nebula_buyback_pool_nebulai",
+            buyback_pool_nebulai,
+        );
+        evidence.metrics_text = metrics_text_with_value(
+            &evidence.metrics_text,
+            "nebula_validator_reward_nebulai",
+            validator_reward_nebulai,
+        );
+        evidence.root = runtime_surface_evidence_root(&evidence);
+        serde_json::to_string_pretty(&evidence).expect("runtime surface serializes")
+    }
+
+    fn update_surface_ops_like_for_snapshot_economics(
+        value: &mut Value,
+        status: &Value,
+        snapshot: &runtime::RuntimeSnapshot,
+    ) -> String {
+        value["latest_hash"] = status["latest_hash"].clone();
+        value["latest_state_root"] = status["latest_state_root"].clone();
+        value["current_state_root"] = status["current_state_root"].clone();
+        value["sync_quorum_latest_hash"] = status["sync_quorum_latest_hash"].clone();
+        value["sync_quorum_state_root"] = status["sync_quorum_state_root"].clone();
+        value["snapshot_root"] = json!(snapshot.root.clone());
+        value["storage_snapshot_root"] = json!(snapshot.root.clone());
+        value["total_nxmr_fees_units"] = status["total_nxmr_fees_units"].clone();
+        value["buyback_pool_nebulai"] = status["buyback_pool_nebulai"].clone();
+        value["validator_reward_nebulai"] = status["validator_reward_nebulai"].clone();
+        if value.get("ops_root").is_some() {
+            let mut ops = serde_json::from_value::<runtime::RuntimeOpsStatus>(value.clone())
+                .expect("ops parses");
+            ops.ops_root = runtime::runtime_ops_status_root(&ops);
+            let root = ops.ops_root.clone();
+            *value = serde_json::to_value(ops).expect("ops serializes");
+            root
+        } else {
+            let mut backup =
+                serde_json::from_value::<runtime::RuntimeBackupManifest>(value.clone())
+                    .expect("backup parses");
+            backup.backup_root = runtime::runtime_backup_manifest_root(&backup);
+            let root = backup.backup_root.clone();
+            *value = serde_json::to_value(backup).expect("backup serializes");
+            root
+        }
+    }
+
+    fn runtime_snapshot_state_root_for_test(snapshot: &runtime::RuntimeSnapshot) -> String {
+        stable_root(&json!({
+            "state_domain": "nebula-runtime-state-v1",
+            "accounts": snapshot.accounts,
+            "bridge_deposits": snapshot.bridge_deposits,
+            "withdrawals": snapshot.withdrawals,
+            "total_nxmr_fees_units": snapshot.total_nxmr_fees_units,
+            "buyback_pool_nebulai": snapshot.buyback_pool_nebulai,
+            "validator_reward_nebulai": snapshot.validator_reward_nebulai,
+        }))
+    }
+
+    fn runtime_block_root_for_test(block: &runtime::RuntimeBlock) -> String {
+        stable_root(&json!({
+            "block_domain": "nebula-runtime-block-v1",
+            "height": block.height,
+            "parent_hash": block.parent_hash,
+            "timestamp_unix_ms": block.timestamp_unix_ms,
+            "producer": block.producer,
+            "producer_public_key": block.producer_public_key,
+            "tx_root": block.tx_root,
+            "state_root": block.state_root,
+        }))
+    }
+
+    fn metrics_text_with_value(metrics_text: &str, metric_name: &str, value: u128) -> String {
+        let prefix = format!("{metric_name} ");
+        metrics_text
+            .lines()
+            .map(|line| {
+                if line.starts_with(&prefix) {
+                    format!("{prefix}{value}")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    struct SampleLaunchArtifacts {
+        deployment: String,
+        public_status: String,
+        public_probe: String,
+        validators: String,
+        handoff: String,
+        acceptance: String,
+        genesis: String,
+        bundle: String,
+    }
+
+    fn sample_launch_artifacts() -> SampleLaunchArtifacts {
+        let deployment = sample_deployment_attestation_json_pretty();
+        let public_status = sample_public_status_manifest_json_pretty();
+        let public_probe = sample_public_probe_json_pretty();
+        let validators = sample_validator_set_json_pretty();
+        let handoff = build_operator_handoff_json_pretty(&deployment, &validators).unwrap();
+        let acceptance =
+            build_operator_acceptance_json_pretty(&handoff, &deployment, &validators).unwrap();
+        let genesis = build_genesis_manifest_json_pretty(&deployment, &validators).unwrap();
+        let bundle = build_launch_package_bundle_json_pretty(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+
+        SampleLaunchArtifacts {
+            deployment,
+            public_status,
+            public_probe,
+            validators,
+            handoff,
+            acceptance,
+            genesis,
+            bundle,
+        }
+    }
 
     #[test]
     fn public_launch_blocks_without_deployment_attestation() {
@@ -6946,8 +12715,13 @@ mod public_launch {
         assert_eq!(report.economics.nebulai_per_nbla, 1_000_000);
         assert_eq!(report.economics.target_nxmr_per_nbla_numerator, 1);
         assert_eq!(report.economics.target_nxmr_per_nbla_denominator, 1_000);
-        assert_eq!(report.economics.nxmr_reserve_backing_bps, 9_000);
-        assert_eq!(report.economics.nxmr_validator_reward_bps, 1_000);
+        assert_eq!(report.economics.nxmr_buyback_bps, 10_000);
+        assert_eq!(report.economics.nxmr_reserve_backing_bps, 0);
+        assert_eq!(report.economics.nxmr_validator_reward_bps, 10_000);
+        assert_eq!(
+            report.status_roots["economics"].as_str().unwrap(),
+            fee_policy_root()
+        );
     }
 
     #[test]
@@ -6956,10 +12730,12 @@ mod public_launch {
 
         for root_name in [
             "launch_package_bundle",
+            "public_testnet_peer_manifest",
             "validator_activation",
             "validator_join",
             "operator_join_confirmation",
             "public_observer_confirmation",
+            "public_testnet_launch_certificate",
         ] {
             let root = report.status_roots[root_name].as_str().unwrap();
             assert_eq!(root.len(), 64);
@@ -7012,7 +12788,168 @@ mod public_launch {
         assert_eq!(report.public_probe_root.len(), 64);
         assert_eq!(report.endpoint_url, "https://testnet.nebula.example/status");
         assert_eq!(report.launch_bundle_root.len(), 64);
-        assert_eq!(report.fee_policy_root.len(), 64);
+        assert_eq!(report.fee_policy_root, fee_policy_root());
+    }
+
+    #[test]
+    fn builds_deployment_attestation_for_custom_public_surface() {
+        let endpoint_url = "https://public.testnet.nebula.example/status";
+        let public_status_json =
+            build_public_status_manifest_json_pretty(PublicSurfaceBuildInput {
+                endpoint_url: endpoint_url.to_string(),
+                artifact_sha3_256: default_artifact_sha3_256(),
+                cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+            })
+            .unwrap();
+        let public_probe_json = build_public_probe_json_pretty(PublicSurfaceBuildInput {
+            endpoint_url: endpoint_url.to_string(),
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+        })
+        .unwrap();
+        let preflight_receipt_json = sample_preflight_receipt_json_pretty();
+        let runbook_receipt_json = sample_runbook_receipt_json_pretty();
+        let generated_at_unix_ms = unix_ms();
+        let output = build_deployment_attestation_json_pretty(DeploymentAttestationBuildInput {
+            public_status_json: public_status_json.clone(),
+            public_probe_json: public_probe_json.clone(),
+            preflight_receipt_json,
+            runbook_receipt_json,
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+            generated_at_unix_ms,
+            expires_at_unix_ms: generated_at_unix_ms + 86_400_000,
+            tls_pins: vec![
+                TlsEndpointPin {
+                    cert_sha256: hex_64("custom-tls-cert-a"),
+                    public_key_sha256: hex_64("custom-tls-key-a"),
+                    not_after_unix_ms: generated_at_unix_ms + 2_592_000_000,
+                },
+                TlsEndpointPin {
+                    cert_sha256: hex_64("custom-tls-cert-b"),
+                    public_key_sha256: hex_64("custom-tls-key-b"),
+                    not_after_unix_ms: generated_at_unix_ms + 2_592_000_000,
+                },
+            ],
+            bootstrap_nodes: vec![
+                BootstrapNodeBuildInput {
+                    node_id: "bootstrap-us-east-1".to_string(),
+                    operator_id: "operator-a".to_string(),
+                    region: "us-east".to_string(),
+                    endpoint: "https://bootstrap-a.public-nebula.example".to_string(),
+                },
+                BootstrapNodeBuildInput {
+                    node_id: "bootstrap-eu-west-1".to_string(),
+                    operator_id: "operator-b".to_string(),
+                    region: "eu-west".to_string(),
+                    endpoint: "https://bootstrap-b.public-nebula.example".to_string(),
+                },
+            ],
+            operators: vec![
+                OperatorBuildInput {
+                    operator_id: "operator-a".to_string(),
+                    region: "us-east".to_string(),
+                    public_key: hex_64("custom-operator-a"),
+                },
+                OperatorBuildInput {
+                    operator_id: "operator-b".to_string(),
+                    region: "eu-west".to_string(),
+                    public_key: hex_64("custom-operator-b"),
+                },
+            ],
+            observers: vec![
+                ObserverBuildInput {
+                    observer_id: "observer-us-east-1".to_string(),
+                    region: "us-east".to_string(),
+                    public_key: sample_ed25519_public_key_hex(0xe1),
+                    secret_key_hex: Some(sample_ed25519_secret_key_hex(0xe1)),
+                },
+                ObserverBuildInput {
+                    observer_id: "observer-eu-west-1".to_string(),
+                    region: "eu-west".to_string(),
+                    public_key: sample_ed25519_public_key_hex(0xe2),
+                    secret_key_hex: Some(sample_ed25519_secret_key_hex(0xe2)),
+                },
+            ],
+            rollback_plan_sha3_256: hex_64("custom-rollback-plan"),
+            rollback_last_drill_unix_ms: generated_at_unix_ms,
+            rollback_recovery_point_root: hex_64("custom-rollback-recovery"),
+        })
+        .unwrap();
+
+        let report = verify_deployment_attestation_json(&output).unwrap();
+        assert!(report.public_launch_ready);
+        assert_eq!(report.verified_operator_count, 2);
+        assert_eq!(report.verified_observer_count, 2);
+
+        let attestation = serde_json::from_str::<DeploymentAttestation>(&output).unwrap();
+        assert_eq!(attestation.public_endpoint.url, endpoint_url);
+        assert_eq!(
+            attestation.public_status_manifest.endpoint_url,
+            endpoint_url
+        );
+        assert_eq!(attestation.public_probe.url, endpoint_url);
+        assert!(verify_public_status_manifest_json(&public_status_json).is_err());
+        assert!(verify_public_probe_json(&public_probe_json).is_err());
+        let (status_report, probe_report) = verify_public_surface_jsons_for_deployment(
+            &public_status_json,
+            &public_probe_json,
+            &attestation,
+        )
+        .unwrap();
+        assert_eq!(status_report.endpoint_url, endpoint_url);
+        assert_eq!(probe_report.endpoint_url, endpoint_url);
+    }
+
+    #[test]
+    fn deployment_attestation_builder_rejects_mismatched_public_probe() {
+        let status = build_public_status_manifest_json_pretty(PublicSurfaceBuildInput {
+            endpoint_url: "https://status.testnet.nebula.example/status".to_string(),
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+        })
+        .unwrap();
+        let probe = build_public_probe_json_pretty(PublicSurfaceBuildInput {
+            endpoint_url: "https://other.testnet.nebula.example/status".to_string(),
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+        })
+        .unwrap();
+        let generated_at_unix_ms = unix_ms();
+
+        let error = build_deployment_attestation_json_pretty(DeploymentAttestationBuildInput {
+            public_status_json: status,
+            public_probe_json: probe,
+            preflight_receipt_json: sample_preflight_receipt_json_pretty(),
+            runbook_receipt_json: sample_runbook_receipt_json_pretty(),
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+            generated_at_unix_ms,
+            expires_at_unix_ms: generated_at_unix_ms + 86_400_000,
+            tls_pins: vec![TlsEndpointPin {
+                cert_sha256: hex_64("mismatch-tls-cert"),
+                public_key_sha256: hex_64("mismatch-tls-key"),
+                not_after_unix_ms: generated_at_unix_ms + 2_592_000_000,
+            }],
+            bootstrap_nodes: Vec::new(),
+            operators: Vec::new(),
+            observers: Vec::new(),
+            rollback_plan_sha3_256: hex_64("mismatch-rollback-plan"),
+            rollback_last_drill_unix_ms: generated_at_unix_ms,
+            rollback_recovery_point_root: hex_64("mismatch-rollback-recovery"),
+        })
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error.contains("public_probe.url")))
+            }
+            AttestationError::MalformedJson(error) => {
+                panic!("unexpected malformed JSON: {error}")
+            }
+        }
     }
 
     #[test]
@@ -8773,6 +14710,35 @@ mod public_launch {
     }
 
     #[test]
+    fn operator_acceptance_rejects_bad_signature_hex() {
+        let chain = sample_launch_chain();
+        let mut acceptance =
+            serde_json::from_str::<OperatorAcceptanceManifest>(&chain.acceptance).unwrap();
+        acceptance.entries[0].signature.signature_hex = "00".repeat(64);
+        acceptance.root = operator_acceptance_manifest_root(&acceptance);
+        let acceptance_json = serde_json::to_string(&acceptance).unwrap();
+
+        let error = verify_operator_acceptance_jsons(
+            &acceptance_json,
+            &chain.handoff,
+            &chain.deployment,
+            &chain.validators,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error.starts_with(
+                        "entries[0].signature.signature_hex Ed25519 verification failed",
+                    )
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
     fn genesis_manifest_builds_from_verified_inputs() {
         let genesis = build_genesis_manifest_json_pretty(
             &sample_deployment_attestation_json_pretty(),
@@ -9101,6 +15067,247 @@ mod public_launch {
     }
 
     #[test]
+    fn public_testnet_peer_manifest_builds_launch_bound_peer_roster() {
+        let artifacts = sample_launch_artifacts();
+        let manifest_json = build_public_testnet_peer_manifest_json_pretty(
+            &artifacts.bundle,
+            &artifacts.deployment,
+            &artifacts.public_status,
+            &artifacts.public_probe,
+            &artifacts.validators,
+            &artifacts.handoff,
+            &artifacts.acceptance,
+            &artifacts.genesis,
+        )
+        .unwrap();
+
+        let manifest = serde_json::from_str::<PublicTestnetPeerManifest>(&manifest_json).unwrap();
+        let report = verify_public_testnet_peer_manifest_jsons(
+            &manifest_json,
+            &artifacts.bundle,
+            &artifacts.deployment,
+            &artifacts.public_status,
+            &artifacts.public_probe,
+            &artifacts.validators,
+            &artifacts.handoff,
+            &artifacts.acceptance,
+            &artifacts.genesis,
+        )
+        .unwrap();
+
+        assert!(report.public_testnet_peer_manifest_ready);
+        assert_eq!(report.level, "public-testnet-peer-manifest-attested");
+        assert_eq!(report.public_testnet_peer_manifest_root, manifest.root);
+        assert_eq!(
+            report.launch_package_bundle_root,
+            manifest.launch_package_bundle_root
+        );
+        assert_eq!(report.validator_set_root, manifest.validator_set_root);
+        assert_eq!(report.endpoint_url, "https://testnet.nebula.example/status");
+        assert_eq!(report.sync_peer_quorum, 1);
+        assert_eq!(report.peer_count, 2);
+        assert_eq!(report.operator_count, 2);
+        assert_eq!(report.region_count, 2);
+        assert_eq!(report.rpc_peer_urls.len(), 2);
+        assert_eq!(report.snapshot_peer_urls.len(), 2);
+        assert_eq!(manifest.peers.len(), 2);
+        assert_eq!(
+            manifest.peers[0].bootstrap_endpoint,
+            "https://bootstrap-a.testnet.nebula.example"
+        );
+        assert_eq!(
+            manifest.peers[0].rpc_url,
+            "https://bootstrap-a.testnet.nebula.example/rpc"
+        );
+        assert_eq!(
+            manifest.peers[0].status_url,
+            "https://bootstrap-a.testnet.nebula.example/status"
+        );
+        assert_eq!(
+            manifest.peers[0].snapshot_url,
+            "https://bootstrap-a.testnet.nebula.example/snapshot"
+        );
+        assert_eq!(
+            manifest.peers[1].rpc_url,
+            "https://bootstrap-b.testnet.nebula.example/rpc"
+        );
+    }
+
+    #[test]
+    fn public_testnet_peer_manifest_rejects_tampered_peer_urls() {
+        let artifacts = sample_launch_artifacts();
+        let manifest_json = build_public_testnet_peer_manifest_json_pretty(
+            &artifacts.bundle,
+            &artifacts.deployment,
+            &artifacts.public_status,
+            &artifacts.public_probe,
+            &artifacts.validators,
+            &artifacts.handoff,
+            &artifacts.acceptance,
+            &artifacts.genesis,
+        )
+        .unwrap();
+        let mut manifest =
+            serde_json::from_str::<PublicTestnetPeerManifest>(&manifest_json).unwrap();
+        manifest.peers[0].rpc_url = "https://evil.testnet.nebula.example/rpc".to_string();
+        manifest.root = public_testnet_peer_manifest_root(&manifest);
+        let tampered_json = serde_json::to_string(&manifest).unwrap();
+
+        let error = verify_public_testnet_peer_manifest_jsons(
+            &tampered_json,
+            &artifacts.bundle,
+            &artifacts.deployment,
+            &artifacts.public_status,
+            &artifacts.public_probe,
+            &artifacts.validators,
+            &artifacts.handoff,
+            &artifacts.acceptance,
+            &artifacts.genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error == "peers do not match verified launch validator and bootstrap artifacts"
+                }));
+                assert!(errors.iter().any(|error| {
+                    error.starts_with(
+                        "root does not match expected public testnet peer manifest root",
+                    )
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn public_testnet_peer_manifest_rejects_impossible_sync_quorum() {
+        let artifacts = sample_launch_artifacts();
+        let manifest_json = build_public_testnet_peer_manifest_json_pretty(
+            &artifacts.bundle,
+            &artifacts.deployment,
+            &artifacts.public_status,
+            &artifacts.public_probe,
+            &artifacts.validators,
+            &artifacts.handoff,
+            &artifacts.acceptance,
+            &artifacts.genesis,
+        )
+        .unwrap();
+        let mut manifest =
+            serde_json::from_str::<PublicTestnetPeerManifest>(&manifest_json).unwrap();
+        manifest.sync_peer_quorum = 2;
+        manifest.root = public_testnet_peer_manifest_root(&manifest);
+        let tampered_json = serde_json::to_string(&manifest).unwrap();
+
+        let error = verify_public_testnet_peer_manifest_jsons(
+            &tampered_json,
+            &artifacts.bundle,
+            &artifacts.deployment,
+            &artifacts.public_status,
+            &artifacts.public_probe,
+            &artifacts.validators,
+            &artifacts.handoff,
+            &artifacts.acceptance,
+            &artifacts.genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => assert!(errors
+                .iter()
+                .any(|error| error == "sync_peer_quorum must be <= 1 for 2 peers")),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn runtime_launch_binding_builds_from_verified_bundle_and_validator_set() {
+        let deployment = sample_deployment_attestation_json_pretty();
+        let public_status = sample_public_status_manifest_json_pretty();
+        let public_probe = sample_public_probe_json_pretty();
+        let validators = sample_validator_set_json_pretty();
+        let handoff = build_operator_handoff_json_pretty(&deployment, &validators).unwrap();
+        let acceptance =
+            build_operator_acceptance_json_pretty(&handoff, &deployment, &validators).unwrap();
+        let genesis = build_genesis_manifest_json_pretty(&deployment, &validators).unwrap();
+        let bundle = build_launch_package_bundle_json_pretty(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+
+        let binding = build_runtime_launch_binding_from_jsons(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+            &bundle,
+            "validator-a",
+        )
+        .unwrap();
+        binding
+            .validate_against_config(&runtime::RuntimeConfig::public_testnet_default())
+            .unwrap();
+        assert_eq!(binding.chain_id, CHAIN_ID);
+        assert_eq!(binding.runtime_version, VERSION);
+        assert_eq!(binding.validator_count, 2);
+        assert_eq!(binding.operator_count, 2);
+        assert_eq!(binding.region_count, 2);
+        assert_eq!(binding.launch_package_bundle_root.len(), 64);
+        assert_eq!(binding.fee_policy_root, fee_policy_root());
+        assert_eq!(binding.validator_reward_accounts.len(), 2);
+        assert_eq!(
+            binding.validator_reward_accounts[0].reward_account,
+            "nbla-reward-operator-a"
+        );
+        assert_eq!(
+            binding.validator_reward_accounts[1].reward_account,
+            "nbla-reward-operator-b"
+        );
+        assert_eq!(binding.bridge_operator_keys.len(), 2);
+        assert_eq!(binding.bridge_operator_keys[0].operator_id, "operator-a");
+        assert_eq!(binding.bridge_operator_keys[1].operator_id, "operator-b");
+        assert_eq!(binding.bridge_observer_keys.len(), 2);
+        assert_eq!(
+            binding.bridge_observer_keys[0].observer_id,
+            "observer-eu-west-1"
+        );
+        assert_eq!(
+            binding.bridge_observer_keys[1].observer_id,
+            "observer-us-east-1"
+        );
+
+        let error = build_runtime_launch_binding_from_jsons(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+            &bundle,
+            "validator-z",
+        )
+        .unwrap_err();
+        match error {
+            AttestationError::Invalid(errors) => assert!(errors
+                .iter()
+                .any(|error| error == "validator_id validator-z is not admitted in validator set")),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
     fn launch_package_bundle_rejects_tampered_artifact_hash() {
         let deployment = sample_deployment_attestation_json_pretty();
         let public_status = sample_public_status_manifest_json_pretty();
@@ -9258,6 +15465,42 @@ mod public_launch {
                 assert!(errors.iter().any(|error| {
                     error
                     == "validator activation entries do not match verified bundle and validator set"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn validator_activation_rejects_signature_public_key_mismatch() {
+        let chain = sample_launch_chain();
+        let mut activation =
+            serde_json::from_str::<ValidatorActivationManifest>(&chain.activation).unwrap();
+        activation.entries[0].signature.public_key =
+            activation.entries[1].signature.public_key.clone();
+        activation.entries[0].signature.signature_sha3_256 =
+            validator_activation_signature_root(&activation.entries[0]);
+        complete_sample_signature(&mut activation.entries[0].signature);
+        activation.root = validator_activation_manifest_root(&activation);
+        let activation_json = serde_json::to_string(&activation).unwrap();
+
+        let error = verify_validator_activation_jsons(
+            &activation_json,
+            &chain.bundle,
+            &chain.deployment,
+            &chain.public_status,
+            &chain.public_probe,
+            &chain.validators,
+            &chain.handoff,
+            &chain.acceptance,
+            &chain.genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error.starts_with("entries[0].signature.public_key expected")
                 }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
@@ -9773,6 +16016,697 @@ mod public_launch {
                 assert!(errors.iter().any(|error| {
                     error
                         == "public observer confirmation entries do not match verified deployment observers and public surface"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn public_observer_confirmation_rejects_wrong_signed_root() {
+        let chain = sample_launch_chain();
+        let mut observer_confirmation = serde_json::from_str::<PublicObserverConfirmationManifest>(
+            &chain.observer_confirmation,
+        )
+        .unwrap();
+        observer_confirmation.entries[0]
+            .signature
+            .signature_sha3_256 = hex_64("wrong-public-observer-confirmation-signature-root");
+        complete_sample_signature(&mut observer_confirmation.entries[0].signature);
+        observer_confirmation.root =
+            public_observer_confirmation_manifest_root(&observer_confirmation);
+        let observer_confirmation_json = serde_json::to_string(&observer_confirmation).unwrap();
+
+        let error = verify_public_observer_confirmation_jsons(
+            &observer_confirmation_json,
+            &chain.join_confirmation,
+            &chain.join,
+            &chain.activation,
+            &chain.bundle,
+            &chain.deployment,
+            &chain.public_status,
+            &chain.public_probe,
+            &chain.validators,
+            &chain.handoff,
+            &chain.acceptance,
+            &chain.genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error.starts_with("entries[0].signature.signature_sha3_256 does not match")
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn public_testnet_launch_certificate_verifies_full_candidate_chain() {
+        let deployment = sample_deployment_attestation_json_pretty();
+        let public_status = sample_public_status_manifest_json_pretty();
+        let public_probe = sample_public_probe_json_pretty();
+        let validators = sample_validator_set_json_pretty();
+        let handoff = build_operator_handoff_json_pretty(&deployment, &validators).unwrap();
+        let acceptance =
+            build_operator_acceptance_json_pretty(&handoff, &deployment, &validators).unwrap();
+        let genesis = build_genesis_manifest_json_pretty(&deployment, &validators).unwrap();
+        let bundle = build_launch_package_bundle_json_pretty(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let activation = build_validator_activation_json_pretty(
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let join = build_validator_join_receipt_json_pretty(
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let join_confirmation = build_operator_join_confirmation_json_pretty(
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let observer_confirmation = build_public_observer_confirmation_json_pretty(
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let (live_rehearsal_report, runtime_surface_evidence) =
+            prove_live_rpc_devnet_rehearsal_with_jsons_and_evidence(
+                &bundle,
+                &deployment,
+                &public_status,
+                &public_probe,
+                &validators,
+                &handoff,
+                &acceptance,
+                &genesis,
+            )
+            .unwrap();
+        let runtime_surface = serde_json::to_string_pretty(&runtime_surface_evidence).unwrap();
+        let live_rehearsal = serde_json::to_string_pretty(&live_rehearsal_report).unwrap();
+        let certificate = build_public_testnet_launch_certificate_json_pretty(
+            &observer_confirmation,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+
+        let report = verify_public_testnet_launch_certificate_jsons(
+            &certificate,
+            &observer_confirmation,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+
+        assert!(report.public_testnet_launch_certificate_ready);
+        assert_eq!(report.level, "public-testnet-launch-candidate-certified");
+        assert_eq!(report.public_testnet_launch_certificate_root.len(), 64);
+        assert_eq!(report.runtime_surface_root.len(), 64);
+        assert_eq!(report.validator_count, 2);
+        assert_eq!(report.operator_count, 2);
+        assert_eq!(report.observer_count, 2);
+        assert_eq!(report.region_count, 2);
+        assert_eq!(report.endpoint_url, "https://testnet.nebula.example/status");
+
+        let loopback_ready_error = verify_public_testnet_launch_readiness_jsons(
+            &certificate,
+            &observer_confirmation,
+            &runtime_surface,
+            &live_rehearsal,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+        match loopback_ready_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error
+                    == "runtime_surface.capture_mode expected external-public-endpoint but got loopback-devnet"
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let missing_tls_error = external_public_runtime_surface_from(&runtime_surface, None)
+            .expect_err("external runtime surface evidence requires a TLS observation");
+        match missing_tls_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error
+                    == "runtime_surface.tls_observation is required for external-public-endpoint capture"
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let deployment_attestation =
+            serde_json::from_str::<DeploymentAttestation>(&deployment).unwrap();
+        let matching_tls_observation = deployment_attestation.public_endpoint.tls_pins[0].clone();
+        let external_runtime_surface =
+            external_public_runtime_surface_from(&runtime_surface, Some(matching_tls_observation))
+                .unwrap();
+        let external_certificate = build_public_testnet_launch_certificate_json_pretty(
+            &observer_confirmation,
+            &external_runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let readiness = verify_public_testnet_launch_readiness_jsons(
+            &external_certificate,
+            &observer_confirmation,
+            &external_runtime_surface,
+            &live_rehearsal,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+
+        assert!(readiness.public_launch_ready);
+        assert_eq!(readiness.level, "public-testnet-launch-ready");
+        assert!(readiness.blocking_gaps.is_empty());
+        assert_eq!(
+            readiness.runtime_surface_capture_mode,
+            RUNTIME_SURFACE_CAPTURE_MODE_EXTERNAL_PUBLIC_ENDPOINT
+        );
+        assert_eq!(readiness.public_launch_readiness_root.len(), 64);
+        assert_eq!(
+            readiness.public_testnet_launch_certificate_root,
+            verify_public_testnet_launch_certificate_jsons(
+                &external_certificate,
+                &observer_confirmation,
+                &external_runtime_surface,
+                &join_confirmation,
+                &join,
+                &activation,
+                &bundle,
+                &deployment,
+                &public_status,
+                &public_probe,
+                &validators,
+                &handoff,
+                &acceptance,
+                &genesis,
+            )
+            .unwrap()
+            .public_testnet_launch_certificate_root
+        );
+        assert_eq!(
+            readiness.live_rpc_devnet_rehearsal_root,
+            serde_json::from_str::<LiveRpcDevnetRehearsalReport>(&live_rehearsal)
+                .unwrap()
+                .rehearsal_root
+        );
+        assert_eq!(
+            readiness.live_rpc_devnet_runtime_surface_root,
+            verify_runtime_surface_evidence_json(&runtime_surface)
+                .unwrap()
+                .runtime_surface_root
+        );
+
+        let mut forged_rehearsal_surface_root =
+            serde_json::from_str::<LiveRpcDevnetRehearsalReport>(&live_rehearsal).unwrap();
+        forged_rehearsal_surface_root.runtime_surface_root =
+            hex_64("forged-live-rpc-devnet-runtime-surface-root");
+        forged_rehearsal_surface_root.rehearsal_root =
+            live_rpc_devnet_rehearsal_root(&forged_rehearsal_surface_root);
+        let forged_rehearsal_surface_root =
+            serde_json::to_string_pretty(&forged_rehearsal_surface_root).unwrap();
+        let forged_surface_ready_error = verify_public_testnet_launch_readiness_jsons(
+            &external_certificate,
+            &observer_confirmation,
+            &external_runtime_surface,
+            &forged_rehearsal_surface_root,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+        match forged_surface_ready_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error.starts_with("live_rpc_devnet_runtime_surface.runtime_surface_root expected ")
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let mut wrong_rehearsal =
+            serde_json::from_str::<LiveRpcDevnetRehearsalReport>(&live_rehearsal).unwrap();
+        wrong_rehearsal.launch_package_bundle_root =
+            hex_64("wrong-live-rpc-devnet-launch-package-bundle");
+        wrong_rehearsal.rehearsal_root = live_rpc_devnet_rehearsal_root(&wrong_rehearsal);
+        let wrong_rehearsal = serde_json::to_string_pretty(&wrong_rehearsal).unwrap();
+        let wrong_rehearsal_ready_error = verify_public_testnet_launch_readiness_jsons(
+            &external_certificate,
+            &observer_confirmation,
+            &external_runtime_surface,
+            &wrong_rehearsal,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+        match wrong_rehearsal_ready_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error.starts_with("live_rpc_devnet_rehearsal.launch_package_bundle_root expected ")
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let status_only_economics_error =
+            runtime_surface_with_economics_counters(&external_runtime_surface, 0, 0, 0)
+                .unwrap_err();
+        match status_only_economics_error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error
+                        == "runtime_surface.status.total_nxmr_fees_units expected snapshot 1000 but got 0"
+                }));
+                assert!(errors.iter().any(|error| {
+                    error
+                        == "runtime_surface.status.validator_reward_nebulai expected snapshot 1010 but got 0"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let mispriced_nxmr_runtime_surface = runtime_surface_with_snapshot_economics_counters(
+            &external_runtime_surface,
+            1_000,
+            999,
+            1_010,
+        );
+        let mispriced_nxmr_error =
+            verify_runtime_surface_evidence_json(&mispriced_nxmr_runtime_surface).unwrap_err();
+        match mispriced_nxmr_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error.contains(
+                    "buyback_pool_nebulai expected 1000 from included nXMR receipts but got 999",
+                )
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let wrong_endpoint = "https://other.testnet.nebula.example/status";
+        let wrong_endpoint_runtime_surface =
+            runtime_surface_with_endpoint_url(&external_runtime_surface, wrong_endpoint).unwrap();
+        let wrong_endpoint_ready_error = verify_public_testnet_launch_readiness_jsons(
+            &external_certificate,
+            &observer_confirmation,
+            &wrong_endpoint_runtime_surface,
+            &live_rehearsal,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+        match wrong_endpoint_ready_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error
+                    == "runtime_surface.endpoint_url expected https://testnet.nebula.example/status but got https://other.testnet.nebula.example/status"
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let mismatched_tls_observation = TlsEndpointPin {
+            cert_sha256: "cc".repeat(32),
+            public_key_sha256: "dd".repeat(32),
+            not_after_unix_ms: unix_ms() + 2_592_000_000,
+        };
+        let mismatched_runtime_surface = external_public_runtime_surface_from(
+            &runtime_surface,
+            Some(mismatched_tls_observation),
+        )
+        .unwrap();
+        let mismatched_certificate = build_public_testnet_launch_certificate_json_pretty(
+            &observer_confirmation,
+            &mismatched_runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let mismatch_ready_error = verify_public_testnet_launch_readiness_jsons(
+            &mismatched_certificate,
+            &observer_confirmation,
+            &mismatched_runtime_surface,
+            &live_rehearsal,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+        match mismatch_ready_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error
+                    == "runtime_surface.tls_observation does not match deployment public_endpoint.tls_pins"
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn public_testnet_launch_certificate_rejects_wrong_validator_count() {
+        let deployment = sample_deployment_attestation_json_pretty();
+        let public_status = sample_public_status_manifest_json_pretty();
+        let public_probe = sample_public_probe_json_pretty();
+        let validators = sample_validator_set_json_pretty();
+        let handoff = build_operator_handoff_json_pretty(&deployment, &validators).unwrap();
+        let acceptance =
+            build_operator_acceptance_json_pretty(&handoff, &deployment, &validators).unwrap();
+        let genesis = build_genesis_manifest_json_pretty(&deployment, &validators).unwrap();
+        let bundle = build_launch_package_bundle_json_pretty(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let activation = build_validator_activation_json_pretty(
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let join = build_validator_join_receipt_json_pretty(
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let join_confirmation = build_operator_join_confirmation_json_pretty(
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let observer_confirmation = build_public_observer_confirmation_json_pretty(
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let runtime_surface = build_live_rpc_devnet_runtime_surface_evidence_json_pretty(
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let certificate = serde_json::from_str::<Value>(
+            &build_public_testnet_launch_certificate_json_pretty(
+                &observer_confirmation,
+                &runtime_surface,
+                &join_confirmation,
+                &join,
+                &activation,
+                &bundle,
+                &deployment,
+                &public_status,
+                &public_probe,
+                &validators,
+                &handoff,
+                &acceptance,
+                &genesis,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut wrong_validator_count = certificate.clone();
+        wrong_validator_count["validator_count"] = json!(1);
+        wrong_validator_count["root"] = json!(public_testnet_launch_certificate_root(
+            &serde_json::from_value::<PublicTestnetLaunchCertificate>(
+                wrong_validator_count.clone()
+            )
+            .unwrap()
+        ));
+
+        let error = verify_public_testnet_launch_certificate_jsons(
+            &wrong_validator_count.to_string(),
+            &observer_confirmation,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error == "validator_count expected 2 but got 1"));
+                assert!(errors.iter().any(|error| {
+                    error.starts_with("public testnet launch certificate root does not match")
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let mut wrong_fee_policy = certificate.clone();
+        wrong_fee_policy["fee_policy_root"] = json!(hex_64("wrong-fee-policy-root"));
+        wrong_fee_policy["root"] = json!(public_testnet_launch_certificate_root(
+            &serde_json::from_value::<PublicTestnetLaunchCertificate>(wrong_fee_policy.clone())
+                .unwrap()
+        ));
+
+        let error = verify_public_testnet_launch_certificate_jsons(
+            &wrong_fee_policy.to_string(),
+            &observer_confirmation,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error.starts_with("fee_policy_root does not match")));
+                assert!(errors.iter().any(|error| {
+                    error.starts_with("public testnet launch certificate root does not match")
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let mut wrong_runtime_surface = certificate;
+        wrong_runtime_surface["runtime_surface_root"] = json!(hex_64("wrong-runtime-surface-root"));
+        wrong_runtime_surface["root"] = json!(public_testnet_launch_certificate_root(
+            &serde_json::from_value::<PublicTestnetLaunchCertificate>(
+                wrong_runtime_surface.clone()
+            )
+            .unwrap()
+        ));
+
+        let error = verify_public_testnet_launch_certificate_jsons(
+            &wrong_runtime_surface.to_string(),
+            &observer_confirmation,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error.starts_with("runtime_surface_root does not match")));
+                assert!(errors.iter().any(|error| {
+                    error.starts_with("public testnet launch certificate root does not match")
                 }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
@@ -10537,6 +17471,107 @@ mod public_launch {
         }
     }
 
+    struct SampleLaunchChain {
+        deployment: String,
+        public_status: String,
+        public_probe: String,
+        validators: String,
+        handoff: String,
+        acceptance: String,
+        genesis: String,
+        bundle: String,
+        activation: String,
+        join: String,
+        join_confirmation: String,
+        observer_confirmation: String,
+    }
+
+    fn sample_launch_chain() -> SampleLaunchChain {
+        let deployment = sample_deployment_attestation_json_pretty();
+        let public_status = sample_public_status_manifest_json_pretty();
+        let public_probe = sample_public_probe_json_pretty();
+        let validators = sample_validator_set_json_pretty();
+        let handoff = build_operator_handoff_json_pretty(&deployment, &validators).unwrap();
+        let acceptance =
+            build_operator_acceptance_json_pretty(&handoff, &deployment, &validators).unwrap();
+        let genesis = build_genesis_manifest_json_pretty(&deployment, &validators).unwrap();
+        let bundle = build_launch_package_bundle_json_pretty(
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let activation = build_validator_activation_json_pretty(
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let join = build_validator_join_receipt_json_pretty(
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let join_confirmation = build_operator_join_confirmation_json_pretty(
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+        let observer_confirmation = build_public_observer_confirmation_json_pretty(
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap();
+
+        SampleLaunchChain {
+            deployment,
+            public_status,
+            public_probe,
+            validators,
+            handoff,
+            acceptance,
+            genesis,
+            bundle,
+            activation,
+            join,
+            join_confirmation,
+            observer_confirmation,
+        }
+    }
+
     fn refresh_validator_manifest_root(manifest: &mut Value, validator_index: usize) {
         let fee_policy_root = manifest["fee_policy_root"]
             .as_str()
@@ -10564,12 +17599,14 @@ mod public_launch {
             &deployment.policy_claim,
             &deployment.public_probe,
         );
-        let observer = serde_json::from_value::<ObserverAttestation>(
+        let mut observer = serde_json::from_value::<ObserverAttestation>(
             attestation["observers"][observer_index].clone(),
         )
         .unwrap();
-        attestation["observers"][observer_index]["signature"]["signature_sha3_256"] =
-            json!(observer_signature_root(&observer, &witness_evidence_root));
+        observer.signature.signature_sha3_256 =
+            observer_signature_root(&observer, &witness_evidence_root);
+        complete_sample_signature(&mut observer.signature);
+        attestation["observers"][observer_index]["signature"] = json!(observer.signature);
     }
 
     fn refresh_operator_signature_root(attestation: &mut Value, operator_index: usize) {
@@ -10620,22 +17657,24 @@ mod economics {
         assert_eq!(quote.payment_asset_symbol, NBLA_SYMBOL);
         assert_eq!(quote.required_fee_nebulai, 100_000);
         assert_eq!(quote.paid_amount_units, 100_000);
+        assert_eq!(quote.buyback_nebulai, 0);
         assert_eq!(quote.reserve_backing_nebulai, 0);
         assert_eq!(quote.validator_reward_nebulai, 100_000);
         assert_eq!(quote.validator_points, 100_000);
     }
 
     #[test]
-    fn nxmr_fee_converts_to_nbla_and_splits_ninety_ten() {
+    fn nxmr_fee_buys_nbla_and_rewards_validators_at_target_rate() {
         let quote = quote_hybrid_fee_at_target_rate(FeeAsset::NXmr, 100, 10_000).unwrap();
 
         assert_eq!(quote.payment_asset_symbol, NXMR_SYMBOL);
         assert_eq!(quote.required_fee_nebulai, 1_000_000);
         assert_eq!(quote.paid_amount_units, 1_000_000);
         assert_eq!(quote.converted_nbla_nebulai, 1_000_000);
-        assert_eq!(quote.reserve_backing_nebulai, 900_000);
-        assert_eq!(quote.validator_reward_nebulai, 100_000);
-        assert_eq!(quote.validator_points, 100_000);
+        assert_eq!(quote.buyback_nebulai, 1_000_000);
+        assert_eq!(quote.reserve_backing_nebulai, 0);
+        assert_eq!(quote.validator_reward_nebulai, 1_000_000);
+        assert_eq!(quote.validator_points, 1_000_000);
     }
 
     #[test]
