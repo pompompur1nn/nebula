@@ -85,7 +85,8 @@ The public launch suite covers:
 - policy claim and public probe body exact-shape validation
 - preflight and runbook receipt exact-shape validation
 - bootstrap node/operator and observer attestation exact-shape validation
-- validator-set admission, reward-unit, uniqueness, and region-spread validation
+- validator-set admission, contact, reward-unit, uniqueness, and region-spread
+  validation
 - genesis manifest root binding across deployment evidence, validator set, and
   fee policy
 - launch package coherence across deployment attestation, public surface,
@@ -192,9 +193,10 @@ requires at least two validators, two operators, and two regions. Validator IDs,
 node IDs, consensus keys, network keys, and P2P endpoints must be unique.
 Genesis power must be positive, no single validator may hold more than `5000`
 basis points of total genesis power, commission must be at or below `10000`
-basis points, reward accounts must use the `nbla-reward-` prefix, and rewards
-must be denominated in `nebulai`. Each validator admission signature root must
-bind the validator identity, keys, reward account, commission, genesis power,
+basis points, operator contacts must use `mailto:` or `https://`, reward
+accounts must use the `nbla-reward-` prefix, and rewards must be denominated in
+`nebulai`. Each validator admission signature root must bind the validator
+identity, operator contact, keys, reward account, commission, genesis power,
 reward unit, and fee-policy root.
 
 Operators can generate the required shape and verify a filled validator set

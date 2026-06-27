@@ -56,8 +56,9 @@ Fees and validator points are denominated in `nebulai`, where
 
 The validator-set verifier requires at least two validators, two operators, and
 two regions. No single validator may hold more than `5000` basis points of
-total genesis power. Validator admission rewards are denominated in `nebulai`,
-and each signed admission root must bind the validator identity, keys, reward
+total genesis power. Operator contacts must use `mailto:` or `https://`.
+Validator admission rewards are denominated in `nebulai`, and each signed
+admission root must bind the validator identity, operator contact, keys, reward
 account, commission, genesis power, reward unit, and fee-policy root.
 
 The genesis manifest builder binds verified deployment evidence and validator

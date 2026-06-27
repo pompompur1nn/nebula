@@ -315,6 +315,7 @@ pub struct ValidatorAdmission {
     pub operator_id: String,
     pub node_id: String,
     pub region: String,
+    pub operator_contact: String,
     pub consensus_public_key: String,
     pub network_public_key: String,
     pub p2p_endpoint: String,
@@ -606,8 +607,10 @@ pub fn readiness_report() -> NebulaReadiness {
                 "reward_unit": NEBULAI_UNIT,
                 "fee_policy_root_required": true,
                 "signed_admission_root_binds_validator_payload": true,
+                "operator_contact_required": true,
                 "unique_consensus_keys_required": true,
                 "unique_p2p_endpoints_required": true,
+                "max_single_validator_genesis_power_bps": MAX_SINGLE_VALIDATOR_GENESIS_POWER_BPS,
             })),
             "genesis_manifest": stable_root(&json!({
                 "deployment_attestation_root_required": true,
@@ -940,6 +943,7 @@ pub fn sample_validator_set_json_pretty() -> String {
             operator_id: "operator-a".to_string(),
             node_id: "bootstrap-us-east-1".to_string(),
             region: "us-east".to_string(),
+            operator_contact: "mailto:operator-a@testnet.nebula.example".to_string(),
             consensus_public_key: "nebula-consensus-key-a".to_string(),
             network_public_key: "nebula-network-key-a".to_string(),
             p2p_endpoint: "tcp://bootstrap-a.testnet.nebula.example:26656".to_string(),
@@ -953,6 +957,7 @@ pub fn sample_validator_set_json_pretty() -> String {
             operator_id: "operator-b".to_string(),
             node_id: "bootstrap-eu-west-1".to_string(),
             region: "eu-west".to_string(),
+            operator_contact: "mailto:operator-b@testnet.nebula.example".to_string(),
             consensus_public_key: "nebula-consensus-key-b".to_string(),
             network_public_key: "nebula-network-key-b".to_string(),
             p2p_endpoint: "tcp://bootstrap-b.testnet.nebula.example:26656".to_string(),
@@ -2270,6 +2275,11 @@ fn verify_validator_admission(
     );
     require_non_empty(
         errors,
+        &format!("validators[{index}].operator_contact"),
+        &validator.operator_contact,
+    );
+    require_non_empty(
+        errors,
         &format!("validators[{index}].consensus_public_key"),
         &validator.consensus_public_key,
     );
@@ -2296,6 +2306,13 @@ fn verify_validator_admission(
     if !validator.p2p_endpoint.starts_with("tcp://") {
         errors.push(format!(
             "validators[{index}].p2p_endpoint must use a tcp:// endpoint"
+        ));
+    }
+    if !validator.operator_contact.starts_with("mailto:")
+        && !validator.operator_contact.starts_with("https://")
+    {
+        errors.push(format!(
+            "validators[{index}].operator_contact must use mailto: or https://"
         ));
     }
     if validator.commission_bps > FEE_BASIS_POINTS as u16 {
@@ -2513,6 +2530,7 @@ fn validator_admission_signature_root(
         "operator_id": validator.operator_id,
         "node_id": validator.node_id,
         "region": validator.region,
+        "operator_contact": validator.operator_contact,
         "consensus_public_key": validator.consensus_public_key,
         "network_public_key": validator.network_public_key,
         "p2p_endpoint": validator.p2p_endpoint,
@@ -3095,6 +3113,24 @@ mod public_launch {
                 assert!(errors.iter().any(|error| {
                     error
                         == "validators[0].genesis_power must not exceed 5000 bps of total genesis power"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn validator_set_rejects_unsupported_operator_contact() {
+        let mut value = serde_json::from_str::<Value>(&sample_validator_set_json_pretty()).unwrap();
+        value["validators"][0]["operator_contact"] = json!("irc://operator-a");
+        refresh_validator_manifest_root(&mut value, 0);
+
+        let error = verify_validator_set_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error == "validators[0].operator_contact must use mailto: or https://"
                 }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
