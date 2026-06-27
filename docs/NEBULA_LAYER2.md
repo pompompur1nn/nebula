@@ -58,6 +58,9 @@ The target architecture is:
   `nebula_finalizeWithdrawal`: minimum confirmations, operator custody quorum,
   relayer/observer quorum, replay protection, withdrawal finalization evidence,
   and `/health`/`/status` visibility
+- Ed25519 account signatures for public spend paths: `nebula_sendTransaction`
+  transactions must be signed by `tx.from`, and `nebula_requestWithdrawal`
+  must bind account, destination, amount, nonce, and signature before nXMR burns
 - operator ops and backup evidence through `/ops`, `/backup`,
   `nebula_opsStatus`, and `nebula_backupManifest` so public operators can
   verify block freshness, chain head, state/snapshot roots, persisted snapshot
@@ -151,7 +154,8 @@ evidence is absent or stale.
     `observer_id`, `proof_root`, `custody_proof_root`, `relayer_set_root`,
     `observer_signature_roots`, and observed time, with at least `10` Monero
     confirmations and at least `2` observer signatures. Withdrawals submitted
-    through `nebula_requestWithdrawal` must remain `operator_pending` until
+    through `nebula_requestWithdrawal` must include account-owner `nonce` and
+    `signature` evidence, then remain `operator_pending` until
     `nebula_finalizeWithdrawal` binds the `withdrawal_id`,
     `finalized_monero_tx_id`, `finalization_proof_root`, and at least `2`
     `operator_approval_roots`. `/health`, `/status`, and `nebula_status` must
@@ -266,14 +270,23 @@ balances, fee accounting, and current state root across restarts. Followers use
 the same snapshot format for persisted local state and reject blocks whose
 signature does not verify against the expected sequencer public key.
 
+Public spend flows require Ed25519 account signatures. For
+`nebula_sendTransaction`, `tx.from` is the 32-byte account public key hex and
+`tx.signature` signs `RuntimeTransaction::signing_root()`. For
+`nebula_requestWithdrawal`, the request includes `nonce` and `signature` over
+`withdrawal_authorization_root(account, monero_address, amount_nxmr_units,
+nonce)`, and accepted withdrawals consume the account nonce before burning
+nXMR into `operator_pending`.
+
 Bridge custody rehearsal uses the runtime RPC names that public operators will
 see. `nebula_bridgePolicy` reports the active policy root and quorum constants.
 Deposits enter through `nebula_observeBridgeDeposit` with `monero_tx_id`,
 `account`, `amount_nxmr_units`, `confirmations`, `observer_id`, `proof_root`,
 `custody_proof_root`, `relayer_set_root`, `observer_signature_roots`, and
 `observed_at_unix_ms`. Withdrawals enter through `nebula_requestWithdrawal`
-with `account`, `monero_address`, and `amount_nxmr_units`, then remain
-`operator_pending` until `nebula_finalizeWithdrawal` supplies `withdrawal_id`,
+with `account`, `monero_address`, `amount_nxmr_units`, `nonce`, and
+`signature`, then remain `operator_pending` until `nebula_finalizeWithdrawal`
+supplies `withdrawal_id`,
 `finalized_monero_tx_id`, `finalization_proof_root`, and
 `operator_approval_roots`. `/health`, `/status`, and `nebula_status` are the
 operator-facing surfaces for bridge policy visibility.

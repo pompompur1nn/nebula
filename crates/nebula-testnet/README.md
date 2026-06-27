@@ -32,6 +32,14 @@ requires explicit Monero confirmation, custody proof, relayer/observer evidence,
 replay protection, and withdrawal finalization evidence before `nXMR` can be
 treated as public gas.
 
+Public spend paths require Ed25519 account signatures. For
+`nebula_sendTransaction`, `tx.from` is the 32-byte account public key hex and
+`tx.signature` signs `RuntimeTransaction::signing_root()`. For
+`nebula_requestWithdrawal`, the request includes `nonce` and `signature` over
+`withdrawal_authorization_root(account, monero_address, amount_nxmr_units,
+nonce)`, and accepted withdrawals consume the account nonce before burning
+nXMR into `operator_pending`.
+
 Operator ops and backup evidence is also a launch gate. The runtime surfaces
 `/ops`, `/backup`, `nebula_opsStatus`, and `nebula_backupManifest` are intended
 for public operators to verify block freshness, latest height/hash,
@@ -91,9 +99,10 @@ The public launch sequence for this crate is:
    `observer_id`, `proof_root`, `custody_proof_root`, `relayer_set_root`,
    `observer_signature_roots`, and observed time fields plus a minimum `10`
    Monero confirmations and at least `2` observer signatures. Withdrawals must
-   stay `operator_pending` until `nebula_finalizeWithdrawal` binds the
-   `withdrawal_id`, `finalized_monero_tx_id`, `finalization_proof_root`, and at
-   least `2` `operator_approval_roots`. `/health`, `/status`, and
+   include account-owner `nonce` and `signature` evidence, then stay
+   `operator_pending` until `nebula_finalizeWithdrawal` binds the `withdrawal_id`,
+   `finalized_monero_tx_id`, `finalization_proof_root`, and at least `2`
+   `operator_approval_roots`. `/health`, `/status`, and
    `nebula_status` must expose or agree with `bridge_policy_root`,
    `bridge_min_deposit_confirmations`, `bridge_deposit_observer_quorum`,
    `bridge_withdrawal_operator_quorum`, `bridge_live_value_enabled`,
@@ -168,8 +177,9 @@ Bridge custody policy is rehearsed over the existing RPC names.
 `amount_nxmr_units`, `confirmations`, `observer_id`, `proof_root`,
 `custody_proof_root`, `relayer_set_root`, `observer_signature_roots`, and
 `observed_at_unix_ms`. `nebula_requestWithdrawal` accepts `account`,
-`monero_address`, and `amount_nxmr_units`, then keeps the withdrawal
-`operator_pending` until `nebula_finalizeWithdrawal` supplies `withdrawal_id`,
+`monero_address`, `amount_nxmr_units`, `nonce`, and `signature`, then keeps the
+withdrawal `operator_pending` until `nebula_finalizeWithdrawal` supplies
+`withdrawal_id`,
 `finalized_monero_tx_id`, `finalization_proof_root`, and
 `operator_approval_roots`. Public testnet operators should require `/health`,
 `/status`, and `nebula_status` to report or agree with the bridge policy root,

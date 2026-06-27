@@ -1,5 +1,9 @@
+use ed25519_dalek::{Signer, SigningKey};
 use nebula_testnet::{
-    runtime::{serve_runtime_rpc_with_options, RuntimeConfig, RuntimeNodeOptions},
+    runtime::{
+        serve_runtime_rpc_with_options, withdrawal_authorization_root, RuntimeConfig,
+        RuntimeNodeOptions, RuntimeTransaction,
+    },
     NBLA_SYMBOL,
 };
 use serde_json::{json, Value};
@@ -37,6 +41,8 @@ fn admin_rpc_methods_require_token_before_params() {
 #[test]
 fn public_rpc_methods_remain_callable_without_admin_token() {
     let rpc_addr = start_rpc_server(Some(ADMIN_TOKEN));
+    let tx_account = account_id(0x44);
+    let withdrawal_account = account_id(0x45);
 
     let status = rpc_call(&rpc_addr, "nebula_status", json!({}));
     assert_eq!(rpc_result(&status)["node_role"], "sequencer");
@@ -55,24 +61,23 @@ fn public_rpc_methods_remain_callable_without_admin_token() {
     let faucet = rpc_call(
         &rpc_addr,
         "nebula_faucet",
-        json!({ "account": "alice-public-rpc" }),
+        json!({ "account": tx_account.clone() }),
     );
-    assert_eq!(rpc_result(&faucet)["account"], "alice-public-rpc");
+    assert_eq!(rpc_result(&faucet)["account"], tx_account);
+    let withdrawal_faucet = rpc_call(
+        &rpc_addr,
+        "nebula_faucet",
+        json!({ "account": withdrawal_account.clone() }),
+    );
+    assert_eq!(
+        rpc_result(&withdrawal_faucet)["account"],
+        withdrawal_account
+    );
 
     let submitted = rpc_call(
         &rpc_addr,
         "nebula_sendTransaction",
-        json!({
-            "tx": {
-                "from": "alice-public-rpc",
-                "to": "bob-public-rpc",
-                "amount_nebulai": 1,
-                "gas_units": 1,
-                "gas_price_nebulai": 1,
-                "fee_asset": NBLA_SYMBOL,
-                "nonce": 0,
-            }
-        }),
+        json!({ "tx": signed_transaction(0x44, 0, "bob-public-rpc") }),
     );
     assert_eq!(rpc_result(&submitted)["accepted_to_mempool"], true);
 
@@ -80,9 +85,16 @@ fn public_rpc_methods_remain_callable_without_admin_token() {
         &rpc_addr,
         "nebula_requestWithdrawal",
         json!({
-            "account": "alice-public-rpc",
+            "account": withdrawal_account.clone(),
             "monero_address": "monero-testnet-address-0001",
             "amount_nxmr_units": 1,
+            "nonce": 0,
+            "signature": withdrawal_signature(
+                0x45,
+                "monero-testnet-address-0001",
+                1,
+                0
+            ),
         }),
     );
     assert_eq!(rpc_result(&withdrawal)["accepted"], true);
@@ -261,6 +273,46 @@ fn assert_rpc_error_contains(response: &Value, expected: &str) {
         message.contains(expected),
         "expected JSON-RPC error containing {expected:?}, got {message:?}"
     );
+}
+
+fn signing_key(seed: u8) -> SigningKey {
+    SigningKey::from_bytes(&[seed; 32])
+}
+
+fn account_id(seed: u8) -> String {
+    hex::encode(signing_key(seed).verifying_key().to_bytes())
+}
+
+fn sign_root(seed: u8, root: &str) -> String {
+    hex::encode(signing_key(seed).sign(root.as_bytes()).to_bytes())
+}
+
+fn signed_transaction(seed: u8, nonce: u64, to: &str) -> RuntimeTransaction {
+    let mut tx = RuntimeTransaction {
+        from: account_id(seed),
+        to: to.to_string(),
+        amount_nebulai: 1,
+        gas_units: 1,
+        gas_price_nebulai: 1,
+        fee_asset: NBLA_SYMBOL.to_string(),
+        nonce,
+        signature: String::new(),
+        memo: None,
+    };
+    tx.signature = sign_root(seed, &tx.signing_root());
+    tx
+}
+
+fn withdrawal_signature(
+    seed: u8,
+    monero_address: &str,
+    amount_nxmr_units: u128,
+    nonce: u64,
+) -> String {
+    sign_root(
+        seed,
+        &withdrawal_authorization_root(&account_id(seed), monero_address, amount_nxmr_units, nonce),
+    )
 }
 
 fn hex_64(label: &str) -> String {

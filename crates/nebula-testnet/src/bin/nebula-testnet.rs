@@ -1742,6 +1742,14 @@ fn print_help() {
     nebula-testnet --build-public-testnet-launch-certificate --public-observer-confirmation <path> --operator-join-confirmation <path> --validator-join <path> --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>
     nebula-testnet --verify-public-testnet-launch-certificate <path> --public-observer-confirmation <path> --operator-join-confirmation <path> --validator-join <path> --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]
 
+RPC USER SPEND SIGNATURES:
+    Public spend calls require Ed25519 account ownership. For
+    nebula_sendTransaction, tx.from is the 32-byte account public key hex and
+    tx.signature signs RuntimeTransaction::signing_root(). For
+    nebula_requestWithdrawal, nonce and signature bind
+    withdrawal_authorization_root(account, monero_address, amount_nxmr_units,
+    nonce) before nXMR is burned into operator_pending.
+
 RPC BRIDGE POLICY:
     Policy discovery uses nebula_bridgePolicy. Deposits use
     nebula_observeBridgeDeposit with monero_tx_id, account, amount_nxmr_units,
@@ -1751,7 +1759,7 @@ RPC BRIDGE POLICY:
     proof, relayer/observer evidence, and replay protection before crediting
     nXMR.
     Withdrawals use nebula_requestWithdrawal with account, monero_address,
-    and amount_nxmr_units, then remain operator_pending until
+    amount_nxmr_units, nonce, and signature, then remain operator_pending until
     nebula_finalizeWithdrawal binds withdrawal_id, finalized_monero_tx_id,
     finalization_proof_root, and operator_approval_roots. /health, /status,
     and nebula_status expose bridge policy readiness.

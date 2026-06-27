@@ -1,3 +1,4 @@
+use ed25519_dalek::{Signer, SigningKey};
 use nebula_testnet::{
     runtime::{NebulaRuntime, RuntimeConfig, RuntimeTransaction},
     NBLA_SYMBOL,
@@ -9,17 +10,32 @@ fn bounded_mempool_config() -> RuntimeConfig {
     config
 }
 
+fn signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[0x33; 32])
+}
+
+fn account_id() -> String {
+    hex::encode(signing_key().verifying_key().to_bytes())
+}
+
+fn sign_root(root: &str) -> String {
+    hex::encode(signing_key().sign(root.as_bytes()).to_bytes())
+}
+
 fn test_transaction(nonce: u64, to: &str) -> RuntimeTransaction {
-    RuntimeTransaction {
-        from: "alice".to_string(),
+    let mut tx = RuntimeTransaction {
+        from: account_id(),
         to: to.to_string(),
         amount_nebulai: 1,
         gas_units: 1,
         gas_price_nebulai: 1,
         fee_asset: NBLA_SYMBOL.to_string(),
         nonce,
+        signature: String::new(),
         memo: Some(format!("bounded-mempool-{nonce}")),
-    }
+    };
+    tx.signature = sign_root(&tx.signing_root());
+    tx
 }
 
 #[test]

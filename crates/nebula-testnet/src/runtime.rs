@@ -30,7 +30,7 @@ pub const MIN_WITHDRAWAL_OPERATOR_QUORUM: usize = 2;
 pub const BRIDGE_CUSTODY_POLICY_ID: &str = "nebula-monero-bridge-custody-testnet-v1";
 pub const VALIDATOR_REWARD_ACCOUNT_PREFIX: &str = "validator:";
 pub const RUNTIME_SNAPSHOT_FILE: &str = "nebula-runtime-snapshot.json";
-pub const RUNTIME_SNAPSHOT_VERSION: u32 = 5;
+pub const RUNTIME_SNAPSHOT_VERSION: u32 = 6;
 pub const DEFAULT_PEER_SYNC_MS: u64 = 100;
 pub const DEFAULT_MAX_REQUEST_BYTES: usize = 1_048_576;
 pub const DEFAULT_MAX_REQUESTS_PER_MINUTE: u32 = 600;
@@ -165,6 +165,7 @@ pub struct RuntimeTransaction {
     pub gas_price_nebulai: u128,
     pub fee_asset: String,
     pub nonce: u64,
+    pub signature: String,
     #[serde(default)]
     pub memo: Option<String>,
 }
@@ -174,9 +175,9 @@ impl RuntimeTransaction {
         parse_fee_asset(&self.fee_asset)
     }
 
-    pub fn id(&self) -> String {
+    pub fn signing_root(&self) -> String {
         stable_runtime_root(&json!({
-            "tx_domain": "nebula-runtime-transaction-v1",
+            "tx_domain": "nebula-runtime-transaction-signing-v1",
             "from": self.from,
             "to": self.to,
             "amount_nebulai": self.amount_nebulai,
@@ -187,6 +188,30 @@ impl RuntimeTransaction {
             "memo": self.memo,
         }))
     }
+
+    pub fn id(&self) -> String {
+        stable_runtime_root(&json!({
+            "tx_domain": "nebula-runtime-transaction-v2",
+            "signing_root": self.signing_root(),
+            "signature": self.signature,
+        }))
+    }
+}
+
+pub fn withdrawal_authorization_root(
+    account: &str,
+    monero_address: &str,
+    amount_nxmr_units: u128,
+    nonce: u64,
+) -> String {
+    stable_runtime_root(&json!({
+        "withdrawal_authorization_domain": "nebula-runtime-withdrawal-authorization-v1",
+        "account": account,
+        "monero_address": monero_address,
+        "amount_nxmr_units": amount_nxmr_units,
+        "nonce": nonce,
+        "bridge_policy_root": bridge_policy_root(),
+    }))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -232,6 +257,8 @@ pub struct RuntimeWithdrawalRequest {
     pub account: String,
     pub monero_address: String,
     pub amount_nxmr_units: u128,
+    pub nonce: u64,
+    pub signature: String,
     pub requested_at_unix_ms: u128,
     pub status: String,
     pub bridge_policy_root: String,
@@ -1245,6 +1272,8 @@ impl NebulaRuntime {
         account: &str,
         monero_address: &str,
         amount_nxmr_units: u128,
+        nonce: u64,
+        signature: &str,
     ) -> Result<WithdrawalReport, String> {
         self.ensure_accountability_clean()?;
         validate_account_id(account)?;
@@ -1252,10 +1281,24 @@ impl NebulaRuntime {
         if amount_nxmr_units == 0 {
             return Err("amount_nxmr_units must be greater than zero".to_string());
         }
+        let authorization_root =
+            withdrawal_authorization_root(account, monero_address, amount_nxmr_units, nonce);
+        verify_account_signature(
+            account,
+            &authorization_root,
+            signature,
+            "withdrawal_signature",
+        )?;
         let state = self
             .accounts
             .get_mut(account)
             .ok_or_else(|| format!("account {account} does not exist"))?;
+        if state.nonce != nonce {
+            return Err(format!(
+                "account nonce expected {} but got {nonce}",
+                state.nonce
+            ));
+        }
         if state.nxmr_units < amount_nxmr_units {
             return Err(format!(
                 "insufficient nXMR balance: need {amount_nxmr_units}, have {}",
@@ -1263,6 +1306,10 @@ impl NebulaRuntime {
             ));
         }
         state.nxmr_units -= amount_nxmr_units;
+        state.nonce = state
+            .nonce
+            .checked_add(1)
+            .ok_or_else(|| "account nonce overflowed".to_string())?;
         let account_state = state.clone();
         let requested_at_unix_ms = unix_ms();
         let withdrawal_id = stable_runtime_root(&json!({
@@ -1270,6 +1317,8 @@ impl NebulaRuntime {
             "account": account,
             "monero_address": monero_address,
             "amount_nxmr_units": amount_nxmr_units,
+            "nonce": nonce,
+            "authorization_root": authorization_root,
             "requested_at_unix_ms": requested_at_unix_ms,
             "withdrawal_index": self.withdrawals.len(),
         }));
@@ -1278,6 +1327,8 @@ impl NebulaRuntime {
             account: account.to_string(),
             monero_address: monero_address.to_string(),
             amount_nxmr_units,
+            nonce,
+            signature: signature.to_ascii_lowercase(),
             requested_at_unix_ms,
             status: "operator_pending".to_string(),
             bridge_policy_root: bridge_policy_root(),
@@ -2362,9 +2413,17 @@ fn dispatch_json_rpc_method(
             let account = required_str_param(&params, "account")?;
             let monero_address = required_str_param(&params, "monero_address")?;
             let amount_nxmr_units = required_u128_param(&params, "amount_nxmr_units")?;
+            let nonce = required_u64_param(&params, "nonce")?;
+            let signature = required_str_param(&params, "signature")?;
             let report = {
                 let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
-                runtime.request_withdrawal(&account, &monero_address, amount_nxmr_units)?
+                runtime.request_withdrawal(
+                    &account,
+                    &monero_address,
+                    amount_nxmr_units,
+                    nonce,
+                    &signature,
+                )?
             };
             state.persist()?;
             Ok(json!(report))
@@ -2556,6 +2615,8 @@ fn content_length_from_headers(headers: &str) -> Option<usize> {
 fn validate_transaction_shape(tx: &RuntimeTransaction) -> Result<(), String> {
     validate_account_id(&tx.from)?;
     validate_account_id(&tx.to)?;
+    validate_fixed_hex(&tx.from, "from", 64)?;
+    verify_account_signature(&tx.from, &tx.signing_root(), &tx.signature, "tx_signature")?;
     if tx.from == tx.to {
         return Err("from and to accounts must differ".to_string());
     }
@@ -2570,6 +2631,28 @@ fn validate_transaction_shape(tx: &RuntimeTransaction) -> Result<(), String> {
         return Err("gas_price_nebulai must be greater than zero".to_string());
     }
     Ok(())
+}
+
+fn verify_account_signature(
+    account_public_key_hex: &str,
+    signing_root: &str,
+    signature_hex: &str,
+    signature_name: &str,
+) -> Result<(), String> {
+    validate_fixed_hex(account_public_key_hex, "account_public_key_hex", 64)?;
+    validate_fixed_hex(signing_root, "signing_root", 64)?;
+    validate_fixed_hex(signature_hex, signature_name, 128)?;
+    let verifying_key =
+        verifying_key_from_hex_named(account_public_key_hex, "account_public_key_hex")?;
+    let signature_bytes = decode_fixed_hex(signature_hex, signature_name, 64)?;
+    let signature_bytes: [u8; 64] = signature_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| format!("{signature_name} must decode to 64 bytes"))?;
+    let signature = Signature::from_bytes(&signature_bytes);
+    verifying_key
+        .verify(signing_root.as_bytes(), &signature)
+        .map_err(|error| format!("{signature_name} Ed25519 verification failed: {error}"))
 }
 
 fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
@@ -2920,6 +3003,7 @@ fn validate_bridge_deposit(deposit: &RuntimeBridgeDeposit) -> Result<(), String>
 
 fn validate_withdrawal(withdrawal: &RuntimeWithdrawalRequest) -> Result<(), String> {
     validate_account_id(&withdrawal.account)?;
+    validate_fixed_hex(&withdrawal.account, "withdrawal account", 64)?;
     validate_monero_address(&withdrawal.monero_address)?;
     if withdrawal.amount_nxmr_units == 0 {
         return Err(format!(
@@ -2927,6 +3011,17 @@ fn validate_withdrawal(withdrawal: &RuntimeWithdrawalRequest) -> Result<(), Stri
             withdrawal.withdrawal_id
         ));
     }
+    verify_account_signature(
+        &withdrawal.account,
+        &withdrawal_authorization_root(
+            &withdrawal.account,
+            &withdrawal.monero_address,
+            withdrawal.amount_nxmr_units,
+            withdrawal.nonce,
+        ),
+        &withdrawal.signature,
+        "withdrawal_signature",
+    )?;
     if withdrawal.bridge_policy_root != bridge_policy_root() {
         return Err(format!(
             "withdrawal {} bridge_policy_root does not match runtime policy",
@@ -3062,13 +3157,17 @@ fn signing_key_from_hex(secret_key_hex: &str) -> Result<SigningKey, String> {
 }
 
 fn verifying_key_from_hex(public_key_hex: &str) -> Result<VerifyingKey, String> {
-    let bytes = decode_fixed_hex(public_key_hex, "sequencer_public_key_hex", 32)?;
+    verifying_key_from_hex_named(public_key_hex, "sequencer_public_key_hex")
+}
+
+fn verifying_key_from_hex_named(public_key_hex: &str, name: &str) -> Result<VerifyingKey, String> {
+    let bytes = decode_fixed_hex(public_key_hex, name, 32)?;
     let bytes: [u8; 32] = bytes
         .as_slice()
         .try_into()
-        .map_err(|_| "sequencer_public_key_hex must decode to 32 bytes".to_string())?;
+        .map_err(|_| format!("{name} must decode to 32 bytes"))?;
     VerifyingKey::from_bytes(&bytes)
-        .map_err(|error| format!("sequencer_public_key_hex is not an Ed25519 key: {error}"))
+        .map_err(|error| format!("{name} is not an Ed25519 key: {error}"))
 }
 
 fn public_key_hex_for_secret(secret_key_hex: &str) -> Result<String, String> {
@@ -3364,6 +3463,8 @@ fn withdrawal_root(withdrawal: &RuntimeWithdrawalRequest) -> String {
         "account": withdrawal.account,
         "monero_address": withdrawal.monero_address,
         "amount_nxmr_units": withdrawal.amount_nxmr_units,
+        "nonce": withdrawal.nonce,
+        "signature": withdrawal.signature,
         "requested_at_unix_ms": withdrawal.requested_at_unix_ms,
         "status": withdrawal.status,
         "bridge_policy_root": withdrawal.bridge_policy_root,
@@ -3506,10 +3607,41 @@ mod tests {
         }
     }
 
+    fn test_account_secret_key_hex() -> String {
+        "1f".repeat(32)
+    }
+
+    fn test_account_id() -> String {
+        public_key_hex_for_secret(&test_account_secret_key_hex()).unwrap()
+    }
+
+    fn sign_test_root(root: &str) -> String {
+        let signing_key = signing_key_from_hex(&test_account_secret_key_hex()).unwrap();
+        hex::encode(signing_key.sign(root.as_bytes()).to_bytes())
+    }
+
+    fn sign_test_transaction(mut tx: RuntimeTransaction) -> RuntimeTransaction {
+        tx.signature = sign_test_root(&tx.signing_root());
+        tx
+    }
+
+    fn test_withdrawal_signature(
+        monero_address: &str,
+        amount_nxmr_units: u128,
+        nonce: u64,
+    ) -> String {
+        sign_test_root(&withdrawal_authorization_root(
+            &test_account_id(),
+            monero_address,
+            amount_nxmr_units,
+            nonce,
+        ))
+    }
+
     fn test_bridge_deposit(monero_tx_digit: char, proof_digit: char) -> RuntimeBridgeDeposit {
         RuntimeBridgeDeposit {
             monero_tx_id: monero_tx_digit.to_string().repeat(64),
-            account: "alice".to_string(),
+            account: test_account_id(),
             amount_nxmr_units: 5_000,
             confirmations: MIN_BRIDGE_CONFIRMATIONS,
             observer_id: "observer-a".to_string(),
@@ -3522,16 +3654,17 @@ mod tests {
     }
 
     fn test_nbla_transaction(nonce: u64, to: &str) -> RuntimeTransaction {
-        RuntimeTransaction {
-            from: "alice".to_string(),
+        sign_test_transaction(RuntimeTransaction {
+            from: test_account_id(),
             to: to.to_string(),
             amount_nebulai: 1,
             gas_units: 1,
             gas_price_nebulai: 1,
             fee_asset: NBLA_SYMBOL.to_string(),
             nonce,
+            signature: String::new(),
             memo: Some(format!("test-nbla-{nonce}")),
-        }
+        })
     }
 
     #[test]
@@ -4045,17 +4178,19 @@ mod tests {
     #[test]
     fn runtime_includes_nbla_fee_transaction_and_rewards_validator() {
         let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
-        runtime.faucet("alice").unwrap();
-        let tx = RuntimeTransaction {
-            from: "alice".to_string(),
+        let account = test_account_id();
+        runtime.faucet(&account).unwrap();
+        let tx = sign_test_transaction(RuntimeTransaction {
+            from: account,
             to: "bob".to_string(),
             amount_nebulai: 10,
             gas_units: 5,
             gas_price_nebulai: 2,
             fee_asset: NBLA_SYMBOL.to_string(),
             nonce: 0,
+            signature: String::new(),
             memo: None,
-        };
+        });
         let tx_id = runtime.submit_transaction(tx).unwrap().tx_id;
         let block = runtime.produce_block();
         assert_eq!(block.height, 1);
@@ -4071,19 +4206,58 @@ mod tests {
     }
 
     #[test]
+    fn runtime_rejects_unsigned_user_spends_and_withdrawals() {
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let account = test_account_id();
+        runtime.faucet(&account).unwrap();
+        runtime
+            .observe_bridge_deposit(test_bridge_deposit('6', '7'))
+            .unwrap();
+
+        let unsigned_tx = RuntimeTransaction {
+            from: account.clone(),
+            to: "bob".to_string(),
+            amount_nebulai: 10,
+            gas_units: 5,
+            gas_price_nebulai: 2,
+            fee_asset: NBLA_SYMBOL.to_string(),
+            nonce: 0,
+            signature: "0".repeat(128),
+            memo: None,
+        };
+        assert!(runtime
+            .submit_transaction(unsigned_tx)
+            .unwrap_err()
+            .contains("tx_signature"));
+
+        assert!(runtime
+            .request_withdrawal(
+                &account,
+                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                2_000,
+                0,
+                &"0".repeat(128),
+            )
+            .unwrap_err()
+            .contains("withdrawal_signature"));
+    }
+
+    #[test]
     fn runtime_accounts_for_nxmr_fee_buyback_pool() {
         let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
-        runtime.faucet("alice").unwrap();
-        let tx = RuntimeTransaction {
-            from: "alice".to_string(),
+        let account = test_account_id();
+        runtime.faucet(&account).unwrap();
+        let tx = sign_test_transaction(RuntimeTransaction {
+            from: account,
             to: "bob".to_string(),
             amount_nebulai: 100,
             gas_units: 100,
             gas_price_nebulai: 10,
             fee_asset: NXMR_SYMBOL.to_string(),
             nonce: 0,
+            signature: String::new(),
             memo: None,
-        };
+        });
         let tx_id = runtime.submit_transaction(tx).unwrap().tx_id;
         runtime.produce_block();
         let receipt = runtime.receipt(&tx_id).unwrap();
@@ -4108,7 +4282,10 @@ mod tests {
         let report = runtime.observe_bridge_deposit(deposit).unwrap();
         assert!(report.credited);
         assert_eq!(report.deposit_root.len(), 64);
-        assert_eq!(runtime.account("alice").unwrap().nxmr_units, 5_000);
+        assert_eq!(
+            runtime.account(&test_account_id()).unwrap().nxmr_units,
+            5_000
+        );
         assert_eq!(runtime.status().bridge_deposit_count, 1);
     }
 
@@ -4120,7 +4297,13 @@ mod tests {
             .unwrap();
 
         let report = runtime
-            .request_withdrawal("alice", "9xTestnetMoneroAddressForNebulaWithdrawals", 2_000)
+            .request_withdrawal(
+                &test_account_id(),
+                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                2_000,
+                0,
+                &test_withdrawal_signature("9xTestnetMoneroAddressForNebulaWithdrawals", 2_000, 0),
+            )
             .unwrap();
         assert!(report.accepted);
         assert_eq!(report.withdrawal.status, "operator_pending");
@@ -4180,7 +4363,13 @@ mod tests {
             .observe_bridge_deposit(test_bridge_deposit('d', 'e'))
             .unwrap();
         let withdrawal_id = runtime
-            .request_withdrawal("alice", "9xTestnetMoneroAddressForNebulaWithdrawals", 2_000)
+            .request_withdrawal(
+                &test_account_id(),
+                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                2_000,
+                0,
+                &test_withdrawal_signature("9xTestnetMoneroAddressForNebulaWithdrawals", 2_000, 0),
+            )
             .unwrap()
             .withdrawal
             .withdrawal_id;
@@ -4220,7 +4409,13 @@ mod tests {
             .observe_bridge_deposit(test_bridge_deposit('4', '5'))
             .unwrap();
         let second_withdrawal_id = runtime
-            .request_withdrawal("alice", "9xTestnetMoneroAddressForNebulaWithdrawals", 1_000)
+            .request_withdrawal(
+                &test_account_id(),
+                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                1_000,
+                1,
+                &test_withdrawal_signature("9xTestnetMoneroAddressForNebulaWithdrawals", 1_000, 1),
+            )
             .unwrap()
             .withdrawal
             .withdrawal_id;
@@ -4252,17 +4447,19 @@ mod tests {
     fn snapshot_round_trips_pending_mempool_and_preserves_genesis() {
         let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
         let genesis_hash = runtime.latest_block().block_hash;
-        runtime.faucet("alice").unwrap();
-        let tx = RuntimeTransaction {
-            from: "alice".to_string(),
+        let account = test_account_id();
+        runtime.faucet(&account).unwrap();
+        let tx = sign_test_transaction(RuntimeTransaction {
+            from: account,
             to: "bob".to_string(),
             amount_nebulai: 100,
             gas_units: 10,
             gas_price_nebulai: 1,
             fee_asset: NBLA_SYMBOL.to_string(),
             nonce: 0,
+            signature: String::new(),
             memo: Some("pending before restart".to_string()),
-        };
+        });
         let tx_id = runtime.submit_transaction(tx).unwrap().tx_id;
         let snapshot = runtime.export_snapshot();
 
@@ -4333,14 +4530,23 @@ mod tests {
         let deposit = test_bridge_deposit('e', 'f');
         runtime.observe_bridge_deposit(deposit.clone()).unwrap();
         runtime
-            .request_withdrawal("alice", "9xTestnetMoneroAddressForNebulaWithdrawals", 2_000)
+            .request_withdrawal(
+                &test_account_id(),
+                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                2_000,
+                0,
+                &test_withdrawal_signature("9xTestnetMoneroAddressForNebulaWithdrawals", 2_000, 0),
+            )
             .unwrap();
         let snapshot = runtime.export_snapshot();
         let mut restored =
             NebulaRuntime::from_snapshot(RuntimeConfig::public_testnet_default(), snapshot)
                 .unwrap();
 
-        assert_eq!(restored.account("alice").unwrap().nxmr_units, 3_000);
+        assert_eq!(
+            restored.account(&test_account_id()).unwrap().nxmr_units,
+            3_000
+        );
         assert!(restored.observe_bridge_deposit(deposit).is_err());
         assert_eq!(restored.status().bridge_deposit_count, 1);
         assert_eq!(restored.status().withdrawal_request_count, 1);
