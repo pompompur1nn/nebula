@@ -433,6 +433,7 @@ The public launch suite covers:
   and no query or fragment
 - public status endpoint binding to the expected public surface
 - standalone public status/probe surface exact-shape validation
+- deployment-scoped public status/probe validation for custom endpoints
 - final package binding for the public status/probe surface
 - shared deployment witness root binding for bootstrap nodes, operators, and
   observers
@@ -698,14 +699,23 @@ policy constants, and TLS pin expiry evidence.
 It also reports a deterministic deployment-quorum root over the required and
 actual bootstrap, operator, observer, and deployment-region coverage.
 
-Operators can generate and verify the public status/probe surface before filling
-deployment evidence:
+Operators should build the public status/probe surface for the actual HTTPS
+endpoint before filling deployment evidence. Custom endpoint surfaces are bound
+to deployment attestations and later observer confirmations; the standalone
+sample verifiers remain intentionally sample-shaped:
 
 ```bash
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-status > /tmp/nebula-public-status.json
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-status /tmp/nebula-public-status.json --json
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-probe > /tmp/nebula-public-probe.json
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-probe /tmp/nebula-public-probe.json --json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-public-status --endpoint-url https://testnet.nebula.example/status > /tmp/nebula-public-status.json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-public-probe --endpoint-url https://testnet.nebula.example/status > /tmp/nebula-public-probe.json
+```
+
+Sample-only fixtures remain available for local rehearsal:
+
+```bash
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-status > /tmp/nebula-sample-public-status.json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-status /tmp/nebula-sample-public-status.json --json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-public-probe > /tmp/nebula-sample-public-probe.json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-public-probe /tmp/nebula-sample-public-probe.json --json
 ```
 
 Operators can also verify preflight and runbook receipts before wrapping them in
@@ -720,11 +730,20 @@ cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet 
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-runbook-receipt /tmp/nebula-runbook.json --json
 ```
 
-Operators can generate the required shape and verify a filled attestation with:
+Operators can build the deployment attestation from real public-surface,
+preflight, runbook, TLS, operator, observer, bootstrap, and rollback evidence,
+then verify the filled attestation with:
 
 ```bash
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-deployment-attestation > /tmp/nebula-attestation.json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-deployment-attestation --public-status /tmp/nebula-public-status.json --public-probe /tmp/nebula-public-probe.json --preflight-receipt /tmp/nebula-preflight.json --runbook-receipt /tmp/nebula-runbook.json --tls-pin <cert_sha256,public_key_sha256,not_after_unix_ms> --tls-pin <cert_sha256,public_key_sha256,not_after_unix_ms> --bootstrap-node <node_id,operator_id,region,endpoint> --bootstrap-node <node_id,operator_id,region,endpoint> --operator <operator_id,region,public_key> --operator <operator_id,region,public_key> --observer <observer_id,region,public_key> --observer <observer_id,region,public_key> --rollback-plan-sha3-256 <hex> --rollback-recovery-root <hex> > /tmp/nebula-attestation.json
 cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-deployment-attestation /tmp/nebula-attestation.json --json
+```
+
+Sample-only deployment fixtures remain available for local rehearsal:
+
+```bash
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --sample-deployment-attestation > /tmp/nebula-sample-attestation.json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-deployment-attestation /tmp/nebula-sample-attestation.json --json
 ```
 
 ## Validator Set Gate

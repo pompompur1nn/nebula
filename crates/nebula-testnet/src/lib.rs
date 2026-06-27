@@ -837,6 +837,54 @@ pub struct ReceiptReport {
     pub step_count: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct PublicSurfaceBuildInput {
+    pub endpoint_url: String,
+    pub artifact_sha3_256: String,
+    pub cargo_lock_sha3_256: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeploymentAttestationBuildInput {
+    pub public_status_json: String,
+    pub public_probe_json: String,
+    pub preflight_receipt_json: String,
+    pub runbook_receipt_json: String,
+    pub artifact_sha3_256: String,
+    pub cargo_lock_sha3_256: String,
+    pub generated_at_unix_ms: u128,
+    pub expires_at_unix_ms: u128,
+    pub tls_pins: Vec<TlsEndpointPin>,
+    pub bootstrap_nodes: Vec<BootstrapNodeBuildInput>,
+    pub operators: Vec<OperatorBuildInput>,
+    pub observers: Vec<ObserverBuildInput>,
+    pub rollback_plan_sha3_256: String,
+    pub rollback_last_drill_unix_ms: u128,
+    pub rollback_recovery_point_root: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BootstrapNodeBuildInput {
+    pub node_id: String,
+    pub operator_id: String,
+    pub region: String,
+    pub endpoint: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OperatorBuildInput {
+    pub operator_id: String,
+    pub region: String,
+    pub public_key: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObserverBuildInput {
+    pub observer_id: String,
+    pub region: String,
+    pub public_key: String,
+}
+
 struct PublicSurfaceSample {
     endpoint_url: String,
     launch_bundle_root: String,
@@ -1499,6 +1547,178 @@ pub fn sample_public_probe_json_pretty() -> String {
     serde_json::to_string_pretty(&sample.public_probe).expect("sample public probe serializes")
 }
 
+pub fn default_artifact_sha3_256() -> String {
+    hex_64("nebula-testnet-artifact")
+}
+
+pub fn default_cargo_lock_sha3_256() -> String {
+    hex_64("nebula-testnet-cargo-lock")
+}
+
+pub fn build_public_status_manifest_json_pretty(
+    input: PublicSurfaceBuildInput,
+) -> Result<String, AttestationError> {
+    let surface = build_public_surface(input)?;
+    serde_json::to_string_pretty(&surface.public_status_manifest)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+pub fn build_public_probe_json_pretty(
+    input: PublicSurfaceBuildInput,
+) -> Result<String, AttestationError> {
+    let surface = build_public_surface(input)?;
+    serde_json::to_string_pretty(&surface.public_probe)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))
+}
+
+pub fn build_deployment_attestation_json_pretty(
+    input: DeploymentAttestationBuildInput,
+) -> Result<String, AttestationError> {
+    let readiness = readiness_report();
+    let runtime_root = readiness.status_roots["runtime"]
+        .as_str()
+        .expect("runtime root is a string")
+        .to_string();
+    let economics_root = readiness.status_roots["economics"]
+        .as_str()
+        .expect("economics root is a string")
+        .to_string();
+    let package_identity =
+        build_package_identity(&input.artifact_sha3_256, &input.cargo_lock_sha3_256)?;
+    let launch_bundle =
+        sample_launch_bundle(&package_identity.root, &runtime_root, &economics_root);
+    let public_status_manifest =
+        parse_public_status_manifest_json(&input.public_status_json, "public_status")?;
+    let public_probe = parse_public_probe_json(&input.public_probe_json, "public_probe")?;
+    let preflight_receipt = parse_receipt_json(&input.preflight_receipt_json, "preflight_receipt")?;
+    let runbook_receipt = parse_receipt_json(&input.runbook_receipt_json, "runbook_receipt")?;
+
+    let mut errors = Vec::new();
+    verify_public_status_manifest(
+        &mut errors,
+        &public_status_manifest,
+        &public_status_manifest.endpoint_url,
+        &launch_bundle.root,
+    );
+    verify_public_probe(
+        &mut errors,
+        &public_probe,
+        &public_status_manifest.endpoint_url,
+        &launch_bundle.root,
+        &economics_root,
+    );
+    verify_receipt(
+        &mut errors,
+        "preflight_receipt",
+        &preflight_receipt,
+        input.generated_at_unix_ms,
+    );
+    verify_receipt(
+        &mut errors,
+        "runbook_receipt",
+        &runbook_receipt,
+        input.generated_at_unix_ms,
+    );
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    let policy_claim = sample_policy_claim(
+        &readiness.public_launch_readiness.remediation_root,
+        &economics_root,
+    );
+    let public_endpoint = PublicEndpointEvidence {
+        url: public_status_manifest.endpoint_url.clone(),
+        public_status_manifest_root: public_status_manifest.root.clone(),
+        tls_pins: input.tls_pins,
+    };
+    let witness_evidence_root = deployment_witness_root(
+        &launch_bundle,
+        &public_status_manifest,
+        &public_endpoint,
+        &policy_claim,
+        &public_probe,
+    );
+    let bootstrap_nodes = input
+        .bootstrap_nodes
+        .into_iter()
+        .map(|node| {
+            let mut node = BootstrapNode {
+                node_id: node.node_id,
+                operator_id: node.operator_id,
+                region: node.region,
+                endpoint: node.endpoint,
+                attestation_root: String::new(),
+            };
+            node.attestation_root = bootstrap_node_root(&node, &witness_evidence_root);
+            node
+        })
+        .collect::<Vec<_>>();
+    let operators = input
+        .operators
+        .into_iter()
+        .map(|operator| {
+            let mut operator = OperatorAttestation {
+                operator_id: operator.operator_id,
+                region: operator.region,
+                public_key: operator.public_key,
+                signed_evidence_root: witness_evidence_root.clone(),
+                signature_sha3_256: String::new(),
+            };
+            operator.signature_sha3_256 =
+                operator_signature_root(&operator, &witness_evidence_root);
+            operator
+        })
+        .collect::<Vec<_>>();
+    let observers = input
+        .observers
+        .into_iter()
+        .map(|observer| {
+            let mut observer = ObserverAttestation {
+                observer_id: observer.observer_id,
+                region: observer.region,
+                observed_endpoint: public_endpoint.url.clone(),
+                observed_evidence_root: witness_evidence_root.clone(),
+                signature: SignatureVerification {
+                    algorithm: "ed25519-testnet-attestation".to_string(),
+                    public_key: observer.public_key,
+                    signature_sha3_256: String::new(),
+                    verified: true,
+                },
+            };
+            observer.signature.signature_sha3_256 =
+                observer_signature_root(&observer, &witness_evidence_root);
+            observer
+        })
+        .collect::<Vec<_>>();
+    let attestation = DeploymentAttestation {
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        generated_at_unix_ms: input.generated_at_unix_ms,
+        expires_at_unix_ms: input.expires_at_unix_ms,
+        package_identity,
+        launch_bundle,
+        public_status_manifest,
+        public_endpoint,
+        policy_claim,
+        public_probe,
+        preflight_receipt,
+        runbook_receipt,
+        bootstrap_nodes,
+        operators,
+        observers,
+        rollback_evidence: RollbackEvidence {
+            rollback_plan_sha3_256: input.rollback_plan_sha3_256,
+            last_drill_unix_ms: input.rollback_last_drill_unix_ms,
+            recovery_point_root: input.rollback_recovery_point_root,
+        },
+    };
+    let output = serde_json::to_string_pretty(&attestation)
+        .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+    verify_deployment_attestation_json(&output)?;
+    Ok(output)
+}
+
 pub fn verify_public_status_manifest_json(
     input: &str,
 ) -> Result<PublicStatusReport, AttestationError> {
@@ -1555,6 +1775,67 @@ pub fn verify_public_probe_json(input: &str) -> Result<PublicProbeReport, Attest
         launch_bundle_root: probe.body.launch_bundle_root,
         fee_policy_root: probe.body.fee_policy_root,
     })
+}
+
+fn verify_public_surface_jsons_for_deployment(
+    public_status_json: &str,
+    public_probe_json: &str,
+    deployment_attestation: &DeploymentAttestation,
+) -> Result<(PublicStatusReport, PublicProbeReport), AttestationError> {
+    let readiness = readiness_report();
+    let economics_root = readiness.status_roots["economics"]
+        .as_str()
+        .expect("economics root is a string");
+    let public_status_manifest =
+        parse_public_status_manifest_json(public_status_json, "public_status")?;
+    let public_probe = parse_public_probe_json(public_probe_json, "public_probe")?;
+    let mut errors = Vec::new();
+    verify_public_status_manifest(
+        &mut errors,
+        &public_status_manifest,
+        &deployment_attestation.public_endpoint.url,
+        &deployment_attestation.launch_bundle.root,
+    );
+    verify_public_probe(
+        &mut errors,
+        &public_probe,
+        &deployment_attestation.public_endpoint.url,
+        &deployment_attestation.launch_bundle.root,
+        economics_root,
+    );
+    require_root(
+        &mut errors,
+        "public_status_manifest.root",
+        &public_status_manifest.root,
+        &deployment_attestation.public_status_manifest.root,
+    );
+    require_root(
+        &mut errors,
+        "public_probe.root",
+        &public_probe.root,
+        &deployment_attestation.public_probe.root,
+    );
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    Ok((
+        PublicStatusReport {
+            public_status_ready: true,
+            level: "public-status-attested",
+            public_status_manifest_root: public_status_manifest.root,
+            endpoint_url: public_status_manifest.endpoint_url,
+            launch_bundle_root: public_status_manifest.launch_bundle_root,
+        },
+        PublicProbeReport {
+            public_probe_ready: true,
+            level: "public-probe-attested",
+            public_probe_root: public_probe.root,
+            endpoint_url: public_probe.url,
+            launch_bundle_root: public_probe.body.launch_bundle_root,
+            fee_policy_root: public_probe.body.fee_policy_root,
+        },
+    ))
 }
 
 pub fn sample_preflight_receipt_json_pretty() -> String {
@@ -3538,10 +3819,13 @@ pub fn build_public_observer_confirmation_json_pretty(
         operator_acceptance_json,
         genesis_manifest_json,
     )?;
-    let public_status_report = verify_public_status_manifest_json(public_status_json)?;
-    let public_probe_report = verify_public_probe_json(public_probe_json)?;
     let deployment_attestation =
         verified_deployment_attestation_manifest(deployment_attestation_json)?;
+    let (public_status_report, public_probe_report) = verify_public_surface_jsons_for_deployment(
+        public_status_json,
+        public_probe_json,
+        &deployment_attestation,
+    )?;
     let manifest = public_observer_confirmation_manifest(
         &deployment_attestation,
         &join_confirmation_report,
@@ -3586,10 +3870,13 @@ pub fn verify_public_observer_confirmation_jsons(
         operator_acceptance_json,
         genesis_manifest_json,
     )?;
-    let public_status_report = verify_public_status_manifest_json(public_status_json)?;
-    let public_probe_report = verify_public_probe_json(public_probe_json)?;
     let deployment_attestation =
         verified_deployment_attestation_manifest(deployment_attestation_json)?;
+    let (public_status_report, public_probe_report) = verify_public_surface_jsons_for_deployment(
+        public_status_json,
+        public_probe_json,
+        &deployment_attestation,
+    )?;
     let now = unix_ms();
     let expected = public_observer_confirmation_manifest(
         &deployment_attestation,
@@ -4169,6 +4456,93 @@ fn sample_public_surface() -> PublicSurfaceSample {
         public_status_manifest,
         public_probe,
     }
+}
+
+fn build_public_surface(
+    input: PublicSurfaceBuildInput,
+) -> Result<PublicSurfaceSample, AttestationError> {
+    let package_identity =
+        build_package_identity(&input.artifact_sha3_256, &input.cargo_lock_sha3_256)?;
+    let readiness = readiness_report();
+    let runtime_root = readiness.status_roots["runtime"]
+        .as_str()
+        .expect("runtime root is a string")
+        .to_string();
+    let economics_root = readiness.status_roots["economics"]
+        .as_str()
+        .expect("economics root is a string")
+        .to_string();
+    let launch_bundle =
+        sample_launch_bundle(&package_identity.root, &runtime_root, &economics_root);
+    let public_status_manifest =
+        sample_public_status_manifest(&launch_bundle.root, &input.endpoint_url);
+    let public_probe =
+        sample_public_probe(&input.endpoint_url, &launch_bundle.root, &economics_root);
+    let mut errors = Vec::new();
+    verify_public_status_manifest(
+        &mut errors,
+        &public_status_manifest,
+        &input.endpoint_url,
+        &launch_bundle.root,
+    );
+    verify_public_probe(
+        &mut errors,
+        &public_probe,
+        &input.endpoint_url,
+        &launch_bundle.root,
+        &economics_root,
+    );
+    if !errors.is_empty() {
+        return Err(AttestationError::Invalid(errors));
+    }
+
+    Ok(PublicSurfaceSample {
+        endpoint_url: input.endpoint_url,
+        launch_bundle_root: launch_bundle.root,
+        economics_root,
+        public_status_manifest,
+        public_probe,
+    })
+}
+
+fn build_package_identity(
+    artifact_sha3_256: &str,
+    cargo_lock_sha3_256: &str,
+) -> Result<PackageIdentity, AttestationError> {
+    let mut package_identity = PackageIdentity {
+        package_name: "nebula-testnet".to_string(),
+        chain_id: CHAIN_ID.to_string(),
+        runtime_version: VERSION.to_string(),
+        artifact_sha3_256: artifact_sha3_256.to_string(),
+        cargo_lock_sha3_256: cargo_lock_sha3_256.to_string(),
+        root: String::new(),
+    };
+    package_identity.root = package_identity_root(&package_identity);
+    let mut errors = Vec::new();
+    verify_package_identity(&mut errors, &package_identity);
+    if errors.is_empty() {
+        Ok(package_identity)
+    } else {
+        Err(AttestationError::Invalid(errors))
+    }
+}
+
+fn parse_public_status_manifest_json(
+    input: &str,
+    label: &str,
+) -> Result<PublicStatusManifest, AttestationError> {
+    serde_json::from_str::<PublicStatusManifest>(input.trim_start_matches('\u{feff}'))
+        .map_err(|error| AttestationError::MalformedJson(format!("{label}: {error}")))
+}
+
+fn parse_public_probe_json(input: &str, label: &str) -> Result<PublicProbe, AttestationError> {
+    serde_json::from_str::<PublicProbe>(input.trim_start_matches('\u{feff}'))
+        .map_err(|error| AttestationError::MalformedJson(format!("{label}: {error}")))
+}
+
+fn parse_receipt_json(input: &str, label: &str) -> Result<Receipt, AttestationError> {
+    serde_json::from_str::<Receipt>(input.trim_start_matches('\u{feff}'))
+        .map_err(|error| AttestationError::MalformedJson(format!("{label}: {error}")))
 }
 
 fn sample_public_status_manifest(
@@ -7466,6 +7840,165 @@ mod public_launch {
         assert_eq!(report.endpoint_url, "https://testnet.nebula.example/status");
         assert_eq!(report.launch_bundle_root.len(), 64);
         assert_eq!(report.fee_policy_root.len(), 64);
+    }
+
+    #[test]
+    fn builds_deployment_attestation_for_custom_public_surface() {
+        let endpoint_url = "https://public.testnet.nebula.example/status";
+        let public_status_json =
+            build_public_status_manifest_json_pretty(PublicSurfaceBuildInput {
+                endpoint_url: endpoint_url.to_string(),
+                artifact_sha3_256: default_artifact_sha3_256(),
+                cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+            })
+            .unwrap();
+        let public_probe_json = build_public_probe_json_pretty(PublicSurfaceBuildInput {
+            endpoint_url: endpoint_url.to_string(),
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+        })
+        .unwrap();
+        let preflight_receipt_json = sample_preflight_receipt_json_pretty();
+        let runbook_receipt_json = sample_runbook_receipt_json_pretty();
+        let generated_at_unix_ms = unix_ms();
+        let output = build_deployment_attestation_json_pretty(DeploymentAttestationBuildInput {
+            public_status_json: public_status_json.clone(),
+            public_probe_json: public_probe_json.clone(),
+            preflight_receipt_json,
+            runbook_receipt_json,
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+            generated_at_unix_ms,
+            expires_at_unix_ms: generated_at_unix_ms + 86_400_000,
+            tls_pins: vec![
+                TlsEndpointPin {
+                    cert_sha256: hex_64("custom-tls-cert-a"),
+                    public_key_sha256: hex_64("custom-tls-key-a"),
+                    not_after_unix_ms: generated_at_unix_ms + 2_592_000_000,
+                },
+                TlsEndpointPin {
+                    cert_sha256: hex_64("custom-tls-cert-b"),
+                    public_key_sha256: hex_64("custom-tls-key-b"),
+                    not_after_unix_ms: generated_at_unix_ms + 2_592_000_000,
+                },
+            ],
+            bootstrap_nodes: vec![
+                BootstrapNodeBuildInput {
+                    node_id: "bootstrap-us-east-1".to_string(),
+                    operator_id: "operator-a".to_string(),
+                    region: "us-east".to_string(),
+                    endpoint: "https://bootstrap-a.public-nebula.example".to_string(),
+                },
+                BootstrapNodeBuildInput {
+                    node_id: "bootstrap-eu-west-1".to_string(),
+                    operator_id: "operator-b".to_string(),
+                    region: "eu-west".to_string(),
+                    endpoint: "https://bootstrap-b.public-nebula.example".to_string(),
+                },
+            ],
+            operators: vec![
+                OperatorBuildInput {
+                    operator_id: "operator-a".to_string(),
+                    region: "us-east".to_string(),
+                    public_key: hex_64("custom-operator-a"),
+                },
+                OperatorBuildInput {
+                    operator_id: "operator-b".to_string(),
+                    region: "eu-west".to_string(),
+                    public_key: hex_64("custom-operator-b"),
+                },
+            ],
+            observers: vec![
+                ObserverBuildInput {
+                    observer_id: "observer-us-east-1".to_string(),
+                    region: "us-east".to_string(),
+                    public_key: hex_64("custom-observer-a"),
+                },
+                ObserverBuildInput {
+                    observer_id: "observer-eu-west-1".to_string(),
+                    region: "eu-west".to_string(),
+                    public_key: hex_64("custom-observer-b"),
+                },
+            ],
+            rollback_plan_sha3_256: hex_64("custom-rollback-plan"),
+            rollback_last_drill_unix_ms: generated_at_unix_ms,
+            rollback_recovery_point_root: hex_64("custom-rollback-recovery"),
+        })
+        .unwrap();
+
+        let report = verify_deployment_attestation_json(&output).unwrap();
+        assert!(report.public_launch_ready);
+        assert_eq!(report.verified_operator_count, 2);
+        assert_eq!(report.verified_observer_count, 2);
+
+        let attestation = serde_json::from_str::<DeploymentAttestation>(&output).unwrap();
+        assert_eq!(attestation.public_endpoint.url, endpoint_url);
+        assert_eq!(
+            attestation.public_status_manifest.endpoint_url,
+            endpoint_url
+        );
+        assert_eq!(attestation.public_probe.url, endpoint_url);
+        assert!(verify_public_status_manifest_json(&public_status_json).is_err());
+        assert!(verify_public_probe_json(&public_probe_json).is_err());
+        let (status_report, probe_report) = verify_public_surface_jsons_for_deployment(
+            &public_status_json,
+            &public_probe_json,
+            &attestation,
+        )
+        .unwrap();
+        assert_eq!(status_report.endpoint_url, endpoint_url);
+        assert_eq!(probe_report.endpoint_url, endpoint_url);
+    }
+
+    #[test]
+    fn deployment_attestation_builder_rejects_mismatched_public_probe() {
+        let status = build_public_status_manifest_json_pretty(PublicSurfaceBuildInput {
+            endpoint_url: "https://status.testnet.nebula.example/status".to_string(),
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+        })
+        .unwrap();
+        let probe = build_public_probe_json_pretty(PublicSurfaceBuildInput {
+            endpoint_url: "https://other.testnet.nebula.example/status".to_string(),
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+        })
+        .unwrap();
+        let generated_at_unix_ms = unix_ms();
+
+        let error = build_deployment_attestation_json_pretty(DeploymentAttestationBuildInput {
+            public_status_json: status,
+            public_probe_json: probe,
+            preflight_receipt_json: sample_preflight_receipt_json_pretty(),
+            runbook_receipt_json: sample_runbook_receipt_json_pretty(),
+            artifact_sha3_256: default_artifact_sha3_256(),
+            cargo_lock_sha3_256: default_cargo_lock_sha3_256(),
+            generated_at_unix_ms,
+            expires_at_unix_ms: generated_at_unix_ms + 86_400_000,
+            tls_pins: vec![TlsEndpointPin {
+                cert_sha256: hex_64("mismatch-tls-cert"),
+                public_key_sha256: hex_64("mismatch-tls-key"),
+                not_after_unix_ms: generated_at_unix_ms + 2_592_000_000,
+            }],
+            bootstrap_nodes: Vec::new(),
+            operators: Vec::new(),
+            observers: Vec::new(),
+            rollback_plan_sha3_256: hex_64("mismatch-rollback-plan"),
+            rollback_last_drill_unix_ms: generated_at_unix_ms,
+            rollback_recovery_point_root: hex_64("mismatch-rollback-recovery"),
+        })
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error.contains("public_probe.url")))
+            }
+            AttestationError::MalformedJson(error) => {
+                panic!("unexpected malformed JSON: {error}")
+            }
+        }
     }
 
     #[test]

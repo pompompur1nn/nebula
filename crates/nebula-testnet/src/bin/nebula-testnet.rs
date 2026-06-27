@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::process;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -40,6 +41,11 @@ fn main() {
     let wants_build_public_testnet_launch_certificate = args
         .iter()
         .any(|arg| arg == "--build-public-testnet-launch-certificate");
+    let wants_build_public_status = args.iter().any(|arg| arg == "--build-public-status");
+    let wants_build_public_probe = args.iter().any(|arg| arg == "--build-public-probe");
+    let wants_build_deployment_attestation = args
+        .iter()
+        .any(|arg| arg == "--build-deployment-attestation");
     let wants_sample_public_status = args.iter().any(|arg| arg == "--sample-public-status");
     let wants_sample_public_probe = args.iter().any(|arg| arg == "--sample-public-probe");
     let wants_sample_preflight_receipt = args.iter().any(|arg| arg == "--sample-preflight-receipt");
@@ -48,6 +54,12 @@ fn main() {
 
     if wants_run_rpc {
         run_rpc_node(&args);
+    } else if wants_build_public_status {
+        build_public_status(&args, wants_json);
+    } else if wants_build_public_probe {
+        build_public_probe(&args, wants_json);
+    } else if wants_build_deployment_attestation {
+        build_deployment_attestation(&args, wants_json);
     } else if wants_sample_attestation {
         println!(
             "{}",
@@ -143,6 +155,23 @@ fn arg_values(args: &[String], name: &str) -> Vec<String> {
         .filter(|window| window[0] == name)
         .map(|window| window[1].clone())
         .collect()
+}
+
+fn current_unix_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is before UNIX_EPOCH")
+        .as_millis()
+}
+
+fn parse_u128_arg(args: &[String], name: &str, default: u128) -> u128 {
+    match arg_value(args, name) {
+        Some(value) => value.parse::<u128>().unwrap_or_else(|error| {
+            eprintln!("{name} must be an unsigned integer: {error}");
+            process::exit(1);
+        }),
+        None => default,
+    }
 }
 
 fn parse_u64_arg(args: &[String], name: &str, default: u64) -> u64 {
@@ -299,6 +328,21 @@ fn read_required_launch_package_input(args: &[String], name: &str, wants_json: b
     }
 }
 
+fn read_required_deployment_builder_input(args: &[String], name: &str, wants_json: bool) -> String {
+    let Some(path) = arg_value(args, name) else {
+        print_deployment_attestation_builder_error(wants_json, &[format!("missing {name} <path>")]);
+        process::exit(1);
+    };
+
+    match read_text_file(path) {
+        Ok(input) => input,
+        Err(error) => {
+            print_deployment_attestation_builder_error(wants_json, &[error]);
+            process::exit(1);
+        }
+    }
+}
+
 fn read_launch_package_inputs(args: &[String], wants_json: bool) -> LaunchPackageInputs {
     LaunchPackageInputs {
         deployment_input: read_required_launch_package_input(
@@ -365,6 +409,217 @@ fn decode_utf16_file(path: &str, bytes: &[u8], endian: Endian) -> Result<String,
         .collect::<Vec<_>>();
 
     String::from_utf16(&units).map_err(|error| format!("failed to read {path}: {error}"))
+}
+
+fn build_public_status(args: &[String], wants_json: bool) {
+    let Some(endpoint_url) = arg_value(args, "--endpoint-url") else {
+        print_public_status_error(wants_json, &["missing --endpoint-url <url>".to_string()]);
+        process::exit(1);
+    };
+    let input = public_surface_build_input(args, endpoint_url);
+    match nebula_testnet::build_public_status_manifest_json_pretty(input) {
+        Ok(output) => println!("{output}"),
+        Err(nebula_testnet::AttestationError::MalformedJson(error)) => {
+            print_public_status_error(wants_json, &[error]);
+            process::exit(1);
+        }
+        Err(nebula_testnet::AttestationError::Invalid(errors)) => {
+            print_public_status_error(wants_json, &errors);
+            process::exit(1);
+        }
+    }
+}
+
+fn build_public_probe(args: &[String], wants_json: bool) {
+    let Some(endpoint_url) = arg_value(args, "--endpoint-url") else {
+        print_public_probe_error(wants_json, &["missing --endpoint-url <url>".to_string()]);
+        process::exit(1);
+    };
+    let input = public_surface_build_input(args, endpoint_url);
+    match nebula_testnet::build_public_probe_json_pretty(input) {
+        Ok(output) => println!("{output}"),
+        Err(nebula_testnet::AttestationError::MalformedJson(error)) => {
+            print_public_probe_error(wants_json, &[error]);
+            process::exit(1);
+        }
+        Err(nebula_testnet::AttestationError::Invalid(errors)) => {
+            print_public_probe_error(wants_json, &errors);
+            process::exit(1);
+        }
+    }
+}
+
+fn build_deployment_attestation(args: &[String], wants_json: bool) {
+    let public_status_json =
+        read_required_deployment_builder_input(args, "--public-status", wants_json);
+    let public_probe_json =
+        read_required_deployment_builder_input(args, "--public-probe", wants_json);
+    let preflight_receipt_json =
+        read_required_deployment_builder_input(args, "--preflight-receipt", wants_json);
+    let runbook_receipt_json =
+        read_required_deployment_builder_input(args, "--runbook-receipt", wants_json);
+    let generated_at_unix_ms = parse_u128_arg(args, "--generated-at-unix-ms", current_unix_ms());
+    let expires_at_unix_ms = parse_u128_arg(
+        args,
+        "--expires-at-unix-ms",
+        generated_at_unix_ms + 86_400_000,
+    );
+    let rollback_plan_sha3_256 = required_arg(args, "--rollback-plan-sha3-256", wants_json);
+    let rollback_recovery_point_root = required_arg(args, "--rollback-recovery-root", wants_json);
+    let rollback_last_drill_unix_ms =
+        parse_u128_arg(args, "--rollback-last-drill-unix-ms", generated_at_unix_ms);
+    let input = nebula_testnet::DeploymentAttestationBuildInput {
+        public_status_json,
+        public_probe_json,
+        preflight_receipt_json,
+        runbook_receipt_json,
+        artifact_sha3_256: arg_value(args, "--artifact-sha3-256")
+            .map(str::to_string)
+            .unwrap_or_else(nebula_testnet::default_artifact_sha3_256),
+        cargo_lock_sha3_256: arg_value(args, "--cargo-lock-sha3-256")
+            .map(str::to_string)
+            .unwrap_or_else(nebula_testnet::default_cargo_lock_sha3_256),
+        generated_at_unix_ms,
+        expires_at_unix_ms,
+        tls_pins: parse_tls_pins(args, wants_json),
+        bootstrap_nodes: parse_bootstrap_nodes(args, wants_json),
+        operators: parse_operators(args, wants_json),
+        observers: parse_observers(args, wants_json),
+        rollback_plan_sha3_256,
+        rollback_last_drill_unix_ms,
+        rollback_recovery_point_root,
+    };
+    match nebula_testnet::build_deployment_attestation_json_pretty(input) {
+        Ok(output) => println!("{output}"),
+        Err(nebula_testnet::AttestationError::MalformedJson(error)) => {
+            print_deployment_attestation_builder_error(wants_json, &[error]);
+            process::exit(1);
+        }
+        Err(nebula_testnet::AttestationError::Invalid(errors)) => {
+            print_deployment_attestation_builder_error(wants_json, &errors);
+            process::exit(1);
+        }
+    }
+}
+
+fn public_surface_build_input(
+    args: &[String],
+    endpoint_url: &str,
+) -> nebula_testnet::PublicSurfaceBuildInput {
+    nebula_testnet::PublicSurfaceBuildInput {
+        endpoint_url: endpoint_url.to_string(),
+        artifact_sha3_256: arg_value(args, "--artifact-sha3-256")
+            .map(str::to_string)
+            .unwrap_or_else(nebula_testnet::default_artifact_sha3_256),
+        cargo_lock_sha3_256: arg_value(args, "--cargo-lock-sha3-256")
+            .map(str::to_string)
+            .unwrap_or_else(nebula_testnet::default_cargo_lock_sha3_256),
+    }
+}
+
+fn required_arg(args: &[String], name: &str, wants_json: bool) -> String {
+    let Some(value) = arg_value(args, name) else {
+        print_deployment_attestation_builder_error(
+            wants_json,
+            &[format!("missing {name} <value>")],
+        );
+        process::exit(1);
+    };
+    value.to_string()
+}
+
+fn parse_tls_pins(args: &[String], wants_json: bool) -> Vec<nebula_testnet::TlsEndpointPin> {
+    parse_rows(args, "--tls-pin", 3, wants_json)
+        .into_iter()
+        .map(|fields| nebula_testnet::TlsEndpointPin {
+            cert_sha256: fields[0].clone(),
+            public_key_sha256: fields[1].clone(),
+            not_after_unix_ms: fields[2].parse::<u128>().unwrap_or_else(|error| {
+                print_deployment_attestation_builder_error(
+                    wants_json,
+                    &[format!(
+                        "--tls-pin not_after_unix_ms must be an unsigned integer: {error}"
+                    )],
+                );
+                process::exit(1);
+            }),
+        })
+        .collect()
+}
+
+fn parse_bootstrap_nodes(
+    args: &[String],
+    wants_json: bool,
+) -> Vec<nebula_testnet::BootstrapNodeBuildInput> {
+    parse_rows(args, "--bootstrap-node", 4, wants_json)
+        .into_iter()
+        .map(|fields| nebula_testnet::BootstrapNodeBuildInput {
+            node_id: fields[0].clone(),
+            operator_id: fields[1].clone(),
+            region: fields[2].clone(),
+            endpoint: fields[3].clone(),
+        })
+        .collect()
+}
+
+fn parse_operators(args: &[String], wants_json: bool) -> Vec<nebula_testnet::OperatorBuildInput> {
+    parse_rows(args, "--operator", 3, wants_json)
+        .into_iter()
+        .map(|fields| nebula_testnet::OperatorBuildInput {
+            operator_id: fields[0].clone(),
+            region: fields[1].clone(),
+            public_key: fields[2].clone(),
+        })
+        .collect()
+}
+
+fn parse_observers(args: &[String], wants_json: bool) -> Vec<nebula_testnet::ObserverBuildInput> {
+    parse_rows(args, "--observer", 3, wants_json)
+        .into_iter()
+        .map(|fields| nebula_testnet::ObserverBuildInput {
+            observer_id: fields[0].clone(),
+            region: fields[1].clone(),
+            public_key: fields[2].clone(),
+        })
+        .collect()
+}
+
+fn parse_rows(
+    args: &[String],
+    name: &str,
+    field_count: usize,
+    wants_json: bool,
+) -> Vec<Vec<String>> {
+    let values = arg_values(args, name);
+    if values.is_empty() {
+        print_deployment_attestation_builder_error(
+            wants_json,
+            &[format!(
+                "missing {name}; expected {field_count} comma-separated fields"
+            )],
+        );
+        process::exit(1);
+    }
+    values
+        .into_iter()
+        .map(|value| {
+            let fields = value
+                .split(',')
+                .map(str::trim)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if fields.len() != field_count || fields.iter().any(|field| field.is_empty()) {
+                print_deployment_attestation_builder_error(
+                    wants_json,
+                    &[format!(
+                        "{name} expected {field_count} non-empty comma-separated fields"
+                    )],
+                );
+                process::exit(1);
+            }
+            fields
+        })
+        .collect()
 }
 
 fn verify_public_status(path: &str, wants_json: bool) {
@@ -1485,6 +1740,24 @@ fn print_verification_error(wants_json: bool, errors: &[String]) {
     }
 }
 
+fn print_deployment_attestation_builder_error(wants_json: bool, errors: &[String]) {
+    if wants_json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "deployment_attestation_ready": false,
+                "level": "deployment-attestation-build-rejected",
+                "errors": errors,
+            })
+        );
+    } else {
+        eprintln!("Deployment attestation build rejected:");
+        for error in errors {
+            eprintln!("- {error}");
+        }
+    }
+}
+
 fn print_public_status_error(wants_json: bool, errors: &[String]) {
     if wants_json {
         println!(
@@ -1732,7 +2005,7 @@ fn print_public_testnet_launch_certificate_error(wants_json: bool, errors: &[Str
 
 fn print_help() {
     println!(
-        "nebula-testnet\n\nUSAGE:\n    nebula-testnet [--mainnet-readiness] [--json]\n    nebula-testnet --run-rpc [--sequencer|--follower] [--rpc-bind <addr:port>] [--block-ms <ms>] [--validator-id <id>] [--sequencer-public-key <hex>] [--sequencer-secret-key <hex>] [--admin-token <token>] [--data-dir <path>] [--bootstrap-rpc <url>] [--sync-rpc <url>]... [--max-mempool-transactions <count>] [--max-request-bytes <bytes>] [--max-requests-per-minute <count>]\n    nebula-testnet --sample-public-status\n    nebula-testnet --verify-public-status <path> [--json]\n    nebula-testnet --sample-public-probe\n    nebula-testnet --verify-public-probe <path> [--json]\n    nebula-testnet --sample-preflight-receipt\n    nebula-testnet --verify-preflight-receipt <path> [--json]\n    nebula-testnet --sample-runbook-receipt\n    nebula-testnet --verify-runbook-receipt <path> [--json]\n    nebula-testnet --sample-deployment-attestation\n    nebula-testnet --verify-deployment-attestation <path> [--json]\n    nebula-testnet --sample-validator-set\n    nebula-testnet --verify-validator-set <path> [--json]\n    nebula-testnet --sample-operator-handoff\n    nebula-testnet --build-operator-handoff --deployment-attestation <path> --validator-set <path>\n    nebula-testnet --verify-operator-handoff <path> --deployment-attestation <path> --validator-set <path> [--json]\n    nebula-testnet --sample-operator-acceptance\n    nebula-testnet --build-operator-acceptance --operator-handoff <path> --deployment-attestation <path> --validator-set <path>\n    nebula-testnet --verify-operator-acceptance <path> --operator-handoff <path> --deployment-attestation <path> --validator-set <path> [--json]\n    nebula-testnet --sample-genesis-manifest\n    nebula-testnet --build-genesis-manifest --deployment-attestation <path> --validator-set <path>\n    nebula-testnet --verify-genesis-manifest <path> [--json]\n    nebula-testnet --verify-launch-package --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]\n    nebula-testnet --build-launch-package-bundle --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>\n    nebula-testnet --verify-launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]\n    nebula-testnet --build-validator-activation --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>\n    nebula-testnet --verify-validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]
+        "nebula-testnet\n\nUSAGE:\n    nebula-testnet [--mainnet-readiness] [--json]\n    nebula-testnet --run-rpc [--sequencer|--follower] [--rpc-bind <addr:port>] [--block-ms <ms>] [--validator-id <id>] [--sequencer-public-key <hex>] [--sequencer-secret-key <hex>] [--admin-token <token>] [--data-dir <path>] [--bootstrap-rpc <url>] [--sync-rpc <url>]... [--max-mempool-transactions <count>] [--max-request-bytes <bytes>] [--max-requests-per-minute <count>]\n    nebula-testnet --build-public-status --endpoint-url <url> [--artifact-sha3-256 <hex>] [--cargo-lock-sha3-256 <hex>]\n    nebula-testnet --build-public-probe --endpoint-url <url> [--artifact-sha3-256 <hex>] [--cargo-lock-sha3-256 <hex>]\n    nebula-testnet --build-deployment-attestation --public-status <path> --public-probe <path> --preflight-receipt <path> --runbook-receipt <path> --tls-pin <cert_sha256,public_key_sha256,not_after_unix_ms>... --bootstrap-node <node_id,operator_id,region,endpoint>... --operator <operator_id,region,public_key>... --observer <observer_id,region,public_key>... --rollback-plan-sha3-256 <hex> --rollback-recovery-root <hex> [--rollback-last-drill-unix-ms <ms>] [--generated-at-unix-ms <ms>] [--expires-at-unix-ms <ms>] [--artifact-sha3-256 <hex>] [--cargo-lock-sha3-256 <hex>]\n    nebula-testnet --sample-public-status\n    nebula-testnet --verify-public-status <path> [--json]\n    nebula-testnet --sample-public-probe\n    nebula-testnet --verify-public-probe <path> [--json]\n    nebula-testnet --sample-preflight-receipt\n    nebula-testnet --verify-preflight-receipt <path> [--json]\n    nebula-testnet --sample-runbook-receipt\n    nebula-testnet --verify-runbook-receipt <path> [--json]\n    nebula-testnet --sample-deployment-attestation\n    nebula-testnet --verify-deployment-attestation <path> [--json]\n    nebula-testnet --sample-validator-set\n    nebula-testnet --verify-validator-set <path> [--json]\n    nebula-testnet --sample-operator-handoff\n    nebula-testnet --build-operator-handoff --deployment-attestation <path> --validator-set <path>\n    nebula-testnet --verify-operator-handoff <path> --deployment-attestation <path> --validator-set <path> [--json]\n    nebula-testnet --sample-operator-acceptance\n    nebula-testnet --build-operator-acceptance --operator-handoff <path> --deployment-attestation <path> --validator-set <path>\n    nebula-testnet --verify-operator-acceptance <path> --operator-handoff <path> --deployment-attestation <path> --validator-set <path> [--json]\n    nebula-testnet --sample-genesis-manifest\n    nebula-testnet --build-genesis-manifest --deployment-attestation <path> --validator-set <path>\n    nebula-testnet --verify-genesis-manifest <path> [--json]\n    nebula-testnet --verify-launch-package --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]\n    nebula-testnet --build-launch-package-bundle --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>\n    nebula-testnet --verify-launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]\n    nebula-testnet --build-validator-activation --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>\n    nebula-testnet --verify-validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]
     nebula-testnet --build-validator-join --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>
     nebula-testnet --verify-validator-join <path> --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path> [--json]
     nebula-testnet --build-operator-join-confirmation --validator-join <path> --validator-activation <path> --launch-package-bundle <path> --deployment-attestation <path> --public-status <path> --public-probe <path> --validator-set <path> --operator-handoff <path> --operator-acceptance <path> --genesis-manifest <path>
@@ -1793,6 +2066,6 @@ RPC SEQUENCER KEY ACCOUNTABILITY:
     height, first_block_hash, second_block_hash, reporter_id, and evidence_root.
     Unresolved accountability evidence keeps the endpoint fail-closed.
 
-OPTIONS:\n    --mainnet-readiness              Emit the public launch readiness contract\n    --run-rpc                        Run the public-testnet RPC node with bridge and ops/backup status\n    --sequencer                      Produce sub-second blocks locally (default)\n    --follower                       Disable local production and follow a sequencer peer set\n    --rpc-bind                       RPC bind address, default 127.0.0.1:9944\n    --block-ms                       Block target in ms; public testnet requires < 1000\n    --validator-id                   Local validator producer ID for block rewards\n    --sequencer-public-key           Expected Ed25519 sequencer public key for signed blocks\n    --sequencer-secret-key           Local Ed25519 sequencer signing seed; never exported in snapshots\n    --admin-token <token>            Enables operator-only JSON-RPC methods; never printed\n    --data-dir                       Persist node snapshots under this directory\n    --bootstrap-rpc                  Import an ahead peer snapshot before serving\n    --sync-rpc                       Repeatable snapshot peer for continuous follower sync/failover\n    --max-mempool-transactions       Maximum pending transactions admitted to local mempool\n    --max-request-bytes              Maximum accepted HTTP request body size in bytes\n    --max-requests-per-minute        Per-client RPC request budget per minute\n    --sample-public-status           Emit a public status manifest sample\n    --verify-public-status           Verify a public status manifest file\n    --sample-public-probe            Emit a public probe sample\n    --verify-public-probe            Verify a public probe file\n    --sample-preflight-receipt       Emit a preflight receipt sample\n    --verify-preflight-receipt       Verify a preflight receipt file\n    --sample-runbook-receipt         Emit a runbook receipt sample\n    --verify-runbook-receipt         Verify a runbook receipt file\n    --sample-deployment-attestation  Emit a fillable deployment attestation sample\n    --verify-deployment-attestation  Verify a deployment attestation file\n    --sample-validator-set           Emit a fillable validator-set manifest sample\n    --verify-validator-set           Verify a validator-set manifest file\n    --sample-operator-handoff        Emit a sample operator handoff manifest\n    --build-operator-handoff         Build operator handoff from attestation and validator set\n    --verify-operator-handoff        Verify an operator handoff manifest file\n    --sample-operator-acceptance     Emit a sample operator acceptance manifest\n    --build-operator-acceptance      Build operator acceptance from handoff, attestation, and validator set\n    --verify-operator-acceptance     Verify an operator acceptance manifest file\n    --operator-handoff               Operator handoff input for acceptance/package verification\n    --operator-acceptance            Operator acceptance input for launch package verification\n    --sample-genesis-manifest        Emit a sample genesis manifest built from samples\n    --build-genesis-manifest         Build genesis manifest from attestation and validator set\n    --deployment-attestation         Deployment attestation input for genesis build/package verification\n    --public-status                  Public status manifest input for launch package verification\n    --public-probe                   Public probe input for launch package verification\n    --validator-set                  Validator-set input for genesis build/package verification\n    --genesis-manifest               Genesis manifest input for launch package verification\n    --verify-genesis-manifest        Verify a genesis manifest file\n    --verify-launch-package          Verify deployment, public surface, validator set, genesis, handoff, and acceptance agree\n    --build-launch-package-bundle    Build the external validator launch-package bundle manifest\n    --verify-launch-package-bundle   Verify launch-package bundle hashes and roots against the artifact files\n    --launch-package-bundle          Launch-package bundle input for validator activation/join\n    --validator-activation           Validator activation input for join receipt verification\n    --validator-join                 Validator join input for operator confirmation\n    --operator-join-confirmation     Operator join confirmation input for public observer confirmation\n    --public-observer-confirmation   Public observer confirmation input for launch certificate\n    --build-validator-activation     Build validator activation from a verified launch-package bundle\n    --verify-validator-activation    Verify validators activated against the launch-package bundle\n    --build-validator-join           Build validator join receipt from activation and bundle evidence\n    --verify-validator-join          Verify validators joined at/after activation height\n    --build-operator-join-confirmation  Build operator confirmation from joined validators\n    --verify-operator-join-confirmation Verify operators confirmed the validator join receipt\n    --build-public-observer-confirmation Build observer confirmation from public endpoint evidence\n    --verify-public-observer-confirmation Verify observers confirmed the public endpoint post-join\n    --build-public-testnet-launch-certificate Build the final public testnet launch-candidate certificate\n    --verify-public-testnet-launch-certificate Verify the final launch-candidate certificate\n    --json                           Emit JSON output\n    -h, --help                       Show this help"
+OPTIONS:\n    --mainnet-readiness              Emit the public launch readiness contract\n    --run-rpc                        Run the public-testnet RPC node with bridge and ops/backup status\n    --sequencer                      Produce sub-second blocks locally (default)\n    --follower                       Disable local production and follow a sequencer peer set\n    --rpc-bind                       RPC bind address, default 127.0.0.1:9944\n    --block-ms                       Block target in ms; public testnet requires < 1000\n    --validator-id                   Local validator producer ID for block rewards\n    --sequencer-public-key           Expected Ed25519 sequencer public key for signed blocks\n    --sequencer-secret-key           Local Ed25519 sequencer signing seed; never exported in snapshots\n    --admin-token <token>            Enables operator-only JSON-RPC methods; never printed\n    --data-dir                       Persist node snapshots under this directory\n    --bootstrap-rpc                  Import an ahead peer snapshot before serving\n    --sync-rpc                       Repeatable snapshot peer for continuous follower sync/failover\n    --max-mempool-transactions       Maximum pending transactions admitted to local mempool\n    --max-request-bytes              Maximum accepted HTTP request body size in bytes\n    --max-requests-per-minute        Per-client RPC request budget per minute\n    --build-public-status            Build public status for a real endpoint URL\n    --build-public-probe             Build public probe evidence for a real endpoint URL\n    --build-deployment-attestation   Build deployment evidence from public surface and receipt files\n    --endpoint-url                   HTTPS public status/probe endpoint URL for builders\n    --artifact-sha3-256              64-hex package artifact hash for builder identity\n    --cargo-lock-sha3-256            64-hex Cargo.lock hash for builder identity\n    --preflight-receipt              Preflight receipt input for deployment-attestation builder\n    --runbook-receipt                Runbook receipt input for deployment-attestation builder\n    --tls-pin                        Repeatable cert_sha256,public_key_sha256,not_after_unix_ms row\n    --bootstrap-node                 Repeatable node_id,operator_id,region,endpoint row\n    --operator                       Repeatable operator_id,region,public_key row\n    --observer                       Repeatable observer_id,region,public_key row\n    --rollback-plan-sha3-256         64-hex rollback plan hash for deployment evidence\n    --rollback-recovery-root         64-hex recovery point root for deployment evidence\n    --rollback-last-drill-unix-ms    Rollback drill completion time for deployment evidence\n    --generated-at-unix-ms           Override generated time for deployment evidence\n    --expires-at-unix-ms             Override expiry time for deployment evidence\n    --sample-public-status           Emit a public status manifest sample\n    --verify-public-status           Verify a public status manifest file\n    --sample-public-probe            Emit a public probe sample\n    --verify-public-probe            Verify a public probe file\n    --sample-preflight-receipt       Emit a preflight receipt sample\n    --verify-preflight-receipt       Verify a preflight receipt file\n    --sample-runbook-receipt         Emit a runbook receipt sample\n    --verify-runbook-receipt         Verify a runbook receipt file\n    --sample-deployment-attestation  Emit a fillable deployment attestation sample\n    --verify-deployment-attestation  Verify a deployment attestation file\n    --sample-validator-set           Emit a fillable validator-set manifest sample\n    --verify-validator-set           Verify a validator-set manifest file\n    --sample-operator-handoff        Emit a sample operator handoff manifest\n    --build-operator-handoff         Build operator handoff from attestation and validator set\n    --verify-operator-handoff        Verify an operator handoff manifest file\n    --sample-operator-acceptance     Emit a sample operator acceptance manifest\n    --build-operator-acceptance      Build operator acceptance from handoff, attestation, and validator set\n    --verify-operator-acceptance     Verify an operator acceptance manifest file\n    --operator-handoff               Operator handoff input for acceptance/package verification\n    --operator-acceptance            Operator acceptance input for launch package verification\n    --sample-genesis-manifest        Emit a sample genesis manifest built from samples\n    --build-genesis-manifest         Build genesis manifest from attestation and validator set\n    --deployment-attestation         Deployment attestation input for genesis build/package verification\n    --public-status                  Public status manifest input for launch package verification\n    --public-probe                   Public probe input for launch package verification\n    --validator-set                  Validator-set input for genesis build/package verification\n    --genesis-manifest               Genesis manifest input for launch package verification\n    --verify-genesis-manifest        Verify a genesis manifest file\n    --verify-launch-package          Verify deployment, public surface, validator set, genesis, handoff, and acceptance agree\n    --build-launch-package-bundle    Build the external validator launch-package bundle manifest\n    --verify-launch-package-bundle   Verify launch-package bundle hashes and roots against the artifact files\n    --launch-package-bundle          Launch-package bundle input for validator activation/join\n    --validator-activation           Validator activation input for join receipt verification\n    --validator-join                 Validator join input for operator confirmation\n    --operator-join-confirmation     Operator join confirmation input for public observer confirmation\n    --public-observer-confirmation   Public observer confirmation input for launch certificate\n    --build-validator-activation     Build validator activation from a verified launch-package bundle\n    --verify-validator-activation    Verify validators activated against the launch-package bundle\n    --build-validator-join           Build validator join receipt from activation and bundle evidence\n    --verify-validator-join          Verify validators joined at/after activation height\n    --build-operator-join-confirmation  Build operator confirmation from joined validators\n    --verify-operator-join-confirmation Verify operators confirmed the validator join receipt\n    --build-public-observer-confirmation Build observer confirmation from public endpoint evidence\n    --verify-public-observer-confirmation Verify observers confirmed the public endpoint post-join\n    --build-public-testnet-launch-certificate Build the final public testnet launch-candidate certificate\n    --verify-public-testnet-launch-certificate Verify the final launch-candidate certificate\n    --json                           Emit JSON output\n    -h, --help                       Show this help"
     );
 }

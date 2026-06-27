@@ -228,6 +228,18 @@ JSON-RPC 2.0 on `/rpc` for
 `nebula_opsStatus`, `nebula_backupManifest`, `nebula_rotateSequencerKey`,
 `nebula_reportEquivocation`, and `nebula_produceBlock`.
 
+Real endpoint deployment evidence starts by building public status and probe
+artifacts for the actual HTTPS URL, then building a deployment attestation from
+those artifacts, preflight/runbook receipts, TLS pins, bootstrap nodes,
+operators, observers, and rollback evidence:
+
+```bash
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-public-status --endpoint-url https://testnet.nebula.example/status > /tmp/nebula-public-status.json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-public-probe --endpoint-url https://testnet.nebula.example/status > /tmp/nebula-public-probe.json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --build-deployment-attestation --public-status /tmp/nebula-public-status.json --public-probe /tmp/nebula-public-probe.json --preflight-receipt /tmp/nebula-preflight.json --runbook-receipt /tmp/nebula-runbook.json --tls-pin <cert_sha256,public_key_sha256,not_after_unix_ms> --tls-pin <cert_sha256,public_key_sha256,not_after_unix_ms> --bootstrap-node <node_id,operator_id,region,endpoint> --bootstrap-node <node_id,operator_id,region,endpoint> --operator <operator_id,region,public_key> --operator <operator_id,region,public_key> --observer <observer_id,region,public_key> --observer <observer_id,region,public_key> --rollback-plan-sha3-256 <hex> --rollback-recovery-root <hex> > /tmp/nebula-attestation.json
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --verify-deployment-attestation /tmp/nebula-attestation.json --json
+```
+
 ## Commands
 
 ```bash
@@ -274,9 +286,11 @@ The readiness report keeps local testnet acceptance separate from public launch
 approval. The local testnet can be ready while public launch remains blocked by
 the required deployment attestation.
 
-Public status and probe verifiers let operators prove the exact public surface,
-including the expected public status endpoint URL, before wrapping it in
-deployment evidence.
+Public status and probe builders let operators produce the exact public
+surface, including the expected public status endpoint URL, before wrapping it
+in deployment evidence. Custom endpoint surfaces are checked against the
+deployment attestation and public observer confirmation instead of the
+sample-only standalone verifiers.
 
 Deployment evidence binds bootstrap nodes, operators, and observers to one
 shared witness root for the launch bundle, public status, HTTPS endpoint/TLS
