@@ -286,15 +286,16 @@ evidence is absent or stale.
     certificate binds the launch-package bundle, validator activation, validator
     join, operator join confirmation, public observer confirmation, public
     status, public probe, runtime-surface evidence, public-testnet peer manifest
-    root, usable peer URLs and peer count after self-exclusion, validator set,
-    genesis, endpoint URL, and validator, operator, observer, and region counts
-    into one candidate root.
+    root, `public_testnet_peer_manifest_snapshot_peer_urls`, usable peer count
+    after self-exclusion, validator set, genesis, endpoint URL, and validator,
+    operator, observer, and region counts into one candidate root.
 21. Verify final public launch readiness with external-public runtime-surface
-    evidence captured from the advertised endpoint, an artifact-bound live RPC
-    devnet rehearsal report for the same launch package, endpoint, peer-manifest
-    root, and usable peer URLs and count, and verified loopback runtime-surface
-    evidence whose root, usable peer URLs, and usable peer count match that
-    report.
+    evidence captured from the advertised endpoint and a launch certificate that
+    root-binds public `public_testnet_peer_manifest_snapshot_peer_urls`, plus an
+    artifact-bound live RPC devnet rehearsal report for the same launch package,
+    endpoint, peer-manifest root, and usable peer count. The verified loopback
+    runtime-surface evidence must match the rehearsal report's root, loopback
+    usable peer URLs, and usable peer count.
     This is the only artifact-bound command allowed to emit
     `public_launch_ready=true`; loopback devnet runtime-surface evidence remains
     a rehearsal/certificate input and is rejected by the final readiness gate.

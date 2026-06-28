@@ -767,6 +767,7 @@ pub struct PublicTestnetLaunchCertificate {
     pub public_testnet_peer_manifest_root: String,
     pub peer_manifest_sync_peer_quorum: usize,
     pub peer_manifest_peer_count: usize,
+    pub public_testnet_peer_manifest_snapshot_peer_urls: Vec<String>,
     pub fee_policy_root: String,
     pub validator_activation_root: String,
     pub validator_join_root: String,
@@ -796,6 +797,7 @@ pub struct PublicTestnetLaunchCertificateReport {
     pub public_testnet_peer_manifest_root: String,
     pub peer_manifest_sync_peer_quorum: usize,
     pub peer_manifest_peer_count: usize,
+    pub public_testnet_peer_manifest_snapshot_peer_urls: Vec<String>,
     pub fee_policy_root: String,
     pub validator_activation_root: String,
     pub validator_join_root: String,
@@ -828,6 +830,7 @@ pub struct PublicTestnetLaunchReadinessReport {
     pub public_testnet_peer_manifest_root: String,
     pub peer_manifest_sync_peer_quorum: usize,
     pub peer_manifest_peer_count: usize,
+    pub public_testnet_peer_manifest_snapshot_peer_urls: Vec<String>,
     pub fee_policy_root: String,
     pub validator_activation_root: String,
     pub validator_join_root: String,
@@ -1185,6 +1188,7 @@ struct PublicSurfaceSample {
 struct LaunchCertificateReports {
     launch_package_bundle: LaunchPackageBundleReport,
     public_testnet_peer_manifest: PublicTestnetPeerManifestReport,
+    public_testnet_peer_manifest_snapshot_peer_urls: Vec<String>,
     validator_activation: ValidatorActivationReport,
     validator_join: ValidatorJoinReport,
     operator_join_confirmation: OperatorJoinConfirmationReport,
@@ -6625,6 +6629,15 @@ pub fn verify_public_testnet_launch_certificate_jsons(
             expected.peer_manifest_peer_count, certificate.peer_manifest_peer_count
         ));
     }
+    if certificate.public_testnet_peer_manifest_snapshot_peer_urls
+        != expected.public_testnet_peer_manifest_snapshot_peer_urls
+    {
+        errors.push(format!(
+            "public_testnet_peer_manifest_snapshot_peer_urls expected {:?} but got {:?}",
+            expected.public_testnet_peer_manifest_snapshot_peer_urls,
+            certificate.public_testnet_peer_manifest_snapshot_peer_urls
+        ));
+    }
     require_root(
         &mut errors,
         "fee_policy_root",
@@ -6741,6 +6754,8 @@ pub fn verify_public_testnet_launch_certificate_jsons(
         public_testnet_peer_manifest_root: certificate.public_testnet_peer_manifest_root,
         peer_manifest_sync_peer_quorum: certificate.peer_manifest_sync_peer_quorum,
         peer_manifest_peer_count: certificate.peer_manifest_peer_count,
+        public_testnet_peer_manifest_snapshot_peer_urls: certificate
+            .public_testnet_peer_manifest_snapshot_peer_urls,
         fee_policy_root: certificate.fee_policy_root,
         validator_activation_root: certificate.validator_activation_root,
         validator_join_root: certificate.validator_join_root,
@@ -7038,6 +7053,8 @@ pub fn verify_public_testnet_launch_readiness_jsons(
         public_testnet_peer_manifest_root: certificate.public_testnet_peer_manifest_root,
         peer_manifest_sync_peer_quorum: certificate.peer_manifest_sync_peer_quorum,
         peer_manifest_peer_count: certificate.peer_manifest_peer_count,
+        public_testnet_peer_manifest_snapshot_peer_urls: certificate
+            .public_testnet_peer_manifest_snapshot_peer_urls,
         fee_policy_root: certificate.fee_policy_root,
         validator_activation_root: certificate.validator_activation_root,
         validator_join_root: certificate.validator_join_root,
@@ -12526,6 +12543,7 @@ fn verified_launch_certificate_reports(
     Ok(LaunchCertificateReports {
         launch_package_bundle,
         public_testnet_peer_manifest,
+        public_testnet_peer_manifest_snapshot_peer_urls: expected_snapshot_peer_urls,
         validator_activation,
         validator_join,
         operator_join_confirmation,
@@ -12554,6 +12572,9 @@ fn public_testnet_launch_certificate(
             .clone(),
         peer_manifest_sync_peer_quorum: reports.public_testnet_peer_manifest.sync_peer_quorum,
         peer_manifest_peer_count: reports.public_testnet_peer_manifest.peer_count,
+        public_testnet_peer_manifest_snapshot_peer_urls: reports
+            .public_testnet_peer_manifest_snapshot_peer_urls
+            .clone(),
         fee_policy_root: reports.runtime_surface.fee_policy_root.clone(),
         validator_activation_root: reports
             .validator_activation
@@ -12603,6 +12624,7 @@ fn public_testnet_launch_certificate_root(certificate: &PublicTestnetLaunchCerti
         "public_testnet_peer_manifest_root": certificate.public_testnet_peer_manifest_root,
         "peer_manifest_sync_peer_quorum": certificate.peer_manifest_sync_peer_quorum,
         "peer_manifest_peer_count": certificate.peer_manifest_peer_count,
+        "public_testnet_peer_manifest_snapshot_peer_urls": certificate.public_testnet_peer_manifest_snapshot_peer_urls,
         "fee_policy_root": certificate.fee_policy_root,
         "validator_activation_root": certificate.validator_activation_root,
         "validator_join_root": certificate.validator_join_root,
@@ -12636,6 +12658,7 @@ fn public_testnet_launch_readiness_root(report: &PublicTestnetLaunchReadinessRep
         "public_testnet_peer_manifest_root": report.public_testnet_peer_manifest_root,
         "peer_manifest_sync_peer_quorum": report.peer_manifest_sync_peer_quorum,
         "peer_manifest_peer_count": report.peer_manifest_peer_count,
+        "public_testnet_peer_manifest_snapshot_peer_urls": report.public_testnet_peer_manifest_snapshot_peer_urls,
         "fee_policy_root": report.fee_policy_root,
         "validator_activation_root": report.validator_activation_root,
         "validator_join_root": report.validator_join_root,
@@ -17360,6 +17383,10 @@ mod public_launch {
                 .filter(|peer| peer.validator_id != "validator-b")
                 .map(|peer| peer.snapshot_url)
                 .collect::<Vec<_>>();
+        assert_eq!(
+            report.public_testnet_peer_manifest_snapshot_peer_urls,
+            expected_external_snapshot_peer_urls
+        );
         let external_runtime_surface = runtime_surface_with_peer_manifest_snapshot_peer_urls(
             &external_runtime_surface,
             expected_external_snapshot_peer_urls.clone(),
@@ -17450,6 +17477,40 @@ mod public_launch {
             &genesis,
         )
         .unwrap();
+
+        let mut forged_peer_url_certificate =
+            serde_json::from_str::<PublicTestnetLaunchCertificate>(&external_certificate).unwrap();
+        forged_peer_url_certificate.public_testnet_peer_manifest_snapshot_peer_urls[0]
+            .push_str("?forged=1");
+        forged_peer_url_certificate.root =
+            public_testnet_launch_certificate_root(&forged_peer_url_certificate);
+        let forged_peer_url_certificate =
+            serde_json::to_string_pretty(&forged_peer_url_certificate).unwrap();
+        let forged_peer_url_certificate_error = verify_public_testnet_launch_certificate_jsons(
+            &forged_peer_url_certificate,
+            &observer_confirmation,
+            &external_runtime_surface,
+            &peer_manifest,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+        match forged_peer_url_certificate_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error.starts_with("public_testnet_peer_manifest_snapshot_peer_urls expected ")
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
         let readiness = verify_public_testnet_launch_readiness_jsons(
             &external_certificate,
             &observer_confirmation,
@@ -17496,6 +17557,10 @@ mod public_launch {
         assert_eq!(
             readiness.peer_manifest_peer_count,
             peer_manifest_report.peer_count
+        );
+        assert_eq!(
+            readiness.public_testnet_peer_manifest_snapshot_peer_urls,
+            expected_external_snapshot_peer_urls
         );
         assert_eq!(
             live_rehearsal_report.public_testnet_peer_manifest_snapshot_peer_count,

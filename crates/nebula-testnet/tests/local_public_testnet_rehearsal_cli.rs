@@ -1019,6 +1019,10 @@ fn public_testnet_launch_readiness_cli_verifies_external_runtime_surface() {
         &certificate_report,
         "public_testnet_launch_certificate_root",
     );
+    assert_eq!(
+        certificate_report["public_testnet_peer_manifest_snapshot_peer_urls"],
+        external_surface_report["public_testnet_peer_manifest_snapshot_peer_urls"]
+    );
 
     let readiness_args_for = |certificate: &Path, runtime_surface: &Path| -> Vec<String> {
         let mut args = vec![
@@ -1075,6 +1079,10 @@ fn public_testnet_launch_readiness_cli_verifies_external_runtime_surface() {
     assert_eq!(
         readiness_report["public_testnet_launch_certificate_root"],
         certificate_report["public_testnet_launch_certificate_root"]
+    );
+    assert_eq!(
+        readiness_report["public_testnet_peer_manifest_snapshot_peer_urls"],
+        certificate_report["public_testnet_peer_manifest_snapshot_peer_urls"]
     );
 
     fs::remove_dir_all(&dir).expect("remove temp rehearsal dir");
