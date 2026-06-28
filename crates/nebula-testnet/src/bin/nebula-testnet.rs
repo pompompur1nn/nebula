@@ -1710,26 +1710,42 @@ fn parse_http_response_text(path: &str, response: &[u8]) -> Result<String, Strin
         return Err(format!("{path} HTTPS response returned {status_line}"));
     }
     let mut body = response[header_end + 4..].to_vec();
-    if header_value(&headers, "transfer-encoding")
-        .map(|value| {
-            value
-                .split(',')
-                .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
-        })
-        .unwrap_or(false)
+    let content_encodings = comma_header_tokens(&headers, "content-encoding");
+    if content_encodings
+        .iter()
+        .any(|encoding| !encoding.eq_ignore_ascii_case("identity"))
     {
-        body = decode_chunked_body(&body)
-            .map_err(|error| format!("{path} HTTPS response chunked body was invalid: {error}"))?;
-    } else if let Some(content_length) = header_value(&headers, "content-length") {
-        let expected = content_length
-            .parse::<usize>()
-            .map_err(|error| format!("{path} Content-Length was invalid: {error}"))?;
-        if body.len() < expected {
+        return Err(format!(
+            "{path} HTTPS response used unsupported Content-Encoding {}",
+            content_encodings.join(", ")
+        ));
+    }
+
+    let transfer_encodings = comma_header_tokens(&headers, "transfer-encoding");
+    if !transfer_encodings.is_empty() {
+        if content_length_value(path, &headers)?.is_some() {
             return Err(format!(
-                "{path} HTTPS response body was shorter than Content-Length {expected}"
+                "{path} HTTPS response included both Transfer-Encoding and Content-Length"
             ));
         }
-        body.truncate(expected);
+        if transfer_encodings
+            .iter()
+            .any(|encoding| !encoding.eq_ignore_ascii_case("chunked"))
+        {
+            return Err(format!(
+                "{path} HTTPS response used unsupported Transfer-Encoding {}",
+                transfer_encodings.join(", ")
+            ));
+        }
+        body = decode_chunked_body(&body)
+            .map_err(|error| format!("{path} HTTPS response chunked body was invalid: {error}"))?;
+    } else if let Some(expected) = content_length_value(path, &headers)? {
+        if body.len() != expected {
+            return Err(format!(
+                "{path} HTTPS response body length {} did not match Content-Length {expected}",
+                body.len()
+            ));
+        }
     }
     String::from_utf8(body)
         .map_err(|error| format!("{path} HTTPS response body was not UTF-8: {error}"))
@@ -1744,11 +1760,42 @@ fn parse_http_status_code(status_line: &str) -> Option<u16> {
     parts.next()?.parse::<u16>().ok()
 }
 
-fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+fn header_values<'a>(headers: &'a [(String, String)], name: &str) -> Vec<&'a str> {
     headers
         .iter()
-        .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+        .filter(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
         .map(|(_, value)| value.as_str())
+        .collect()
+}
+
+fn comma_header_tokens<'a>(headers: &'a [(String, String)], name: &str) -> Vec<&'a str> {
+    header_values(headers, name)
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn content_length_value(path: &str, headers: &[(String, String)]) -> Result<Option<usize>, String> {
+    let values = header_values(headers, "content-length");
+    let Some((first, remaining)) = values.split_first() else {
+        return Ok(None);
+    };
+    let expected = first
+        .parse::<usize>()
+        .map_err(|error| format!("{path} Content-Length was invalid: {error}"))?;
+    for value in remaining {
+        let parsed = value
+            .parse::<usize>()
+            .map_err(|error| format!("{path} Content-Length was invalid: {error}"))?;
+        if parsed != expected {
+            return Err(format!(
+                "{path} HTTPS response had conflicting Content-Length headers"
+            ));
+        }
+    }
+    Ok(Some(expected))
 }
 
 fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>, String> {
@@ -1766,7 +1813,27 @@ fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>, String> {
             .map_err(|error| format!("chunk-size was not hex: {error}"))?;
         cursor += line_end + 2;
         if size == 0 {
-            return Ok(decoded);
+            let trailer = &body[cursor..];
+            if let Some(extra) = trailer.strip_prefix(b"\r\n") {
+                if extra.iter().any(|byte| !byte.is_ascii_whitespace()) {
+                    return Err("chunked body had trailing data after final chunk".to_string());
+                }
+                return Ok(decoded);
+            }
+            if let Some(trailer_end) = trailer.windows(4).position(|window| window == b"\r\n\r\n") {
+                let extra = &trailer[trailer_end + 4..];
+                if extra.iter().any(|byte| !byte.is_ascii_whitespace()) {
+                    return Err("chunked body had trailing data after final chunk".to_string());
+                }
+                return Ok(decoded);
+            }
+            if trailer.is_empty() {
+                return Err("missing final chunk trailer terminator".to_string());
+            }
+            if std::str::from_utf8(trailer).is_err() {
+                return Err("chunk trailer was not UTF-8".to_string());
+            }
+            return Err("missing final chunk trailer terminator".to_string());
         }
         let end = cursor
             .checked_add(size)
@@ -4824,6 +4891,78 @@ mod tests {
         let body = parse_http_response_text("/metrics", response).expect("chunked body decodes");
 
         assert_eq!(body, "hello world");
+    }
+
+    #[test]
+    fn http_response_rejects_transfer_encoding_with_content_length() {
+        let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+
+        let error = parse_http_response_text("/status", response)
+            .expect_err("ambiguous response framing is rejected");
+
+        assert!(error.contains("both Transfer-Encoding and Content-Length"));
+    }
+
+    #[test]
+    fn http_response_rejects_unsupported_transfer_encoding() {
+        let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nhello";
+
+        let error = parse_http_response_text("/status", response)
+            .expect_err("unsupported transfer encoding is rejected");
+
+        assert!(error.contains("unsupported Transfer-Encoding gzip"));
+    }
+
+    #[test]
+    fn http_response_rejects_content_encoding() {
+        let response =
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 5\r\n\r\nhello";
+
+        let error =
+            parse_http_response_text("/status", response).expect_err("encoded body is rejected");
+
+        assert!(error.contains("unsupported Content-Encoding gzip"));
+    }
+
+    #[test]
+    fn http_response_rejects_conflicting_content_lengths() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\nhello!";
+
+        let error = parse_http_response_text("/status", response)
+            .expect_err("conflicting content lengths are rejected");
+
+        assert!(error.contains("conflicting Content-Length"));
+    }
+
+    #[test]
+    fn http_response_rejects_content_length_mismatch() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nhello";
+
+        let error = parse_http_response_text("/status", response)
+            .expect_err("content length mismatch is rejected");
+
+        assert!(error.contains("body length 5 did not match Content-Length 4"));
+    }
+
+    #[test]
+    fn chunked_http_response_rejects_missing_final_terminator() {
+        let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n";
+
+        let error = parse_http_response_text("/metrics", response)
+            .expect_err("chunked response without final terminator is rejected");
+
+        assert!(error.contains("missing final chunk trailer terminator"));
+    }
+
+    #[test]
+    fn chunked_http_response_rejects_trailing_data() {
+        let response =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\njunk";
+
+        let error = parse_http_response_text("/metrics", response)
+            .expect_err("chunked response with trailing data is rejected");
+
+        assert!(error.contains("trailing data after final chunk"));
     }
 
     #[test]
