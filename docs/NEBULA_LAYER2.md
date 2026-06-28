@@ -638,9 +638,9 @@ The public launch suite covers:
 - deployment evidence root binding
 - deployment component root domain separation
 - public status manifest redaction
-- public endpoint and TLS pin evidence
-- HTTPS-only public status/probe endpoints with non-empty hosts, no userinfo,
-  and no query or fragment
+- public DNS endpoint and TLS pin evidence
+- HTTPS-only public status/probe endpoints with public DNS hosts, no userinfo,
+  no IP/localhost authority, and no query or fragment
 - public status endpoint binding to the expected public surface
 - standalone public status/probe surface exact-shape validation
 - deployment-scoped public status/probe validation for custom endpoints

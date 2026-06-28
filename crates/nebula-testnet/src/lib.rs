@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use sha3::{Digest, Sha3_256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -3417,7 +3417,7 @@ fn verify_runtime_surface_evidence(
 ) -> Result<RuntimeSurfaceEvidenceReport, AttestationError> {
     let mut errors = Vec::new();
     let now = unix_ms();
-    require_https_endpoint(
+    require_public_https_endpoint(
         &mut errors,
         "runtime_surface.endpoint_url",
         &evidence.endpoint_url,
@@ -9361,7 +9361,7 @@ fn verify_public_status_manifest(
         &public_status_manifest.endpoint_url,
         endpoint_url,
     );
-    require_https_endpoint(
+    require_public_https_endpoint(
         errors,
         "public_status_manifest.endpoint_url",
         &public_status_manifest.endpoint_url,
@@ -9386,7 +9386,7 @@ fn verify_public_endpoint(
         &public_endpoint.url,
         &public_status_manifest.endpoint_url,
     );
-    require_https_endpoint(errors, "public_endpoint.url", &public_endpoint.url);
+    require_public_https_endpoint(errors, "public_endpoint.url", &public_endpoint.url);
     require_eq(
         errors,
         "public_endpoint.public_status_manifest_root",
@@ -9500,7 +9500,7 @@ fn verify_public_probe(
     economics_root: &str,
 ) {
     require_eq(errors, "public_probe.url", &public_probe.url, endpoint_url);
-    require_https_endpoint(errors, "public_probe.url", &public_probe.url);
+    require_public_https_endpoint(errors, "public_probe.url", &public_probe.url);
     if public_probe.status_code != 200 {
         errors.push(format!(
             "public_probe.status_code expected 200 but got {}",
@@ -12635,6 +12635,18 @@ fn require_https_endpoint(errors: &mut Vec<String>, label: &str, endpoint: &str)
     require_endpoint_authority(errors, label, endpoint, scheme);
 }
 
+fn require_public_https_endpoint(errors: &mut Vec<String>, label: &str, endpoint: &str) {
+    let scheme = "https://";
+    if !endpoint.starts_with(scheme) {
+        errors.push(format!("{label} must use an https:// endpoint"));
+        return;
+    }
+    let Some(authority) = require_endpoint_authority(errors, label, endpoint, scheme) else {
+        return;
+    };
+    require_public_dns_authority(errors, label, authority);
+}
+
 fn require_https_endpoint_without_path(errors: &mut Vec<String>, label: &str, endpoint: &str) {
     let scheme = "https://";
     if !endpoint.starts_with(scheme) {
@@ -12674,6 +12686,55 @@ fn require_tcp_endpoint_with_port(errors: &mut Vec<String>, label: &str, endpoin
         || port.parse::<u16>().ok().filter(|port| *port > 0).is_none()
     {
         errors.push(format!("{label} must include a numeric port"));
+    }
+}
+
+fn require_public_dns_authority(errors: &mut Vec<String>, label: &str, authority: &str) {
+    let host = authority
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(authority)
+        .trim_end_matches('.');
+    let host_lower = host.to_ascii_lowercase();
+
+    if host.starts_with('[') || host.ends_with(']') || host.contains(':') {
+        errors.push(format!(
+            "{label} must use a public DNS host, not an IP address"
+        ));
+        return;
+    }
+    if host.parse::<IpAddr>().is_ok() {
+        errors.push(format!(
+            "{label} must use a public DNS host, not an IP address"
+        ));
+        return;
+    }
+    if host_lower == "localhost"
+        || host_lower.ends_with(".localhost")
+        || host_lower.ends_with(".local")
+    {
+        errors.push(format!("{label} must use a public DNS host, not localhost"));
+        return;
+    }
+    let labels = host.split('.').collect::<Vec<_>>();
+    if labels.len() < 2
+        || labels.iter().any(|part| {
+            part.is_empty()
+                || part.len() > 63
+                || part.starts_with('-')
+                || part.ends_with('-')
+                || !part
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        })
+        || labels
+            .last()
+            .map(|tld| !tld.chars().any(|character| character.is_ascii_alphabetic()))
+            .unwrap_or(true)
+    {
+        errors.push(format!(
+            "{label} must use a public DNS host with at least two valid labels"
+        ));
     }
 }
 
@@ -13605,6 +13666,48 @@ mod public_launch {
     }
 
     #[test]
+    fn public_status_rejects_localhost_endpoint() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_public_status_manifest_json_pretty()).unwrap();
+        value["endpoint_url"] = json!("https://localhost/status");
+        value["root"] = json!(public_status_manifest_root(
+            &serde_json::from_value::<PublicStatusManifest>(value.clone()).unwrap()
+        ));
+
+        let error = verify_public_status_manifest_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error == "public_status_manifest.endpoint_url must use a public DNS host, not localhost"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn public_status_rejects_ip_literal_endpoint() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_public_status_manifest_json_pretty()).unwrap();
+        value["endpoint_url"] = json!("https://127.0.0.1/status");
+        value["root"] = json!(public_status_manifest_root(
+            &serde_json::from_value::<PublicStatusManifest>(value.clone()).unwrap()
+        ));
+
+        let error = verify_public_status_manifest_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error == "public_status_manifest.endpoint_url must use a public DNS host, not an IP address"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
     fn public_status_rejects_mismatched_endpoint_url() {
         let mut value =
             serde_json::from_str::<Value>(&sample_public_status_manifest_json_pretty()).unwrap();
@@ -13651,6 +13754,27 @@ mod public_launch {
                 assert!(errors
                     .iter()
                     .any(|error| error == "public_probe.url must use an https:// endpoint"));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn public_probe_rejects_non_public_dns_endpoint() {
+        let mut value = serde_json::from_str::<Value>(&sample_public_probe_json_pretty()).unwrap();
+        value["url"] = json!("https://localhost/status");
+        value["root"] = json!(public_probe_root(
+            &serde_json::from_value::<PublicProbe>(value.clone()).unwrap()
+        ));
+
+        let error = verify_public_probe_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors
+                    .iter()
+                    .any(|error| error
+                        == "public_probe.url must use a public DNS host, not localhost"));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
@@ -14062,6 +14186,24 @@ mod public_launch {
                 assert!(errors
                     .iter()
                     .any(|error| error == "public_endpoint.url must use an https:// endpoint"));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_local_public_endpoint() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["public_endpoint"]["url"] = json!("https://127.0.0.1/status");
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error == "public_endpoint.url must use a public DNS host, not an IP address"
+                }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
         }
