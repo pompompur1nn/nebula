@@ -285,13 +285,15 @@ evidence is absent or stale.
 20. Build and verify the public testnet launch-candidate certificate. The
     certificate binds the launch-package bundle, validator activation, validator
     join, operator join confirmation, public observer confirmation, public
-    status, public probe, runtime-surface evidence, validator set, genesis,
-    endpoint URL, and validator, operator, observer, and region counts into one
-    candidate root.
+    status, public probe, runtime-surface evidence, public-testnet peer manifest
+    root, usable peer URLs and peer count after self-exclusion, validator set,
+    genesis, endpoint URL, and validator, operator, observer, and region counts
+    into one candidate root.
 21. Verify final public launch readiness with external-public runtime-surface
     evidence captured from the advertised endpoint, an artifact-bound live RPC
-    devnet rehearsal report for the same launch package and endpoint, and
-    verified loopback runtime-surface evidence whose root matches that report.
+    devnet rehearsal report for the same launch package, endpoint, peer-manifest
+    root, and usable peer count, and verified loopback runtime-surface evidence
+    whose root and usable peer count match that report.
     This is the only artifact-bound command allowed to emit
     `public_launch_ready=true`; loopback devnet runtime-surface evidence remains
     a rehearsal/certificate input and is rejected by the final readiness gate.

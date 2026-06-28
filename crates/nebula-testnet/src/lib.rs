@@ -931,6 +931,7 @@ pub struct LiveRpcDevnetRehearsalReport {
     pub sequencer_key_rotation_count: u64,
     pub launch_package_bundle_root: String,
     pub public_testnet_peer_manifest_root: String,
+    pub public_testnet_peer_manifest_snapshot_peer_count: usize,
     pub peer_manifest_sync_peer_quorum: usize,
     pub rehearsal_root: String,
 }
@@ -2898,6 +2899,8 @@ fn prove_live_rpc_devnet_rehearsal_with_bindings(
         sequencer_key_rotation_count: live_value_u64(status, "sequencer_key_rotation_count")?,
         launch_package_bundle_root: follower_binding.launch_package_bundle_root,
         public_testnet_peer_manifest_root: reported_peer_manifest_root,
+        public_testnet_peer_manifest_snapshot_peer_count: runtime_surface_report
+            .public_testnet_peer_manifest_snapshot_peer_count,
         peer_manifest_sync_peer_quorum: reported_peer_manifest_quorum,
         rehearsal_root: String::new(),
     };
@@ -6791,6 +6794,16 @@ pub fn verify_public_testnet_launch_readiness_jsons(
             live_rehearsal.peer_manifest_sync_peer_quorum
         ));
     }
+    let expected_live_snapshot_peer_count = certificate.peer_manifest_peer_count.saturating_sub(1);
+    if live_rehearsal.public_testnet_peer_manifest_snapshot_peer_count
+        != expected_live_snapshot_peer_count
+    {
+        errors.push(format!(
+            "live_rpc_devnet_rehearsal.public_testnet_peer_manifest_snapshot_peer_count expected {} but got {}",
+            expected_live_snapshot_peer_count,
+            live_rehearsal.public_testnet_peer_manifest_snapshot_peer_count
+        ));
+    }
     require_eq(
         &mut errors,
         "live_rpc_devnet_runtime_surface.capture_mode",
@@ -6861,6 +6874,15 @@ pub fn verify_public_testnet_launch_readiness_jsons(
             "live_rpc_devnet_runtime_surface.public_testnet_peer_manifest_sync_peer_quorum is required for final readiness"
                 .to_string(),
         ),
+    }
+    if live_runtime_surface.public_testnet_peer_manifest_snapshot_peer_count
+        != live_rehearsal.public_testnet_peer_manifest_snapshot_peer_count
+    {
+        errors.push(format!(
+            "live_rpc_devnet_runtime_surface.public_testnet_peer_manifest_snapshot_peer_count expected {} but got {}",
+            live_rehearsal.public_testnet_peer_manifest_snapshot_peer_count,
+            live_runtime_surface.public_testnet_peer_manifest_snapshot_peer_count
+        ));
     }
     if live_runtime_surface.latest_height != live_rehearsal.latest_height {
         errors.push(format!(
@@ -7071,6 +7093,21 @@ pub fn verify_live_rpc_devnet_rehearsal_json(
             "live_rpc_devnet_rehearsal.peer_manifest_sync_peer_quorum must be greater than zero"
                 .to_string(),
         );
+    }
+    if report.public_testnet_peer_manifest_snapshot_peer_count == 0 {
+        errors.push(
+            "live_rpc_devnet_rehearsal.public_testnet_peer_manifest_snapshot_peer_count must be greater than zero"
+                .to_string(),
+        );
+    }
+    if report.peer_manifest_sync_peer_quorum
+        > report.public_testnet_peer_manifest_snapshot_peer_count
+    {
+        errors.push(format!(
+            "live_rpc_devnet_rehearsal.peer_manifest_sync_peer_quorum {} exceeds usable snapshot peer count {}",
+            report.peer_manifest_sync_peer_quorum,
+            report.public_testnet_peer_manifest_snapshot_peer_count
+        ));
     }
     if !report.sync_quorum_met {
         errors.push("live_rpc_devnet_rehearsal.sync_quorum_met must be true".to_string());
@@ -8077,6 +8114,7 @@ fn live_rpc_devnet_rehearsal_root(report: &LiveRpcDevnetRehearsalReport) -> Stri
         "sequencer_key_rotation_count": report.sequencer_key_rotation_count,
         "launch_package_bundle_root": report.launch_package_bundle_root,
         "public_testnet_peer_manifest_root": report.public_testnet_peer_manifest_root,
+        "public_testnet_peer_manifest_snapshot_peer_count": report.public_testnet_peer_manifest_snapshot_peer_count,
         "peer_manifest_sync_peer_quorum": report.peer_manifest_sync_peer_quorum,
     }))
 }
@@ -17324,6 +17362,12 @@ mod public_launch {
         )
         .unwrap();
 
+        let live_rehearsal_report =
+            serde_json::from_str::<LiveRpcDevnetRehearsalReport>(&live_rehearsal).unwrap();
+        let live_runtime_surface_report = verify_runtime_surface_evidence_json(&runtime_surface)
+            .expect("live runtime surface verifies");
+        let expected_live_snapshot_peer_count = peer_manifest_report.peer_count.saturating_sub(1);
+
         assert!(readiness.public_launch_ready);
         assert_eq!(readiness.level, "public-testnet-launch-ready");
         assert!(readiness.blocking_gaps.is_empty());
@@ -17343,6 +17387,14 @@ mod public_launch {
         assert_eq!(
             readiness.peer_manifest_peer_count,
             peer_manifest_report.peer_count
+        );
+        assert_eq!(
+            live_rehearsal_report.public_testnet_peer_manifest_snapshot_peer_count,
+            expected_live_snapshot_peer_count
+        );
+        assert_eq!(
+            live_runtime_surface_report.public_testnet_peer_manifest_snapshot_peer_count,
+            expected_live_snapshot_peer_count
         );
         assert_eq!(
             readiness.public_testnet_launch_certificate_root,
@@ -17368,15 +17420,11 @@ mod public_launch {
         );
         assert_eq!(
             readiness.live_rpc_devnet_rehearsal_root,
-            serde_json::from_str::<LiveRpcDevnetRehearsalReport>(&live_rehearsal)
-                .unwrap()
-                .rehearsal_root
+            live_rehearsal_report.rehearsal_root
         );
         assert_eq!(
             readiness.live_rpc_devnet_runtime_surface_root,
-            verify_runtime_surface_evidence_json(&runtime_surface)
-                .unwrap()
-                .runtime_surface_root
+            live_runtime_surface_report.runtime_surface_root
         );
 
         let mut tampered_peer_manifest =
@@ -17439,6 +17487,41 @@ mod public_launch {
             AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
                 error.starts_with(
                     "live_rpc_devnet_rehearsal.public_testnet_peer_manifest_root does not match",
+                )
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
+        let mut wrong_peer_count_rehearsal = live_rehearsal_report.clone();
+        wrong_peer_count_rehearsal.public_testnet_peer_manifest_snapshot_peer_count += 1;
+        wrong_peer_count_rehearsal.rehearsal_root =
+            live_rpc_devnet_rehearsal_root(&wrong_peer_count_rehearsal);
+        let wrong_peer_count_rehearsal =
+            serde_json::to_string_pretty(&wrong_peer_count_rehearsal).unwrap();
+        let wrong_peer_count_ready_error = verify_public_testnet_launch_readiness_jsons(
+            &external_certificate,
+            &observer_confirmation,
+            &external_runtime_surface,
+            &peer_manifest,
+            &wrong_peer_count_rehearsal,
+            &runtime_surface,
+            &join_confirmation,
+            &join,
+            &activation,
+            &bundle,
+            &deployment,
+            &public_status,
+            &public_probe,
+            &validators,
+            &handoff,
+            &acceptance,
+            &genesis,
+        )
+        .unwrap_err();
+        match wrong_peer_count_ready_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error.starts_with(
+                    "live_rpc_devnet_rehearsal.public_testnet_peer_manifest_snapshot_peer_count expected ",
                 )
             })),
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),

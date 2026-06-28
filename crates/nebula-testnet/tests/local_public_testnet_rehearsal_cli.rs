@@ -694,6 +694,15 @@ fn prove_live_rpc_devnet_with_launch_artifacts_binds_rehearsal_to_bundle() {
         report["public_testnet_peer_manifest_root"],
         peer_manifest_json["root"]
     );
+    let expected_snapshot_peer_count = peer_manifest_json["peers"]
+        .as_array()
+        .expect("peer manifest peers")
+        .len()
+        .saturating_sub(1) as u64;
+    assert_eq!(
+        report["public_testnet_peer_manifest_snapshot_peer_count"].as_u64(),
+        Some(expected_snapshot_peer_count)
+    );
     assert_eq!(runtime_surface_evidence["capture_mode"], "loopback-devnet");
     assert_eq!(
         runtime_surface_evidence["root"],
@@ -706,6 +715,11 @@ fn prove_live_rpc_devnet_with_launch_artifacts_binds_rehearsal_to_bundle() {
     assert_eq!(
         runtime_surface_evidence["status"]["public_testnet_peer_manifest_root"],
         peer_manifest_json["root"]
+    );
+    assert_eq!(
+        runtime_surface_evidence["status"]["public_testnet_peer_manifest_snapshot_peer_count"]
+            .as_u64(),
+        Some(expected_snapshot_peer_count)
     );
     assert_hex64(&report, "launch_package_bundle_root");
     assert_hex64(&report, "public_testnet_peer_manifest_root");
