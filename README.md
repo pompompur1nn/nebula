@@ -287,9 +287,11 @@ evidence is absent or stale.
     join, operator join confirmation, public observer confirmation, public
     status, public probe, runtime-surface evidence, public-testnet peer manifest
     root, `runtime_surface_capture_mode`, `runtime_surface_tls_observation`,
+    `runtime_surface_captured_at_unix_ms`,
     `public_testnet_peer_manifest_snapshot_peer_urls`, usable peer count after
-    self-exclusion, validator set, genesis, endpoint URL, and validator,
-    operator, observer, and region counts into one candidate root.
+    self-exclusion, deployment attestation root, deployment validity window,
+    public observer observation time, validator set, genesis, endpoint URL, and
+    validator, operator, observer, and region counts into one candidate root.
 21. Verify final public launch readiness with external-public runtime-surface
     evidence captured from the advertised endpoint and a launch certificate that
     root-binds `external-public-endpoint` `runtime_surface_capture_mode`,
@@ -1232,9 +1234,11 @@ confirmation. It binds the launch-package bundle, validator activation,
 validator join, operator join confirmation, public observer confirmation,
 public status, public probe, runtime surface, public-testnet peer-manifest root,
 runtime surface capture mode, observed TLS tuple when present, and
-runtime-reported usable peer URLs and peer count after self-exclusion, validator
-set, genesis, endpoint URL, and validator, operator, observer, and region counts
-into one final candidate root.
+runtime-surface capture time, runtime-reported usable peer URLs and peer count
+after self-exclusion, deployment attestation root, deployment generation/expiry
+times, public observer observation time, validator set, genesis, endpoint URL,
+and validator, operator, observer, and region counts into one final candidate
+root.
 
 Final public launch readiness replays that certificate against external-public
 runtime-surface evidence and the live RPC devnet rehearsal. Its readiness root

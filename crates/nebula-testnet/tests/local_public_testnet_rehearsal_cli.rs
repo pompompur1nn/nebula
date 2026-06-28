@@ -1048,6 +1048,22 @@ fn public_testnet_launch_readiness_cli_verifies_external_runtime_surface() {
         certificate_report["runtime_surface_tls_observation"],
         external_surface_report["tls_observation"]
     );
+    assert_eq!(
+        certificate_report["runtime_surface_captured_at_unix_ms"],
+        external_surface_report["captured_at_unix_ms"]
+    );
+    assert_eq!(
+        certificate_report["public_observer_observed_at_unix_ms"],
+        observer_confirmation["observed_at_unix_ms"]
+    );
+    assert_eq!(
+        certificate_report["deployment_generated_at_unix_ms"],
+        attestation["generated_at_unix_ms"]
+    );
+    assert_eq!(
+        certificate_report["deployment_expires_at_unix_ms"],
+        attestation["expires_at_unix_ms"]
+    );
 
     let readiness_args_for = |certificate: &Path, runtime_surface: &Path| -> Vec<String> {
         let mut args = vec![
@@ -1106,6 +1122,10 @@ fn public_testnet_launch_readiness_cli_verifies_external_runtime_surface() {
         certificate_report["public_testnet_launch_certificate_root"]
     );
     assert_eq!(
+        readiness_report["deployment_attestation_root"],
+        certificate_report["deployment_attestation_root"]
+    );
+    assert_eq!(
         readiness_report["public_testnet_peer_manifest_snapshot_peer_urls"],
         certificate_report["public_testnet_peer_manifest_snapshot_peer_urls"]
     );
@@ -1119,19 +1139,19 @@ fn public_testnet_launch_readiness_cli_verifies_external_runtime_surface() {
     );
     assert_eq!(
         readiness_report["runtime_surface_captured_at_unix_ms"],
-        external_surface_report["captured_at_unix_ms"]
+        certificate_report["runtime_surface_captured_at_unix_ms"]
     );
     assert_eq!(
         readiness_report["public_observer_observed_at_unix_ms"],
-        observer_confirmation["observed_at_unix_ms"]
+        certificate_report["public_observer_observed_at_unix_ms"]
     );
     assert_eq!(
         readiness_report["deployment_generated_at_unix_ms"],
-        attestation["generated_at_unix_ms"]
+        certificate_report["deployment_generated_at_unix_ms"]
     );
     assert_eq!(
         readiness_report["deployment_expires_at_unix_ms"],
-        attestation["expires_at_unix_ms"]
+        certificate_report["deployment_expires_at_unix_ms"]
     );
     assert_eq!(
         readiness_report["live_rpc_devnet_runtime_surface_root"],
