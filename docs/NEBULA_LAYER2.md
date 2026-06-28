@@ -152,9 +152,9 @@ evidence is absent or stale.
 11. Rehearse the Base-style RPC devnet using the launch package expectations:
     run one persistent sequencer that produces deterministic sub-second blocks,
     pin its Ed25519 sequencer identity with `--sequencer-public-key`, keep the
-    matching non-dev `--sequencer-secret-key` only on the sequencer, expose
+    matching non-dev `--sequencer-secret-key-file` only on the sequencer, expose
     operator-only methods only through a private `--admin-rpc-bind` listener
-    protected by `--admin-token`, prove the public `/rpc` listener rejects
+    protected by `--admin-token-file`, prove the public `/rpc` listener rejects
     admin methods even with a valid token, run followers that
     persist `nebula-runtime-snapshot.json`, import a verified startup snapshot
     with `--bootstrap-rpc`, and continuously sync newer verified snapshots from
@@ -259,7 +259,7 @@ evidence is absent or stale.
     `operator_approvals`, then prove followers fail closed on stale-key blocks.
     Operator-only
     methods must require `params.admin_token` from a node started with
-    `--admin-rpc-bind` and `--admin-token`, and public RPC must reject those
+    `--admin-rpc-bind` and `--admin-token-file`, and public RPC must reject those
     methods before token validation.
     `nebula_reportEquivocation` must bind conflicting block/signature evidence
     to the accountability root, and unresolved equivocation or mis-signing
@@ -343,7 +343,7 @@ response cap. HTTP requests whose declared `Content-Length` body is incomplete
 are rejected before JSON-RPC dispatch.
 
 Operator-only JSON-RPC methods require a node started with
-`--admin-rpc-bind <private-addr>` plus `--admin-token <operator-token>` and
+`--admin-rpc-bind <private-addr>` plus `--admin-token-file <path>` and
 request params containing `"admin_token": "<operator-token>"`. This protects
 `nebula_importSnapshot`,
 `nebula_observeBridgeDeposit`, `nebula_finalizeWithdrawal`,
@@ -357,13 +357,16 @@ flow methods remain callable without that token.
 Run a local persistent sequencer:
 
 ```bash
-cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --sequencer --rpc-bind 127.0.0.1:9944 --admin-rpc-bind 127.0.0.1:9947 --block-ms 250 --validator-id validator-a --sequencer-public-key <sequencer-public-key-hex> --sequencer-secret-key <sequencer-secret-key-hex> --data-dir /tmp/nebula-validator-a --admin-token <operator-token> --disable-nbla-faucet --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600 --max-active-connections 512 --admin-max-active-connections 32
+cargo run --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet -- --run-rpc --sequencer --rpc-bind 127.0.0.1:9944 --admin-rpc-bind 127.0.0.1:9947 --block-ms 250 --validator-id validator-a --sequencer-public-key <sequencer-public-key-hex> --sequencer-secret-key-file /secure/sequencer.hex --data-dir /tmp/nebula-validator-a --admin-token-file /secure/admin-token.txt --disable-nbla-faucet --max-mempool-transactions 10000 --max-request-bytes 1048576 --max-requests-per-minute 600 --max-active-connections 512 --admin-max-active-connections 32
 ```
 
 The default dev sequencer key is only for throwaway local rehearsals. Public
 rehearsals should pass `--sequencer-public-key <hex>` to all nodes and pass the
-matching `--sequencer-secret-key <hex>` only to the sequencer. The secret key is
-kept in process memory and is never exported in `/snapshot`.
+matching `--sequencer-secret-key-file <path>` only to the sequencer. Inline
+`--sequencer-secret-key <hex>` remains accepted for local fixtures, but public
+testnet operators should prefer the file form so the secret does not appear in
+argv. The secret key is kept in process memory and is never exported in
+`/snapshot`.
 
 For a public RPC testnet candidate, start every sequencer and follower with the
 verified launch package artifacts: `--deployment-attestation`, `--public-status`,
@@ -796,29 +799,32 @@ Withdrawals must prove:
 Operator bridge desks can produce those launch-bound payloads without custom
 scripts. Each observer signs the unsigned deposit JSON with
 `--sign-bridge-observer-evidence --bridge-deposit <path> --observer-id <id>
---observer-secret-key <hex>`, then the admin desk combines the quorum with
+--observer-secret-key-file <path>`, then the admin desk combines the quorum with
 `--assemble-bridge-deposit --bridge-deposit <path> --observer-evidence
 <path>...`. Each operator signs an `operator_pending` withdrawal with
 `--sign-withdrawal-operator-approval --withdrawal <path>
 --finalized-monero-tx-id <hex> --finalization-proof-root <hex> --operator-id
-<id> --operator-secret-key <hex>`, then the admin desk builds
+<id> --operator-secret-key-file <path>`, then the admin desk builds
 `nebula_finalizeWithdrawal` params with `--assemble-finalize-withdrawal
 --withdrawal <path> --finalized-monero-tx-id <hex> --finalization-proof-root
-<hex> --operator-approval <path>...`. The assemblers recompute payload roots,
-evidence roots, and Ed25519 signatures before emitting RPC-ready JSON.
+<hex> --operator-approval <path>... --admin-token-file <path>`. The assemblers
+recompute payload roots, evidence roots, and Ed25519 signatures before emitting
+RPC-ready JSON.
 Sequencer rotations use the same operator-desk flow: each launch-attested
 operator signs `--sign-sequencer-rotation-approval --launch-package-bundle-root
 <hex> --previous-sequencer-key-history-root <hex> --activation-height <height>
 --old-sequencer-public-key <hex> --new-sequencer-public-key <hex>
---rotation-proof-root <hex> --operator-id <id> --operator-secret-key <hex>`,
+--rotation-proof-root <hex> --operator-id <id> --operator-secret-key-file <path>`,
 then the admin desk runs `--assemble-sequencer-rotation
 --launch-package-bundle-root <hex> --previous-sequencer-key-history-root <hex>
 --activation-height <height> --old-sequencer-public-key <hex>
---new-sequencer-secret-key-hex <hex> --rotation-proof-root <hex>
---operator-approval <path>... [--admin-token <token>]`. The rotation assembler
-derives the new public key from the submitted secret and rejects approvals whose
-payload root, approval root, or Ed25519 signature does not match the
-launch-bound rotation.
+--new-sequencer-secret-key-file <path> --rotation-proof-root <hex>
+--operator-approval <path>... --admin-token-file <path>`. The rotation
+assembler derives the new public key from the submitted secret and rejects
+approvals whose payload root, approval root, or Ed25519 signature does not
+match the launch-bound rotation. Inline secret and token flags remain accepted
+for local fixtures, but public operators should prefer the `*-file` forms for
+signer keys, sequencer keys, and admin tokens.
 
 Public launch observers should treat the bridge as launch-blocked unless
 `/health`, `/status`, and `nebula_status` expose or agree with

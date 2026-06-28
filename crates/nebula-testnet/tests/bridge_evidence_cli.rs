@@ -60,6 +60,12 @@ fn secret(byte: u8) -> String {
     format!("{byte:02x}").repeat(32)
 }
 
+fn write_secret_file(dir: &std::path::Path, name: &str, value: &str) -> String {
+    let path = dir.join(name);
+    fs::write(&path, format!("{value}\n")).expect("write secret file");
+    path.display().to_string()
+}
+
 #[test]
 fn bridge_evidence_commands_emit_rpc_ready_json() {
     let dir = temp_dir("bridge-cli");
@@ -358,4 +364,174 @@ fn bridge_evidence_commands_emit_rpc_ready_json() {
         rotation_a_path.display().to_string(),
     ]);
     assert!(mismatch.contains("payload_root does not match sequencer rotation"));
+}
+
+#[test]
+fn bridge_evidence_commands_accept_file_backed_secrets() {
+    let dir = temp_dir("bridge-cli-secret-files");
+    let deposit_path = dir.join("deposit.json");
+    let withdrawal_path = dir.join("withdrawal.json");
+    let approval_path = dir.join("operator-approval.json");
+    let rotation_approval_path = dir.join("rotation-approval.json");
+    let observer_secret_path = write_secret_file(&dir, "observer.hex", &secret(0x11));
+    let operator_secret_path = write_secret_file(&dir, "operator.hex", &secret(0x22));
+    let rotation_operator_secret_path =
+        write_secret_file(&dir, "rotation-operator.hex", &secret(0x33));
+    let new_sequencer_secret = secret(0x44);
+    let new_sequencer_secret_path =
+        write_secret_file(&dir, "new-sequencer.hex", &new_sequencer_secret);
+    let admin_token_path = write_secret_file(&dir, "admin-token.txt", "launch-admin-file");
+
+    let deposit = json!({
+        "monero_tx_id": "a".repeat(64),
+        "account": "alice.testnet",
+        "amount_nxmr_units": 42_000_000_000_u64,
+        "confirmations": 20_u64,
+        "observer_id": "observer-a",
+        "observer_ids": ["observer-a"],
+        "proof_root": "b".repeat(64),
+        "custody_proof_root": "c".repeat(64),
+        "relayer_set_root": "d".repeat(64),
+        "observer_signature_roots": [],
+        "observer_evidence": [],
+        "observed_at_unix_ms": 1_735_689_600_000_u64
+    });
+    fs::write(
+        &deposit_path,
+        serde_json::to_string_pretty(&deposit).expect("serialize deposit"),
+    )
+    .expect("write deposit");
+
+    let observer_evidence = run_nebula(vec![
+        "--sign-bridge-observer-evidence".into(),
+        "--bridge-deposit".into(),
+        deposit_path.display().to_string(),
+        "--observer-id".into(),
+        "observer-a".into(),
+        "--observer-secret-key-file".into(),
+        observer_secret_path,
+    ]);
+    let observer_evidence: Value =
+        serde_json::from_str(&observer_evidence).expect("observer evidence json");
+    assert_eq!(observer_evidence["observer_id"], "observer-a");
+    assert_eq!(
+        observer_evidence["observer_public_key_hex"],
+        nebula_testnet::runtime::public_key_hex_for_secret(&secret(0x11))
+            .expect("observer public key")
+    );
+
+    let withdrawal = json!({
+        "withdrawal_id": "withdrawal-file-0001",
+        "account": "alice.testnet",
+        "monero_address": "44AFFq5kSiGBoZ...test-only-address",
+        "amount_nxmr_units": 21_000_000_000_u64,
+        "nonce": 7_u64,
+        "signature": "1".repeat(128),
+        "requested_at_unix_ms": 1_735_689_700_000_u64,
+        "status": "operator_pending",
+        "bridge_policy_root": "2".repeat(64),
+        "operator_approval_ids": [],
+        "operator_approval_roots": [],
+        "operator_approvals": [],
+        "finalized_monero_tx_id": null,
+        "finalization_proof_root": null,
+        "finalized_at_unix_ms": null,
+        "root": ""
+    });
+    fs::write(
+        &withdrawal_path,
+        serde_json::to_string_pretty(&withdrawal).expect("serialize withdrawal"),
+    )
+    .expect("write withdrawal");
+
+    let finalized_tx = "e".repeat(64);
+    let finalization_root = "f".repeat(64);
+    let operator_approval = run_nebula(vec![
+        "--sign-withdrawal-operator-approval".into(),
+        "--withdrawal".into(),
+        withdrawal_path.display().to_string(),
+        "--finalized-monero-tx-id".into(),
+        finalized_tx.clone(),
+        "--finalization-proof-root".into(),
+        finalization_root.clone(),
+        "--operator-id".into(),
+        "operator-file".into(),
+        "--operator-secret-key-file".into(),
+        operator_secret_path,
+    ]);
+    fs::write(&approval_path, &operator_approval).expect("write operator approval");
+    let operator_approval: Value =
+        serde_json::from_str(&operator_approval).expect("operator approval json");
+    assert_eq!(operator_approval["operator_id"], "operator-file");
+
+    let finalized = run_nebula(vec![
+        "--assemble-finalize-withdrawal".into(),
+        "--withdrawal".into(),
+        withdrawal_path.display().to_string(),
+        "--finalized-monero-tx-id".into(),
+        finalized_tx,
+        "--finalization-proof-root".into(),
+        finalization_root,
+        "--operator-approval".into(),
+        approval_path.display().to_string(),
+        "--admin-token-file".into(),
+        admin_token_path.clone(),
+    ]);
+    let finalized: Value = serde_json::from_str(&finalized).expect("finalized withdrawal json");
+    assert_eq!(finalized["admin_token"], "launch-admin-file");
+
+    let launch_root = "9".repeat(64);
+    let previous_key_history_root = "8".repeat(64);
+    let rotation_proof_root = "7".repeat(64);
+    let old_public_key =
+        nebula_testnet::runtime::public_key_hex_for_secret(&secret(0x55)).expect("old public key");
+    let new_public_key = nebula_testnet::runtime::public_key_hex_for_secret(&new_sequencer_secret)
+        .expect("new public key");
+    let rotation_approval = run_nebula(vec![
+        "--sign-sequencer-rotation-approval".into(),
+        "--launch-package-bundle-root".into(),
+        launch_root.clone(),
+        "--previous-sequencer-key-history-root".into(),
+        previous_key_history_root.clone(),
+        "--activation-height".into(),
+        "3".into(),
+        "--old-sequencer-public-key".into(),
+        old_public_key.clone(),
+        "--new-sequencer-public-key".into(),
+        new_public_key.clone(),
+        "--rotation-proof-root".into(),
+        rotation_proof_root.clone(),
+        "--operator-id".into(),
+        "operator-rotation-file".into(),
+        "--operator-secret-key-file".into(),
+        rotation_operator_secret_path,
+    ]);
+    fs::write(&rotation_approval_path, rotation_approval).expect("write rotation approval");
+
+    let rotation_params = run_nebula(vec![
+        "--assemble-sequencer-rotation".into(),
+        "--launch-package-bundle-root".into(),
+        launch_root,
+        "--previous-sequencer-key-history-root".into(),
+        previous_key_history_root,
+        "--activation-height".into(),
+        "3".into(),
+        "--old-sequencer-public-key".into(),
+        old_public_key,
+        "--new-sequencer-secret-key-file".into(),
+        new_sequencer_secret_path,
+        "--rotation-proof-root".into(),
+        rotation_proof_root,
+        "--operator-approval".into(),
+        rotation_approval_path.display().to_string(),
+        "--admin-token-file".into(),
+        admin_token_path,
+    ]);
+    let rotation_params: Value =
+        serde_json::from_str(&rotation_params).expect("rotation params json");
+    assert_eq!(rotation_params["admin_token"], "launch-admin-file");
+    assert_eq!(
+        rotation_params["new_sequencer_secret_key_hex"],
+        new_sequencer_secret
+    );
 }
