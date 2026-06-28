@@ -34,6 +34,8 @@ pub const MIN_BRIDGE_CONFIRMATIONS: u64 = 10;
 pub const MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM: usize = 2;
 pub const MIN_WITHDRAWAL_OPERATOR_QUORUM: usize = 2;
 pub const MIN_SEQUENCER_ROTATION_OPERATOR_QUORUM: usize = 2;
+pub const PUBLIC_LAUNCH_SIGNED_EVIDENCE_MAX_AGE_MS: u128 = 86_400_000;
+pub const PUBLIC_LAUNCH_SIGNED_EVIDENCE_FUTURE_SKEW_MS: u128 = 300_000;
 pub const BRIDGE_CUSTODY_POLICY_ID: &str = "nebula-monero-bridge-custody-testnet-v1";
 pub const VALIDATOR_REWARD_ACCOUNT_PREFIX: &str = "validator:";
 pub const RUNTIME_SNAPSHOT_FILE: &str = "nebula-runtime-snapshot.json";
@@ -3309,6 +3311,9 @@ impl NebulaRuntime {
     ) -> Result<BridgeDepositReport, String> {
         self.ensure_accountability_clean()?;
         validate_bridge_deposit_for_launch_binding(&deposit, self.config.launch_binding.as_ref())?;
+        if self.config.launch_binding.is_some() {
+            validate_live_bridge_deposit_evidence_freshness(&deposit, unix_ms())?;
+        }
         if self.bridge_deposits.contains_key(&deposit.monero_tx_id) {
             return Err(format!(
                 "bridge deposit {} already observed",
@@ -3496,6 +3501,13 @@ impl NebulaRuntime {
             &operator_approvals,
             launch_binding.as_ref(),
         )?;
+        if launch_binding.is_some() {
+            validate_live_withdrawal_operator_approval_freshness(
+                withdrawal,
+                &operator_approvals,
+                unix_ms(),
+            )?;
+        }
         withdrawal.status = "finalized".to_string();
         withdrawal.operator_approval_ids = operator_approval_ids;
         withdrawal.operator_approval_roots = operator_approval_roots;
@@ -3573,6 +3585,9 @@ impl NebulaRuntime {
             self.config.launch_binding.as_ref(),
             &previous_sequencer_key_history_root,
         )?;
+        if self.config.launch_binding.is_some() {
+            validate_live_sequencer_rotation_approval_freshness(&rotation, unix_ms())?;
+        }
         self.config.sequencer_public_key_hex = rotation.new_public_key_hex.clone();
         self.sequencer_secret_key_hex = Some(new_sequencer_secret_key_hex);
         self.sequencer_key_rotations.push(rotation.clone());
@@ -6316,6 +6331,88 @@ fn validate_bridge_observer_evidence(
     Ok(())
 }
 
+fn validate_live_signed_evidence_time(
+    label: &str,
+    signed_at_unix_ms: u128,
+    now_unix_ms: u128,
+) -> Result<(), String> {
+    if signed_at_unix_ms > now_unix_ms.saturating_add(PUBLIC_LAUNCH_SIGNED_EVIDENCE_FUTURE_SKEW_MS)
+    {
+        return Err(format!("{label} is more than five minutes in the future"));
+    }
+    if signed_at_unix_ms < now_unix_ms.saturating_sub(PUBLIC_LAUNCH_SIGNED_EVIDENCE_MAX_AGE_MS) {
+        return Err(format!("{label} is older than 24 hours"));
+    }
+    Ok(())
+}
+
+fn validate_live_bridge_deposit_evidence_freshness(
+    deposit: &RuntimeBridgeDeposit,
+    now_unix_ms: u128,
+) -> Result<(), String> {
+    validate_live_signed_evidence_time(
+        "bridge_deposit.observed_at_unix_ms",
+        deposit.observed_at_unix_ms,
+        now_unix_ms,
+    )?;
+    for (index, evidence) in deposit.observer_evidence.iter().enumerate() {
+        validate_live_signed_evidence_time(
+            &format!("observer_evidence[{index}].signed_at_unix_ms"),
+            evidence.signed_at_unix_ms,
+            now_unix_ms,
+        )?;
+        if evidence.signed_at_unix_ms < deposit.observed_at_unix_ms {
+            return Err(format!(
+                "observer_evidence[{index}].signed_at_unix_ms must be at or after bridge_deposit.observed_at_unix_ms"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_live_withdrawal_operator_approval_freshness(
+    withdrawal: &RuntimeWithdrawalRequest,
+    operator_approvals: &[RuntimeWithdrawalOperatorApproval],
+    now_unix_ms: u128,
+) -> Result<(), String> {
+    for (index, approval) in operator_approvals.iter().enumerate() {
+        validate_live_signed_evidence_time(
+            &format!("operator_approvals[{index}].signed_at_unix_ms"),
+            approval.signed_at_unix_ms,
+            now_unix_ms,
+        )?;
+        if approval.signed_at_unix_ms < withdrawal.requested_at_unix_ms {
+            return Err(format!(
+                "operator_approvals[{index}].signed_at_unix_ms must be at or after withdrawal.requested_at_unix_ms"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_live_sequencer_rotation_approval_freshness(
+    rotation: &RuntimeSequencerKeyRotation,
+    now_unix_ms: u128,
+) -> Result<(), String> {
+    for (index, approval) in rotation.operator_approvals.iter().enumerate() {
+        validate_live_signed_evidence_time(
+            &format!("operator_approvals[{index}].signed_at_unix_ms"),
+            approval.signed_at_unix_ms,
+            now_unix_ms,
+        )?;
+        if approval.signed_at_unix_ms
+            > rotation
+                .rotated_at_unix_ms
+                .saturating_add(PUBLIC_LAUNCH_SIGNED_EVIDENCE_FUTURE_SKEW_MS)
+        {
+            return Err(format!(
+                "operator_approvals[{index}].signed_at_unix_ms must be at or before rotation.rotated_at_unix_ms plus clock skew"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_withdrawal_operator_approvals(
     withdrawal: &RuntimeWithdrawalRequest,
     finalized_monero_tx_id: &str,
@@ -7907,8 +8004,19 @@ mod tests {
         proof_digit: char,
     ) -> RuntimeBridgeDeposit {
         let mut deposit = test_bridge_deposit(monero_tx_digit, proof_digit);
-        let observer_a = test_bridge_observer_evidence(&deposit, "observer-a", 0xb1, 1);
-        let observer_b = test_bridge_observer_evidence(&deposit, "observer-b", 0xb2, 1);
+        deposit.observed_at_unix_ms = unix_ms();
+        let observer_a = test_bridge_observer_evidence(
+            &deposit,
+            "observer-a",
+            0xb1,
+            deposit.observed_at_unix_ms,
+        );
+        let observer_b = test_bridge_observer_evidence(
+            &deposit,
+            "observer-b",
+            0xb2,
+            deposit.observed_at_unix_ms,
+        );
         deposit.observer_signature_roots = vec![
             observer_a.evidence_root.clone(),
             observer_b.evidence_root.clone(),
@@ -7976,7 +8084,7 @@ mod tests {
             finalization_proof_root,
             "operator-a",
             0xa1,
-            1,
+            unix_ms(),
         );
         let approval_b = test_operator_approval(
             withdrawal,
@@ -7984,7 +8092,7 @@ mod tests {
             finalization_proof_root,
             "operator-b",
             0xa2,
-            1,
+            unix_ms(),
         );
         (
             vec![
@@ -8052,7 +8160,7 @@ mod tests {
             rotation_proof_root,
             "operator-a",
             0xa1,
-            1,
+            unix_ms(),
         );
         let approval_b = test_rotation_operator_approval(
             launch_binding,
@@ -8063,7 +8171,7 @@ mod tests {
             rotation_proof_root,
             "operator-b",
             0xa2,
-            1,
+            unix_ms(),
         );
         (
             vec![
@@ -10051,6 +10159,24 @@ mod tests {
             &new_public_key_hex,
             &rotation_proof_root,
         );
+        let mut stale_approval_roots = approval_roots.clone();
+        let mut stale_approvals = approvals.clone();
+        stale_approvals[0].signed_at_unix_ms =
+            unix_ms().saturating_sub(PUBLIC_LAUNCH_SIGNED_EVIDENCE_MAX_AGE_MS + 1);
+        stale_approvals[0].approval_root =
+            sequencer_key_rotation_approval_root(&stale_approvals[0]);
+        stale_approval_roots[0] = stale_approvals[0].approval_root.clone();
+        assert!(runtime
+            .rotate_sequencer_key(
+                &new_secret_key_hex,
+                &rotation_proof_root,
+                operator_ids.clone(),
+                stale_approval_roots,
+                stale_approvals,
+            )
+            .unwrap_err()
+            .contains("operator_approvals[0].signed_at_unix_ms is older than 24 hours"));
+
         let report = runtime
             .rotate_sequencer_key(
                 &new_secret_key_hex,
@@ -10757,6 +10883,18 @@ mod tests {
             .observe_bridge_deposit(tampered)
             .unwrap_err()
             .contains("payload_root"));
+
+        let mut stale = signed_test_bridge_deposit('a', 'b');
+        stale.observer_evidence[0].signed_at_unix_ms = stale.observed_at_unix_ms.saturating_sub(1);
+        stale.observer_evidence[0].evidence_root =
+            bridge_observer_evidence_root(&stale.observer_evidence[0]);
+        stale.observer_signature_roots[0] = stale.observer_evidence[0].evidence_root.clone();
+        assert!(runtime
+            .observe_bridge_deposit(stale)
+            .unwrap_err()
+            .contains(
+                "observer_evidence[0].signed_at_unix_ms must be at or after bridge_deposit.observed_at_unix_ms"
+            ));
     }
 
     #[test]
@@ -10926,6 +11064,25 @@ mod tests {
 
         let (operator_ids, approval_roots, approvals) =
             test_operator_approval_quorum(&withdrawal, &finalized_tx_id, &proof_root);
+        let mut stale_approval_roots = approval_roots.clone();
+        let mut stale_approvals = approvals.clone();
+        stale_approvals[0].signed_at_unix_ms = withdrawal.requested_at_unix_ms.saturating_sub(1);
+        stale_approvals[0].approval_root = withdrawal_operator_approval_root(&stale_approvals[0]);
+        stale_approval_roots[0] = stale_approvals[0].approval_root.clone();
+        assert!(runtime
+            .finalize_withdrawal(
+                &withdrawal.withdrawal_id,
+                &finalized_tx_id,
+                &proof_root,
+                operator_ids.clone(),
+                stale_approval_roots,
+                stale_approvals,
+            )
+            .unwrap_err()
+            .contains(
+                "operator_approvals[0].signed_at_unix_ms must be at or after withdrawal.requested_at_unix_ms"
+            ));
+
         let report = runtime
             .finalize_withdrawal(
                 &withdrawal.withdrawal_id,

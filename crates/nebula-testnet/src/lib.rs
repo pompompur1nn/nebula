@@ -8263,7 +8263,7 @@ fn live_bridge_deposit(seed: u8, amount_nxmr_units: u128) -> Value {
         relayer_set_root: hex_64("live-rpc-devnet-relayer-set"),
         observer_signature_roots: Vec::new(),
         observer_evidence: Vec::new(),
-        observed_at_unix_ms: 1,
+        observed_at_unix_ms: unix_ms(),
     };
     let observer_a = live_observer_evidence(&deposit, "observer-us-east-1", 0xb1);
     let observer_b = live_observer_evidence(&deposit, "observer-eu-west-1", 0xb2);
@@ -8286,7 +8286,7 @@ fn live_observer_evidence(
         observer_public_key_hex: live_account_id(seed),
         payload_root: payload_root.clone(),
         signature: live_sign_root(seed, &payload_root),
-        signed_at_unix_ms: 1,
+        signed_at_unix_ms: deposit.observed_at_unix_ms,
         evidence_root: String::new(),
     };
     evidence.evidence_root = runtime::bridge_observer_evidence_root(&evidence);
@@ -8346,7 +8346,7 @@ fn live_operator_approval(
         operator_public_key_hex: live_account_id(seed),
         payload_root: payload_root.clone(),
         signature: live_sign_root(seed, &payload_root),
-        signed_at_unix_ms: 1,
+        signed_at_unix_ms: withdrawal.requested_at_unix_ms,
         approval_root: String::new(),
     };
     approval.approval_root = runtime::withdrawal_operator_approval_root(&approval);
@@ -8422,7 +8422,7 @@ fn live_rotation_operator_approval(
         operator_public_key_hex: live_account_id(seed),
         payload_root: payload_root.clone(),
         signature: live_sign_root(seed, &payload_root),
-        signed_at_unix_ms: 1,
+        signed_at_unix_ms: unix_ms(),
         approval_root: String::new(),
     };
     approval.approval_root = runtime::sequencer_key_rotation_approval_root(&approval);

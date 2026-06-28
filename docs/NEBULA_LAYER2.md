@@ -810,7 +810,9 @@ Deposits must prove:
 - in launch-bound mode, signed `observer_evidence` entries whose payload root
   binds the Monero tx id, destination account, amount, confirmations,
   custody/relayer roots, observer quorum, observed time, and bridge policy, and
-  whose Ed25519 public keys match the launch-attested observer roster
+  whose Ed25519 public keys match the launch-attested observer roster; live RPC
+  deposits reject observed or observer-signed times more than 24 hours old, more
+  than five minutes in the future, or signed before the deposit observation
 
 Withdrawals must prove:
 
@@ -821,7 +823,9 @@ Withdrawals must prove:
 - in launch-bound mode, signed `operator_approvals` whose payload root binds
   the pending withdrawal root, destination Monero address, amount, payout tx,
   finalization proof, and bridge policy, and whose Ed25519 public keys match the
-  launch-attested operator roster
+  launch-attested operator roster; live finalization rejects approvals more than
+  24 hours old, more than five minutes in the future, or signed before the
+  withdrawal request
 - `nebula_finalizeWithdrawal` bound the destination Monero address, amount,
   withdrawal root, `finalized_monero_tx_id`, `finalization_proof_root`, and
   finalization timestamp
@@ -887,8 +891,10 @@ sequencer public key, new sequencer public key, activation height, previous
 key-history root, rotation proof root, at least two launch-attested operator
 approval signatures, and rotation root, then prove followers reject stale-key
 blocks and accept only blocks signed by the active key after the activation
-height. Rotation history must be rooted so launch observers can compare it
-across `/status`, `nebula_status`, and snapshots.
+height. Launch-bound rotations reject operator approvals more than 24 hours old,
+more than five minutes in the future, or signed later than the rotation timestamp
+plus clock skew. Rotation history must be rooted so launch observers can compare
+it across `/status`, `nebula_status`, and snapshots.
 Operators should create those signed approval payloads with
 `--sign-sequencer-rotation-approval` and assemble `nebula_rotateSequencerKey`
 params with `--assemble-sequencer-rotation`, which recomputes the launch-bound
