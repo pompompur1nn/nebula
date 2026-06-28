@@ -5351,22 +5351,22 @@ pub fn verify_public_testnet_peer_manifest_jsons(
             &format!("peers[{index}].p2p_endpoint"),
             &peer.p2p_endpoint,
         );
-        require_https_endpoint_without_path(
+        require_public_https_endpoint_without_path(
             &mut errors,
             &format!("peers[{index}].bootstrap_endpoint"),
             &peer.bootstrap_endpoint,
         );
-        require_https_endpoint(
+        require_public_https_endpoint(
             &mut errors,
             &format!("peers[{index}].rpc_url"),
             &peer.rpc_url,
         );
-        require_https_endpoint(
+        require_public_https_endpoint(
             &mut errors,
             &format!("peers[{index}].status_url"),
             &peer.status_url,
         );
-        require_https_endpoint(
+        require_public_https_endpoint(
             &mut errors,
             &format!("peers[{index}].snapshot_url"),
             &peer.snapshot_url,
@@ -9906,7 +9906,7 @@ fn verify_network_witnesses(errors: &mut Vec<String>, attestation: &DeploymentAt
             &format!("bootstrap_nodes[{index}].endpoint"),
             &node.endpoint,
         );
-        require_https_endpoint_without_path(
+        require_public_https_endpoint_without_path(
             errors,
             &format!("bootstrap_nodes[{index}].endpoint"),
             &node.endpoint,
@@ -12647,19 +12647,25 @@ fn require_public_https_endpoint(errors: &mut Vec<String>, label: &str, endpoint
     require_public_dns_authority(errors, label, authority);
 }
 
-fn require_https_endpoint_without_path(errors: &mut Vec<String>, label: &str, endpoint: &str) {
+fn require_public_https_endpoint_without_path(
+    errors: &mut Vec<String>,
+    label: &str,
+    endpoint: &str,
+) {
     let scheme = "https://";
     if !endpoint.starts_with(scheme) {
         errors.push(format!("{label} must use an https:// endpoint"));
         return;
     }
-    let Some(_authority) = require_endpoint_authority(errors, label, endpoint, scheme) else {
+    let Some(authority) = require_endpoint_authority(errors, label, endpoint, scheme) else {
         return;
     };
     let remainder = endpoint.strip_prefix(scheme).unwrap_or_default();
     if remainder.contains('/') {
         errors.push(format!("{label} must not include a path"));
+        return;
     }
+    require_public_dns_authority(errors, label, authority);
 }
 
 fn require_tcp_endpoint_with_port(errors: &mut Vec<String>, label: &str, endpoint: &str) {
@@ -14222,6 +14228,25 @@ mod public_launch {
             AttestationError::Invalid(errors) => {
                 assert!(errors.iter().any(|error| {
                     error == "bootstrap_nodes[0].endpoint must include a host after https://"
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn deployment_attestation_rejects_local_bootstrap_endpoint() {
+        let mut value =
+            serde_json::from_str::<Value>(&sample_deployment_attestation_json_pretty()).unwrap();
+        value["bootstrap_nodes"][0]["endpoint"] = json!("https://127.0.0.1");
+        refresh_bootstrap_node_root(&mut value, 0);
+
+        let error = verify_deployment_attestation_json(&value.to_string()).unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error == "bootstrap_nodes[0].endpoint must use a public DNS host, not an IP address"
                 }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
@@ -15888,6 +15913,52 @@ mod public_launch {
                     error.starts_with(
                         "root does not match expected public testnet peer manifest root",
                     )
+                }));
+            }
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+    }
+
+    #[test]
+    fn public_testnet_peer_manifest_rejects_local_peer_urls() {
+        let artifacts = sample_launch_artifacts();
+        let manifest_json = build_public_testnet_peer_manifest_json_pretty(
+            &artifacts.bundle,
+            &artifacts.deployment,
+            &artifacts.public_status,
+            &artifacts.public_probe,
+            &artifacts.validators,
+            &artifacts.handoff,
+            &artifacts.acceptance,
+            &artifacts.genesis,
+        )
+        .unwrap();
+        let mut manifest =
+            serde_json::from_str::<PublicTestnetPeerManifest>(&manifest_json).unwrap();
+        manifest.peers[0].snapshot_url = "https://127.0.0.1/snapshot".to_string();
+        manifest.root = public_testnet_peer_manifest_root(&manifest);
+        let tampered_json = serde_json::to_string(&manifest).unwrap();
+
+        let error = verify_public_testnet_peer_manifest_jsons(
+            &tampered_json,
+            &artifacts.bundle,
+            &artifacts.deployment,
+            &artifacts.public_status,
+            &artifacts.public_probe,
+            &artifacts.validators,
+            &artifacts.handoff,
+            &artifacts.acceptance,
+            &artifacts.genesis,
+        )
+        .unwrap_err();
+
+        match error {
+            AttestationError::Invalid(errors) => {
+                assert!(errors.iter().any(|error| {
+                    error == "peers[0].snapshot_url must use a public DNS host, not an IP address"
+                }));
+                assert!(errors.iter().any(|error| {
+                    error == "peers do not match verified launch validator and bootstrap artifacts"
                 }));
             }
             AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),

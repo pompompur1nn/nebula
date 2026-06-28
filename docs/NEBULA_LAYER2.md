@@ -708,8 +708,9 @@ The public launch suite covers:
   have no admitted validator
 - launch package bundle artifact hashes, operator acceptance root, and bundle
   root for external validator comparison
-- public testnet peer manifests that bind endpoint, validator, RPC/status,
-  snapshot, and sync-quorum evidence to the launch-package bundle
+- public testnet peer manifests that bind endpoint, validator, public-DNS
+  bootstrap/RPC/status/snapshot URLs, and sync-quorum evidence to the
+  launch-package bundle
 - validator activation receipts that bind every admitted validator to the
   verified launch-package bundle
 - validator join receipts that prove activated validators observed the chain
