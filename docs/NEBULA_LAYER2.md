@@ -1215,8 +1215,10 @@ operator, validator, or observer key holder, set `verified: true`, include
 The public testnet launch-candidate certificate is built after public observer
 confirmation. It binds the launch-package bundle, validator activation,
 validator join, operator join confirmation, public observer confirmation,
-public status, public probe, validator set, genesis, endpoint URL, and validator,
-operator, observer, and region counts into one final candidate root.
+public status, public probe, runtime surface, public-testnet peer-manifest root
+and runtime-reported usable peer count after self-exclusion, validator set,
+genesis, endpoint URL, and validator, operator, observer, and region counts
+into one final candidate root.
 
 Operators can verify the full package with:
 

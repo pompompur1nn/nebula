@@ -12319,6 +12319,17 @@ fn verified_launch_certificate_reports(
                 .to_string(),
         ),
     }
+    let expected_runtime_snapshot_peer_count =
+        public_testnet_peer_manifest.peer_count.saturating_sub(1);
+    if runtime_surface.public_testnet_peer_manifest_snapshot_peer_count
+        != expected_runtime_snapshot_peer_count
+    {
+        errors.push(format!(
+            "runtime_surface.public_testnet_peer_manifest_snapshot_peer_count expected {} but got {}",
+            expected_runtime_snapshot_peer_count,
+            runtime_surface.public_testnet_peer_manifest_snapshot_peer_count
+        ));
+    }
     if !errors.is_empty() {
         return Err(AttestationError::Invalid(errors));
     }
@@ -13025,6 +13036,57 @@ mod public_launch {
             Some(result) => *result = evidence.backup.clone(),
             None => evidence.rpc_backup_manifest = evidence.backup.clone(),
         }
+        evidence.root = runtime_surface_evidence_root(&evidence);
+        let output = serde_json::to_string_pretty(&evidence)
+            .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+        verify_runtime_surface_evidence_json(&output)?;
+        Ok(output)
+    }
+
+    fn runtime_surface_with_peer_manifest_snapshot_peer_count(
+        runtime_surface_json: &str,
+        count: usize,
+    ) -> Result<String, AttestationError> {
+        let mut evidence = serde_json::from_str::<RuntimeSurfaceEvidence>(runtime_surface_json)
+            .expect("runtime surface evidence parses");
+        evidence.status["public_testnet_peer_manifest_snapshot_peer_count"] = json!(count);
+        evidence.health["public_testnet_peer_manifest_snapshot_peer_count"] = json!(count);
+
+        let mut ops = serde_json::from_value::<runtime::RuntimeOpsStatus>(evidence.ops.clone())
+            .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+        ops.public_testnet_peer_manifest_snapshot_peer_count = count;
+        ops.ops_root = runtime::runtime_ops_status_root(&ops);
+        evidence.ops = serde_json::to_value(&ops)
+            .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+
+        let mut backup =
+            serde_json::from_value::<runtime::RuntimeBackupManifest>(evidence.backup.clone())
+                .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+        backup.public_testnet_peer_manifest_snapshot_peer_count = count;
+        backup.backup_root = runtime::runtime_backup_manifest_root(&backup);
+        evidence.backup = serde_json::to_value(&backup)
+            .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
+
+        evidence.health["ops_root"] = json!(ops.ops_root);
+        evidence.health["backup_root"] = json!(backup.backup_root);
+
+        match evidence.rpc_status.get_mut("result") {
+            Some(result) => *result = evidence.status.clone(),
+            None => evidence.rpc_status = evidence.status.clone(),
+        }
+        match evidence.rpc_ops_status.get_mut("result") {
+            Some(result) => *result = evidence.ops.clone(),
+            None => evidence.rpc_ops_status = evidence.ops.clone(),
+        }
+        match evidence.rpc_backup_manifest.get_mut("result") {
+            Some(result) => *result = evidence.backup.clone(),
+            None => evidence.rpc_backup_manifest = evidence.backup.clone(),
+        }
+        evidence.metrics_text = metrics_text_with_value(
+            &evidence.metrics_text,
+            "nebula_public_testnet_peer_manifest_snapshot_peer_count",
+            count as u128,
+        );
         evidence.root = runtime_surface_evidence_root(&evidence);
         let output = serde_json::to_string_pretty(&evidence)
             .map_err(|error| AttestationError::MalformedJson(error.to_string()))?;
@@ -17058,6 +17120,35 @@ mod public_launch {
         let external_runtime_surface =
             external_public_runtime_surface_from(&runtime_surface, Some(matching_tls_observation))
                 .unwrap();
+        let unexcluded_peer_runtime_surface =
+            runtime_surface_with_peer_manifest_snapshot_peer_count(&external_runtime_surface, 2)
+                .unwrap();
+        let unexcluded_peer_certificate_error =
+            build_public_testnet_launch_certificate_json_pretty(
+                &observer_confirmation,
+                &unexcluded_peer_runtime_surface,
+                &peer_manifest,
+                &join_confirmation,
+                &join,
+                &activation,
+                &bundle,
+                &deployment,
+                &public_status,
+                &public_probe,
+                &validators,
+                &handoff,
+                &acceptance,
+                &genesis,
+            )
+            .unwrap_err();
+        match unexcluded_peer_certificate_error {
+            AttestationError::Invalid(errors) => assert!(errors.iter().any(|error| {
+                error
+                    == "runtime_surface.public_testnet_peer_manifest_snapshot_peer_count expected 1 but got 2"
+            })),
+            AttestationError::MalformedJson(error) => panic!("unexpected malformed JSON: {error}"),
+        }
+
         let external_certificate = build_public_testnet_launch_certificate_json_pretty(
             &observer_confirmation,
             &external_runtime_surface,
