@@ -1,0 +1,75 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Nebula Logo</title>
+  <desc id="desc">Nebula eight-point star logo with a curved diamond cutout.</desc>
+  <defs>
+    <linearGradient id="nebula-fill" x1="83" y1="34" x2="176" y2="224" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3EA4FF"/>
+      <stop offset="0.45" stop-color="#315DFF"/>
+      <stop offset="1" stop-color="#4632E8"/>
+    </linearGradient>
+    <linearGradient id="nebula-sheen" x1="54" y1="70" x2="210" y2="188" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5EB9FF" stop-opacity="0.45"/>
+      <stop offset="0.55" stop-color="#566CFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <path
+    fill-rule="evenodd"
+    clip-rule="evenodd"
+    d="M128 13
+       L148.5 92
+       L190.5 63.5
+       L166 104.5
+       L242 128
+       L166 151.5
+       L190.5 192.5
+       L148.5 164
+       L128 243
+       L107.5 164
+       L65.5 192.5
+       L90 151.5
+       L14 128
+       L90 104.5
+       L65.5 63.5
+       L107.5 92
+       Z
+
+       M128 95
+       C132.5 112.5 143.5 123.5 161 128
+       C143.5 132.5 132.5 143.5 128 161
+       C123.5 143.5 112.5 132.5 95 128
+       C112.5 123.5 123.5 112.5 128 95
+       Z"
+    fill="url(#nebula-fill)"
+  />
+
+  <path
+    fill-rule="evenodd"
+    clip-rule="evenodd"
+    d="M128 13
+       L148.5 92
+       L190.5 63.5
+       L166 104.5
+       L242 128
+       L166 151.5
+       L190.5 192.5
+       L148.5 164
+       L128 243
+       L107.5 164
+       L65.5 192.5
+       L90 151.5
+       L14 128
+       L90 104.5
+       L65.5 63.5
+       L107.5 92
+       Z
+
+       M128 95
+       C132.5 112.5 143.5 123.5 161 128
+       C143.5 132.5 132.5 143.5 128 161
+       C123.5 143.5 112.5 132.5 95 128
+       C112.5 123.5 123.5 112.5 128 95
+       Z"
+    fill="url(#nebula-sheen)"
+  />
+</svg>
