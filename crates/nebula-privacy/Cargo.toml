@@ -1,0 +1,13 @@
+[package]
+name = "nebula-privacy"
+version = "0.1.0"
+edition = "2021"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+bulletproofs = "5.0.0"
+curve25519-dalek = "4"
+getrandom = "0.2"
+hex = "0.4"
+merlin = "3"

@@ -1,0 +1,11 @@
+[package]
+name = "nebula-crypto"
+version = "0.1.0"
+edition = "2021"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+ed25519-dalek = "2"
+hex = "0.4"
+ml-dsa = "0.1.1"

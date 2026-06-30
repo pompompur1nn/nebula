@@ -13,6 +13,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Restore Cargo cache
         uses: actions/cache@v4
@@ -20,12 +22,15 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            crates/nebula-testnet/target
-          key: nebula-cargo-${{ runner.os }}-${{ hashFiles('crates/nebula-testnet/Cargo.lock') }}
+            target
+          key: nebula-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: nebula-cargo-${{ runner.os }}-
 
       - name: Check Rust formatting
-        run: cargo fmt --manifest-path crates/nebula-testnet/Cargo.toml -- --check
+        run: cargo fmt --all -- --check
+
+      - name: Lint with clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build Nebula testnet binary
         run: cargo build --manifest-path crates/nebula-testnet/Cargo.toml --bin nebula-testnet
@@ -45,7 +50,7 @@ jobs:
           -- --exact --nocapture
 
       - name: Run Nebula test suite
-        run: cargo test --manifest-path crates/nebula-testnet/Cargo.toml -- --test-threads=1
+        run: cargo test --workspace -- --test-threads=1
 
       - name: Check public launch readiness contract
         shell: bash

@@ -1,0 +1,11 @@
+[package]
+name = "nebula-monero"
+version = "0.1.0"
+edition = "2021"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+hex = "0.4"
+serde_json = "1.0.150"
+sha3 = "0.10"

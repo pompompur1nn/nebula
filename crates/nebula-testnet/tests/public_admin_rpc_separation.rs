@@ -120,18 +120,103 @@ fn public_rpc_methods_remain_callable_without_admin_token() {
         "nebula_requestWithdrawal",
         json!({
             "account": withdrawal_account.clone(),
-            "monero_address": "monero-testnet-address-0001",
+            "monero_address": "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
             "amount_nxmr_units": 1,
             "nonce": 0,
             "signature": withdrawal_signature(
                 0x45,
-                "monero-testnet-address-0001",
+                "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
                 1,
                 0
             ),
         }),
     );
     assert_eq!(rpc_result(&withdrawal)["accepted"], true);
+}
+
+#[test]
+fn shielded_rpc_methods_are_dispatched() {
+    let (rpc_addr, _admin_addr) = start_rpc_server_with_admin(Some(ADMIN_TOKEN));
+    // The read method is dispatched and reports an empty shielded pool.
+    let notes_response = rpc_call(&rpc_addr, "nebula_shieldedNotes", json!({}));
+    assert_eq!(rpc_result(&notes_response)["shielded_notes"], json!([]));
+    // The write methods are dispatched (they reach param parsing, not "unknown method").
+    let shield = rpc_call(&rpc_addr, "nebula_shield", json!({ "account": "x" }));
+    assert_rpc_error_contains(&shield, "amount");
+    let transfer = rpc_call(&rpc_addr, "nebula_shieldedTransfer", json!({}));
+    assert_rpc_error_contains(&transfer, "inputs");
+    let unshield = rpc_call(&rpc_addr, "nebula_unshield", json!({ "commitment": "x" }));
+    assert_rpc_error_contains(&unshield, "amount");
+}
+
+#[test]
+fn shielded_lifecycle_round_trips_over_rpc() {
+    use nebula_privacy::{commit, prove_amount, Blinding};
+    let (rpc_addr, _admin_addr) = start_rpc_server_with_admin(Some(ADMIN_TOKEN));
+    let seed = 0x55;
+    let account = account_id(seed);
+    rpc_result(&rpc_call(
+        &rpc_addr,
+        "nebula_faucet",
+        json!({ "account": account.clone() }),
+    ));
+
+    // Shield 100 NBLA; blindings are chosen so a later 70/30 split balances exactly.
+    let b1 = Blinding::from_bytes([1u8; 32]);
+    let b2 = Blinding::from_bytes([2u8; 32]);
+    let b_in = b1.add(&b2);
+    let note = commit(100, &b_in).to_hex();
+    let shield_root = nebula_testnet::runtime::shield_authorization_root(&account, 100, &note, 0);
+    let shield = rpc_call(
+        &rpc_addr,
+        "nebula_shield",
+        json!({
+            "account": account.clone(),
+            "amount": 100,
+            "blinding_hex": hex::encode(b_in.to_bytes()),
+            "nonce": 0,
+            "signature": sign_root(seed, &shield_root),
+        }),
+    );
+    assert_eq!(rpc_result(&shield)["commitment"], note);
+
+    // Confidential split 100 -> 70 + 30; the node verifies range + balance proofs, learning no amount.
+    let (c1, p1) = prove_amount(70, &b1);
+    let (c2, p2) = prove_amount(30, &b2);
+    let transfer = rpc_call(
+        &rpc_addr,
+        "nebula_shieldedTransfer",
+        json!({
+            "inputs": [note],
+            "outputs": [
+                { "commitment": c1.to_hex(), "range_proof_hex": hex::encode(&p1) },
+                { "commitment": c2.to_hex(), "range_proof_hex": hex::encode(&p2) },
+            ],
+        }),
+    );
+    assert_eq!(rpc_result(&transfer)["shielded"], true);
+
+    // Unshield the 70 note back to transparent NBLA.
+    let unshield = rpc_call(
+        &rpc_addr,
+        "nebula_unshield",
+        json!({
+            "commitment": c1.to_hex(),
+            "amount": 70,
+            "blinding_hex": hex::encode(b1.to_bytes()),
+            "account": account.clone(),
+        }),
+    );
+    assert_eq!(rpc_result(&unshield)["unshielded"], true);
+
+    // The pool now holds only the 30 note.
+    let notes_response = rpc_call(&rpc_addr, "nebula_shieldedNotes", json!({}));
+    let notes = rpc_result(&notes_response)["shielded_notes"]
+        .as_array()
+        .expect("shielded_notes is an array")
+        .clone();
+    assert!(notes.iter().any(|entry| entry == &json!(c2.to_hex())));
+    assert!(!notes.iter().any(|entry| entry == &json!(c1.to_hex())));
 }
 
 #[test]
@@ -781,12 +866,12 @@ fn launch_bound_follower_exports_verifiable_runtime_surface_evidence() {
         "nebula_requestWithdrawal",
         json!({
             "account": bridge_account.clone(),
-            "monero_address": "9xTestnetMoneroAddressForNebulaWithdrawals",
+            "monero_address": "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
             "amount_nxmr_units": 2_000,
             "nonce": 2,
             "signature": withdrawal_signature(
                 bridge_account_seed,
-                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
                 2_000,
                 2
             ),
@@ -1553,6 +1638,7 @@ fn bridge_deposit(seed: u8, amount_nxmr_units: u128) -> Value {
         observer_signature_roots: Vec::new(),
         observer_evidence: Vec::new(),
         observed_at_unix_ms: current_unix_ms(),
+        monero_tx_extra_hex: None,
     };
     let observer_a = observer_evidence(&deposit, "observer-us-east-1", 0xb1);
     let observer_b = observer_evidence(&deposit, "observer-eu-west-1", 0xb2);

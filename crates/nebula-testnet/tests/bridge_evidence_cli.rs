@@ -155,7 +155,7 @@ fn bridge_evidence_commands_emit_rpc_ready_json() {
     let withdrawal = json!({
         "withdrawal_id": "withdrawal-0001",
         "account": "alice.testnet",
-        "monero_address": "44AFFq5kSiGBoZ...test-only-address",
+        "monero_address": "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
         "amount_nxmr_units": 21_000_000_000_u64,
         "nonce": 7_u64,
         "signature": "1".repeat(128),
@@ -423,7 +423,7 @@ fn bridge_evidence_commands_accept_file_backed_secrets() {
     let withdrawal = json!({
         "withdrawal_id": "withdrawal-file-0001",
         "account": "alice.testnet",
-        "monero_address": "44AFFq5kSiGBoZ...test-only-address",
+        "monero_address": "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
         "amount_nxmr_units": 21_000_000_000_u64,
         "nonce": 7_u64,
         "signature": "1".repeat(128),

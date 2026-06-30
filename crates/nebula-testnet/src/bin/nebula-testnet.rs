@@ -97,11 +97,23 @@ fn main() {
     let wants_sample_runbook_receipt = args.iter().any(|arg| arg == "--sample-runbook-receipt");
     let wants_generate_account = args.iter().any(|arg| arg == "--generate-account");
     let wants_run_rpc = args.iter().any(|arg| arg == "--run-rpc");
+    let wants_verify_monero_deposit = args.iter().any(|arg| arg == "--verify-monero-deposit");
+    let wants_build_shield = args.iter().any(|arg| arg == "--build-shield");
+    let wants_build_unshield = args.iter().any(|arg| arg == "--build-unshield");
+    let wants_build_shielded_transfer = args.iter().any(|arg| arg == "--build-shielded-transfer");
 
     if wants_generate_account {
-        generate_account(wants_json);
+        generate_account(&args, wants_json);
     } else if wants_run_rpc {
         run_rpc_node(&args, wants_json);
+    } else if wants_verify_monero_deposit {
+        verify_monero_deposit(&args, wants_json);
+    } else if wants_build_shield {
+        build_shield(&args, wants_json);
+    } else if wants_build_unshield {
+        build_unshield(&args, wants_json);
+    } else if wants_build_shielded_transfer {
+        build_shielded_transfer(&args, wants_json);
     } else if wants_prove_local_public_testnet {
         prove_local_public_testnet(wants_json);
     } else if wants_prove_live_rpc_devnet {
@@ -282,21 +294,41 @@ fn parse_u32_arg(args: &[String], name: &str, default: u32) -> u32 {
     }
 }
 
-fn generate_account(wants_json: bool) {
-    let mut secret_key = [0_u8; 32];
-    if let Err(error) = getrandom::getrandom(&mut secret_key) {
+fn generate_account(args: &[String], wants_json: bool) {
+    // `--scheme` selects the signature scheme. Hybrid and ML-DSA-65 keys are post-quantum;
+    // Ed25519 remains the default for backward compatibility.
+    let scheme = match arg_value(args, "--scheme") {
+        None | Some("ed25519") => nebula_crypto::SchemeId::Ed25519,
+        Some("mldsa65") => nebula_crypto::SchemeId::MlDsa65,
+        Some("hybrid") | Some("hybrid-ed25519-mldsa65") => {
+            nebula_crypto::SchemeId::HybridEd25519MlDsa65
+        }
+        Some(other) => {
+            eprintln!("unknown --scheme {other}; expected ed25519, mldsa65, or hybrid");
+            process::exit(1);
+        }
+    };
+
+    let mut seed = vec![0_u8; scheme.seed_len()];
+    if let Err(error) = getrandom::getrandom(&mut seed) {
         eprintln!("failed to generate account secret key from OS randomness: {error}");
         process::exit(1);
     }
-    let secret_key_hex = hex::encode(secret_key);
-    let public_key_hex = match nebula_testnet::runtime::public_key_hex_for_secret(&secret_key_hex) {
-        Ok(public_key_hex) => public_key_hex,
+    let secret_key = match nebula_crypto::scheme_secret_from_seed(scheme, &hex::encode(&seed)) {
+        Ok(secret_key) => secret_key,
+        Err(error) => {
+            eprintln!("generated account secret derivation failed: {error}");
+            process::exit(1);
+        }
+    };
+    let public_key = match nebula_crypto::scheme_derive_public(&secret_key) {
+        Ok(public_key) => public_key,
         Err(error) => {
             eprintln!("generated account public key derivation failed: {error}");
             process::exit(1);
         }
     };
-    let account = match nebula_testnet::runtime::account_id_for_public_key(&public_key_hex) {
+    let account = match nebula_testnet::runtime::account_id_for_public_key(&public_key) {
         Ok(account) => account,
         Err(error) => {
             eprintln!("generated account id derivation failed: {error}");
@@ -310,9 +342,9 @@ fn generate_account(wants_json: bool) {
             serde_json::to_string_pretty(&serde_json::json!({
                 "account": account,
                 "address_prefix": nebula_testnet::runtime::NBLA_ACCOUNT_PREFIX,
-                "key_scheme": "ed25519",
-                "public_key_hex": public_key_hex,
-                "secret_key_hex": secret_key_hex,
+                "key_scheme": scheme.tag(),
+                "public_key": public_key,
+                "secret_key": secret_key,
             }))
             .expect("generated account JSON serializes")
         );
@@ -322,9 +354,272 @@ fn generate_account(wants_json: bool) {
             "address_prefix: {}",
             nebula_testnet::runtime::NBLA_ACCOUNT_PREFIX
         );
-        println!("key_scheme: ed25519");
-        println!("public_key_hex: {public_key_hex}");
-        println!("secret_key_hex: {secret_key_hex}");
+        println!("key_scheme: {}", scheme.tag());
+        println!("public_key: {public_key}");
+        println!("secret_key: {secret_key}");
+    }
+}
+
+fn build_shield(args: &[String], wants_json: bool) {
+    let secret_key = arg_value(args, "--secret-key")
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            eprintln!("--secret-key is required for --build-shield");
+            process::exit(1);
+        });
+    let amount = arg_value(args, "--amount")
+        .unwrap_or_else(|| {
+            eprintln!("--amount is required for --build-shield");
+            process::exit(1);
+        })
+        .parse::<u128>()
+        .unwrap_or_else(|error| {
+            eprintln!("--amount must be an unsigned integer: {error}");
+            process::exit(1);
+        });
+    let nonce = parse_u64_arg(args, "--nonce", 0);
+    let blinding_hex = match arg_value(args, "--blinding") {
+        Some(blinding) => blinding.to_string(),
+        None => {
+            let mut bytes = [0u8; 32];
+            if let Err(error) = getrandom::getrandom(&mut bytes) {
+                eprintln!("failed to sample a shield blinding factor: {error}");
+                process::exit(1);
+            }
+            hex::encode(bytes)
+        }
+    };
+
+    let public = nebula_crypto::scheme_derive_public(&secret_key).unwrap_or_else(|error| {
+        eprintln!("invalid --secret-key: {error}");
+        process::exit(1);
+    });
+    let account =
+        nebula_testnet::runtime::account_id_for_public_key(&public).unwrap_or_else(|error| {
+            eprintln!("account derivation failed: {error}");
+            process::exit(1);
+        });
+    let blinding_bytes = hex::decode(&blinding_hex).unwrap_or_else(|error| {
+        eprintln!("--blinding must be hex: {error}");
+        process::exit(1);
+    });
+    let blinding_array: [u8; 32] = blinding_bytes.as_slice().try_into().unwrap_or_else(|_| {
+        eprintln!("--blinding must be 32 bytes");
+        process::exit(1);
+    });
+    let value = u64::try_from(amount).unwrap_or_else(|_| {
+        eprintln!("--amount exceeds the u64 range supported by shielded amounts");
+        process::exit(1);
+    });
+    let blinding = nebula_privacy::Blinding::from_bytes(blinding_array);
+    let commitment = nebula_privacy::commit(value, &blinding).to_hex();
+    let authorization_root =
+        nebula_testnet::runtime::shield_authorization_root(&account, amount, &commitment, nonce);
+    let signature = nebula_crypto::scheme_sign_root(&secret_key, &authorization_root)
+        .unwrap_or_else(|error| {
+            eprintln!("shield signing failed: {error}");
+            process::exit(1);
+        });
+
+    let params = serde_json::json!({
+        "account": account,
+        "amount": amount,
+        "blinding_hex": blinding_hex,
+        "nonce": nonce,
+        "signature": signature,
+        "commitment": commitment,
+    });
+    if wants_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&params).expect("shield params serialize")
+        );
+    } else {
+        println!("account: {account}");
+        println!("amount: {amount}");
+        println!("blinding_hex: {blinding_hex}");
+        println!("nonce: {nonce}");
+        println!("signature: {signature}");
+        println!("commitment: {commitment}");
+    }
+}
+
+fn build_unshield(args: &[String], wants_json: bool) {
+    let require = |name: &str| -> String {
+        arg_value(args, name)
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                eprintln!("{name} is required for --build-unshield");
+                process::exit(1);
+            })
+    };
+    let commitment = require("--commitment");
+    let account = require("--account");
+    let blinding_hex = require("--blinding");
+    let amount = require("--amount").parse::<u128>().unwrap_or_else(|error| {
+        eprintln!("--amount must be an unsigned integer: {error}");
+        process::exit(1);
+    });
+
+    // Verify the opening locally so the operator catches mistakes before submitting.
+    let blinding_bytes = hex::decode(&blinding_hex).unwrap_or_else(|error| {
+        eprintln!("--blinding must be hex: {error}");
+        process::exit(1);
+    });
+    let blinding_array: [u8; 32] = blinding_bytes.as_slice().try_into().unwrap_or_else(|_| {
+        eprintln!("--blinding must be 32 bytes");
+        process::exit(1);
+    });
+    let value = u64::try_from(amount).unwrap_or_else(|_| {
+        eprintln!("--amount exceeds the u64 range supported by shielded amounts");
+        process::exit(1);
+    });
+    let expected =
+        nebula_privacy::commit(value, &nebula_privacy::Blinding::from_bytes(blinding_array))
+            .to_hex();
+    if expected != commitment {
+        eprintln!("--amount and --blinding do not open --commitment (they commit to {expected})");
+        process::exit(1);
+    }
+
+    let params = serde_json::json!({
+        "commitment": commitment,
+        "amount": amount,
+        "blinding_hex": blinding_hex,
+        "account": account,
+    });
+    if wants_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&params).expect("unshield params serialize")
+        );
+    } else {
+        println!("commitment: {commitment}");
+        println!("amount: {amount}");
+        println!("blinding_hex: {blinding_hex}");
+        println!("account: {account}");
+    }
+}
+
+fn build_shielded_transfer(args: &[String], _wants_json: bool) {
+    let inputs = arg_values(args, "--input");
+    if inputs.is_empty() {
+        eprintln!("--build-shielded-transfer requires at least one --input <commitment-hex>");
+        process::exit(1);
+    }
+    let output_specs = arg_values(args, "--output");
+    if output_specs.is_empty() {
+        eprintln!(
+            "--build-shielded-transfer requires at least one --output <amount>:<blinding-hex>"
+        );
+        process::exit(1);
+    }
+    let mut outputs = Vec::new();
+    for spec in &output_specs {
+        let (amount_str, blinding_hex) = spec.split_once(':').unwrap_or_else(|| {
+            eprintln!("--output must be <amount>:<blinding-hex>, got {spec}");
+            process::exit(1);
+        });
+        let amount = amount_str.parse::<u64>().unwrap_or_else(|error| {
+            eprintln!("--output amount must be an unsigned integer: {error}");
+            process::exit(1);
+        });
+        let blinding_bytes = hex::decode(blinding_hex).unwrap_or_else(|error| {
+            eprintln!("--output blinding must be hex: {error}");
+            process::exit(1);
+        });
+        let blinding_array: [u8; 32] = blinding_bytes.as_slice().try_into().unwrap_or_else(|_| {
+            eprintln!("--output blinding must be 32 bytes");
+            process::exit(1);
+        });
+        let (commitment, proof) = nebula_privacy::prove_amount(
+            amount,
+            &nebula_privacy::Blinding::from_bytes(blinding_array),
+        );
+        outputs.push(serde_json::json!({
+            "commitment": commitment.to_hex(),
+            "range_proof_hex": hex::encode(proof),
+        }));
+    }
+    // The caller must choose output amounts that sum to the inputs and blindings that sum to the
+    // input blindings; the runtime verifies the homomorphic balance before accepting the transfer.
+    let params = serde_json::json!({ "inputs": inputs, "outputs": outputs });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&params).expect("shielded transfer params serialize")
+    );
+}
+
+fn verify_monero_deposit(args: &[String], wants_json: bool) {
+    let require = |name: &str| -> String {
+        arg_value(args, name)
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                eprintln!("{name} is required for --verify-monero-deposit");
+                process::exit(1);
+            })
+    };
+    let wallet_rpc_url = require("--wallet-rpc-url");
+    let daemon_rpc_url = arg_value(args, "--daemon-rpc-url")
+        .map(str::to_string)
+        .unwrap_or_else(|| wallet_rpc_url.clone());
+    let monero_tx_id = require("--monero-tx-id");
+    let tx_key = require("--tx-key");
+    let bridge_address = require("--bridge-address");
+    let expected_atomic = require("--expected-atomic")
+        .parse::<u128>()
+        .unwrap_or_else(|error| {
+            eprintln!("--expected-atomic must be an unsigned integer: {error}");
+            process::exit(1);
+        });
+    let min_confirmations = parse_u64_arg(args, "--min-confirmations", 10);
+    let required_account_binding = arg_value(args, "--require-account-binding");
+
+    let rpc = nebula_monero::client::HttpMoneroRpc::new(wallet_rpc_url, daemon_rpc_url);
+    let claim = nebula_monero::verify::DepositClaim {
+        expected_atomic,
+        min_confirmations,
+        bridge_address: &bridge_address,
+        required_account_binding,
+    };
+
+    match nebula_monero::verify::verify_deposit_via(&rpc, &monero_tx_id, &tx_key, &claim) {
+        Ok(Ok(info)) => {
+            if wants_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "verified": true,
+                        "network": format!("{:?}", info.network),
+                        "address_kind": format!("{:?}", info.kind),
+                    }))
+                    .expect("verification JSON serializes")
+                );
+            } else {
+                println!("verified: true");
+                println!("network: {:?}", info.network);
+                println!("address_kind: {:?}", info.kind);
+            }
+        }
+        Ok(Err(rejection)) => {
+            if wants_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "verified": false,
+                        "rejection": rejection.to_string(),
+                    }))
+                    .expect("verification JSON serializes")
+                );
+            } else {
+                eprintln!("verified: false ({rejection})");
+            }
+            process::exit(1);
+        }
+        Err(transport_error) => {
+            eprintln!("monero rpc error: {transport_error}");
+            process::exit(1);
+        }
     }
 }
 
@@ -1972,6 +2267,47 @@ fn sign_bridge_observer_evidence(args: &[String], wants_json: bool) {
                 process::exit(1);
             }
         };
+
+    // Optional verify-before-sign: when a wallet-rpc URL and tx key are supplied, the observer
+    // confirms the deposit against a Monero node and refuses to vouch for an unverified deposit.
+    if let Some(wallet_rpc_url) = arg_value(args, "--wallet-rpc-url") {
+        let tx_key = required_bridge_arg(args, "--tx-key", wants_json);
+        let bridge_address = required_bridge_arg(args, "--bridge-address", wants_json);
+        let daemon_rpc_url = arg_value(args, "--daemon-rpc-url").unwrap_or(wallet_rpc_url);
+        let require_binding = args.iter().any(|arg| arg == "--require-account-binding");
+        let rpc = nebula_monero::client::HttpMoneroRpc::new(wallet_rpc_url, daemon_rpc_url);
+        let claim = nebula_monero::verify::DepositClaim {
+            expected_atomic: deposit.amount_nxmr_units,
+            min_confirmations: nebula_testnet::runtime::MIN_BRIDGE_CONFIRMATIONS,
+            bridge_address: &bridge_address,
+            required_account_binding: require_binding.then_some(deposit.account.as_str()),
+        };
+        match nebula_monero::verify::verify_deposit_via(
+            &rpc,
+            &deposit.monero_tx_id,
+            &tx_key,
+            &claim,
+        ) {
+            Ok(Ok(_)) => {}
+            Ok(Err(rejection)) => {
+                print_bridge_evidence_error(
+                    wants_json,
+                    &[format!(
+                        "monero verification rejected the deposit: {rejection}"
+                    )],
+                );
+                process::exit(1);
+            }
+            Err(transport_error) => {
+                print_bridge_evidence_error(
+                    wants_json,
+                    &[format!("monero rpc error: {transport_error}")],
+                );
+                process::exit(1);
+            }
+        }
+    }
+
     let payload_root = nebula_testnet::runtime::bridge_observer_deposit_payload_root(&deposit);
     let signature =
         match nebula_testnet::runtime::sign_runtime_root(&observer_secret_key, &payload_root) {
@@ -4768,10 +5104,12 @@ LOCAL PUBLIC TESTNET REHEARSAL:
     launch readiness.
 
 ACCOUNT GENERATION:
-    --generate-account creates an Ed25519 testnet account whose account id
-    starts with nbla. JSON output includes account, public_key_hex, and
-    secret_key_hex for local signing. Existing bare public-key-hex accounts
-    remain accepted for legacy fixtures.
+    --generate-account creates a testnet account whose account id starts with
+    nbla. Use --scheme ed25519 (default), --scheme mldsa65, or --scheme hybrid
+    to choose the signature scheme; hybrid and mldsa65 are post-quantum. JSON
+    output includes account, key_scheme, public_key, and secret_key for local
+    signing. Ed25519 keys are encoded bare; post-quantum keys are scheme-tagged.
+    Existing bare public-key-hex accounts remain accepted for legacy fixtures.
 
 RPC USER SPEND SIGNATURES:
     Public spend calls require Ed25519 account ownership. For
@@ -4811,7 +5149,31 @@ BRIDGE EVIDENCE TOOLING:
     launch-package bundle root, previous key-history root, activation height,
     old/new sequencer public keys, and rotation proof root.
 
-RPC OPERATOR OPS, BACKUP, AND METRICS:
+SHIELDED (CONFIDENTIAL) AMOUNTS:
+    --build-shield --secret-key <hex> --amount <nbla> [--nonce <n>=0]
+    [--blinding <hex>] prints signed nebula_shield params: it derives the
+    account from the key, makes a Pedersen commitment to the amount (random
+    blinding unless given), and signs the shield authorization. POST the params
+    to nebula_shield; keep the printed blinding to later transfer or unshield.
+    --build-unshield --commitment <hex> --amount <nbla> --blinding <hex>
+    --account <id> verifies the opening and prints nebula_unshield params.
+    --build-shielded-transfer --input <commitment-hex>... --output
+    <amount>:<blinding-hex>... builds a confidential transfer: it makes a
+    range proof per output and prints nebula_shieldedTransfer params. Choose
+    output amounts that sum to the inputs and blindings that sum to the input
+    blindings; the runtime verifies the homomorphic balance.
+
+MONERO DEPOSIT VERIFICATION:
+    --verify-monero-deposit checks a Monero deposit against a node before an
+    observer vouches for it: --wallet-rpc-url <url> [--daemon-rpc-url <url>]
+    --monero-tx-id <hex> --tx-key <hex> --bridge-address <addr>
+    --expected-atomic <piconero> [--min-confirmations <n>=10]
+    [--require-account-binding <nbla-account>]. It calls wallet-rpc check_tx_key
+    for the view-key amount proof and (when a binding is required) reads the
+    transaction's tx_extra from monerod. Exits non-zero on rejection.
+    --sign-bridge-observer-evidence accepts the same --wallet-rpc-url/--tx-key
+    /--bridge-address [/--require-account-binding] flags to verify the deposit
+    against a node before signing; it refuses to sign an unverified deposit.
     Operator ops discovery uses /ops and nebula_opsStatus. Backup discovery
     uses /backup and nebula_backupManifest. Scrapeable monitoring uses
     /metrics. Public operators must verify block freshness, latest height/hash,

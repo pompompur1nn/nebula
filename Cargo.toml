@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nebula-crypto",
+    "crates/nebula-monero",
+    "crates/nebula-privacy",
+    "crates/nebula-testnet",
+]

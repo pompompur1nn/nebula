@@ -3,7 +3,7 @@ use crate::{
     MINIMUM_GAS_PRICE_NEBULAI, NBLA_SYMBOL, NEBULAI_PER_NBLA, NXMR_SYMBOL,
     TARGET_NXMR_TO_NBLA_RATE_NEBULAI_PER_UNIT, VERSION,
 };
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
@@ -173,10 +173,9 @@ impl RuntimeConfig {
                     .to_string(),
             );
         }
-        validate_fixed_hex(
+        nebula_crypto::validate_scheme_public(
             &self.sequencer_public_key_hex,
             "sequencer_public_key_hex",
-            64,
         )?;
         if let Some(launch_binding) = &self.launch_binding {
             launch_binding.validate_against_config(self)?;
@@ -250,6 +249,19 @@ pub struct RuntimeLaunchBinding {
     pub validator_reward_accounts: Vec<RuntimeValidatorRewardAccount>,
     pub bridge_operator_keys: Vec<RuntimeBridgeOperatorKey>,
     pub bridge_observer_keys: Vec<RuntimeBridgeObserverKey>,
+    /// Optional per-role M-of-N quorum overrides. Absent → the safe defaults (2 each). Each value
+    /// must be at least the default minimum and at most the matching roster size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quorum_policy: Option<RuntimeQuorumPolicy>,
+}
+
+/// Per-role multisig quorum thresholds for a launch-bound deployment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeQuorumPolicy {
+    pub bridge_deposit_observer: usize,
+    pub bridge_withdrawal_operator: usize,
+    pub sequencer_rotation_operator: usize,
 }
 
 impl RuntimeLaunchBinding {
@@ -336,6 +348,26 @@ impl RuntimeLaunchBinding {
                 self.operator_count,
                 self.bridge_operator_keys.len()
             ));
+        }
+        if let Some(policy) = &self.quorum_policy {
+            validate_role_quorum(
+                policy.bridge_deposit_observer,
+                MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM,
+                self.bridge_observer_keys.len(),
+                "bridge_deposit_observer",
+            )?;
+            validate_role_quorum(
+                policy.bridge_withdrawal_operator,
+                MIN_WITHDRAWAL_OPERATOR_QUORUM,
+                self.bridge_operator_keys.len(),
+                "bridge_withdrawal_operator",
+            )?;
+            validate_role_quorum(
+                policy.sequencer_rotation_operator,
+                MIN_SEQUENCER_ROTATION_OPERATOR_QUORUM,
+                self.bridge_operator_keys.len(),
+                "sequencer_rotation_operator",
+            )?;
         }
         Ok(())
     }
@@ -468,6 +500,11 @@ pub struct RuntimeBridgeDeposit {
     #[serde(default)]
     pub observer_evidence: Vec<RuntimeBridgeObserverEvidence>,
     pub observed_at_unix_ms: u128,
+    /// Optional raw Monero `tx_extra` (hex). When present, the runtime deterministically parses it
+    /// and verifies that its experimental Nebula account binding names this deposit's `account`
+    /// before crediting nXMR. Absent for legacy deposits (then no binding is required).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monero_tx_extra_hex: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -573,6 +610,8 @@ pub struct RuntimeSnapshot {
     pub mempool_admission_rejection_count: u64,
     pub sequencer_key_rotations: Vec<RuntimeSequencerKeyRotation>,
     pub accountability_reports: Vec<RuntimeAccountabilityReport>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub shielded_notes: BTreeSet<String>,
     pub root: String,
 }
 
@@ -973,6 +1012,8 @@ pub struct NebulaRuntime {
     mempool_admission_rejection_count: u64,
     sequencer_key_rotations: Vec<RuntimeSequencerKeyRotation>,
     accountability_reports: Vec<RuntimeAccountabilityReport>,
+    /// Unspent shielded-note commitments (hex). Hidden-amount notes in the confidential pool.
+    shielded_notes: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -2920,6 +2961,41 @@ impl RuntimeStorage {
     }
 }
 
+/// A new shielded-note output: a Pedersen commitment plus the Bulletproofs range proof that its
+/// hidden amount lies in `[0, 2^64)`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ShieldedOutput {
+    pub commitment: String,
+    pub range_proof_hex: String,
+}
+
+fn parse_blinding(blinding_hex: &str) -> Result<nebula_privacy::Blinding, String> {
+    let bytes = hex::decode(blinding_hex).map_err(|error| format!("blinding hex: {error}"))?;
+    let bytes: [u8; 32] = bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "blinding must be 32 bytes".to_string())?;
+    Ok(nebula_privacy::Blinding::from_bytes(bytes))
+}
+
+/// The signing root an account must authorize to shield funds. Binds the account, amount, the
+/// resulting note commitment, and a nonce (replay protection).
+pub fn shield_authorization_root(
+    account: &str,
+    amount: u128,
+    commitment_hex: &str,
+    nonce: u64,
+) -> String {
+    stable_runtime_root(&json!({
+        "shield_domain": "nebula-runtime-shield-authorization-v1",
+        "account": account,
+        "amount": amount.to_string(),
+        "commitment": commitment_hex,
+        "nonce": nonce,
+    }))
+}
+
 impl NebulaRuntime {
     pub fn new(config: RuntimeConfig) -> Result<Self, String> {
         Self::with_sequencer_secret(config, None)
@@ -2948,6 +3024,7 @@ impl NebulaRuntime {
             mempool_admission_rejection_count: 0,
             sequencer_key_rotations: Vec::new(),
             accountability_reports: Vec::new(),
+            shielded_notes: BTreeSet::new(),
         };
         runtime.accounts.insert(
             runtime.config.validator_reward_account(),
@@ -3003,7 +3080,8 @@ impl NebulaRuntime {
         }
         config.sequencer_public_key_hex = snapshot.config.sequencer_public_key_hex.clone();
         if let Some(secret_key_hex) = sequencer_secret_key_hex.as_deref() {
-            let derived_public_key = public_key_hex_for_secret(secret_key_hex)?;
+            let derived_public_key = nebula_crypto::scheme_derive_public(secret_key_hex)
+                .map_err(|error| format!("sequencer_secret_key_hex is invalid: {error}"))?;
             if !derived_public_key.eq_ignore_ascii_case(&config.sequencer_public_key_hex) {
                 if config.produce_blocks {
                     return Err(format!(
@@ -3036,6 +3114,7 @@ impl NebulaRuntime {
             mempool_admission_rejection_count: snapshot.mempool_admission_rejection_count,
             sequencer_key_rotations: snapshot.sequencer_key_rotations,
             accountability_reports: snapshot.accountability_reports,
+            shielded_notes: snapshot.shielded_notes,
         })
     }
 
@@ -3062,6 +3141,7 @@ impl NebulaRuntime {
             mempool_admission_rejection_count: self.mempool_admission_rejection_count,
             sequencer_key_rotations: self.sequencer_key_rotations.clone(),
             accountability_reports: self.accountability_reports.clone(),
+            shielded_notes: self.shielded_notes.clone(),
             root: String::new(),
         };
         snapshot.root = snapshot_root(&snapshot);
@@ -3326,6 +3406,9 @@ impl NebulaRuntime {
                 "bridge deposit requires at least {MIN_BRIDGE_CONFIRMATIONS} confirmations"
             ));
         }
+        if let Some(tx_extra_hex) = &deposit.monero_tx_extra_hex {
+            verify_deposit_account_binding(tx_extra_hex, &deposit.account)?;
+        }
         let account = self
             .accounts
             .entry(deposit.account.clone())
@@ -3449,7 +3532,7 @@ impl NebulaRuntime {
             &operator_approval_roots,
             "operator_approval_ids",
             "operator_approval_roots",
-            MIN_WITHDRAWAL_OPERATOR_QUORUM,
+            operator_quorum(self.config.launch_binding.as_ref()),
         )?;
         if self.withdrawals.values().any(|withdrawal| {
             withdrawal
@@ -3545,7 +3628,7 @@ impl NebulaRuntime {
             &operator_approval_roots,
             "operator_approval_ids",
             "operator_approval_roots",
-            MIN_SEQUENCER_ROTATION_OPERATOR_QUORUM,
+            rotation_quorum(self.config.launch_binding.as_ref()),
         )?;
         let new_sequencer_secret_key_hex = normalize_fixed_hex(
             new_sequencer_secret_key_hex,
@@ -3924,16 +4007,175 @@ impl NebulaRuntime {
         })
     }
 
+    /// Move `amount` transparent NBLA from `account` into the shielded pool as a Pedersen
+    /// commitment. The amount is revealed at shield time (as in Zcash-style shielding);
+    /// confidentiality begins at the first [`NebulaRuntime::shielded_transfer`]. `blinding_hex` is
+    /// the 32-byte commitment blinding, which the owner keeps secret to spend the note. Returns the
+    /// note commitment.
+    pub fn shield(
+        &mut self,
+        account: &str,
+        amount: u128,
+        blinding_hex: &str,
+        nonce: u64,
+        signature: &str,
+    ) -> Result<String, String> {
+        self.ensure_accountability_clean()?;
+        if amount == 0 {
+            return Err("shield amount must be greater than zero".to_string());
+        }
+        let value =
+            u64::try_from(amount).map_err(|_| "shield amount exceeds u64 range".to_string())?;
+        let blinding = parse_blinding(blinding_hex)?;
+        let commitment = nebula_privacy::commit(value, &blinding).to_hex();
+        if self.shielded_notes.contains(&commitment) {
+            return Err("shielded note commitment already exists".to_string());
+        }
+        // The account owner must authorize debiting their transparent balance.
+        let authorization_root = shield_authorization_root(account, amount, &commitment, nonce);
+        verify_account_signature(account, &authorization_root, signature, "shield_signature")?;
+        let sender = self
+            .accounts
+            .get_mut(account)
+            .ok_or_else(|| format!("account {account} does not exist"))?;
+        if sender.nonce != nonce {
+            return Err(format!(
+                "shield nonce expected {} but got {nonce}",
+                sender.nonce
+            ));
+        }
+        if sender.nbla_nebulai < amount {
+            return Err(format!(
+                "insufficient NBLA to shield: need {amount}, have {}",
+                sender.nbla_nebulai
+            ));
+        }
+        sender.nbla_nebulai -= amount;
+        sender.nonce = sender
+            .nonce
+            .checked_add(1)
+            .ok_or_else(|| "shield nonce overflowed".to_string())?;
+        self.shielded_notes.insert(commitment.clone());
+        Ok(commitment)
+    }
+
+    /// Spend shielded `inputs` into new shielded `outputs`, hiding every amount. Each output carries
+    /// a Bulletproofs range proof, and the runtime verifies that the input commitments balance the
+    /// output commitments (no inflation) without learning a single value.
+    pub fn shielded_transfer(
+        &mut self,
+        inputs: &[String],
+        outputs: &[ShieldedOutput],
+    ) -> Result<(), String> {
+        self.ensure_accountability_clean()?;
+        if inputs.is_empty() || outputs.is_empty() {
+            return Err("shielded transfer requires at least one input and one output".to_string());
+        }
+
+        let mut input_set = BTreeSet::new();
+        let mut input_commitments = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            if !input_set.insert(input.clone()) {
+                return Err(format!("duplicate shielded input {input}"));
+            }
+            if !self.shielded_notes.contains(input) {
+                return Err(format!("shielded input {input} is not an unspent note"));
+            }
+            input_commitments.push(nebula_privacy::Commitment::from_hex(input)?);
+        }
+
+        let mut output_set = BTreeSet::new();
+        let mut output_commitments = Vec::with_capacity(outputs.len());
+        for output in outputs {
+            if !output_set.insert(output.commitment.clone()) {
+                return Err(format!("duplicate shielded output {}", output.commitment));
+            }
+            if self.shielded_notes.contains(&output.commitment)
+                && !input_set.contains(&output.commitment)
+            {
+                return Err(format!(
+                    "shielded output {} collides with an existing note",
+                    output.commitment
+                ));
+            }
+            let commitment = nebula_privacy::Commitment::from_hex(&output.commitment)?;
+            let proof = hex::decode(&output.range_proof_hex)
+                .map_err(|error| format!("range proof hex: {error}"))?;
+            if !nebula_privacy::verify_amount(&commitment, &proof) {
+                return Err(format!(
+                    "shielded output {} has an invalid range proof",
+                    output.commitment
+                ));
+            }
+            output_commitments.push(commitment);
+        }
+
+        // No shielded fee in this transfer kind: the inputs must equal the outputs exactly.
+        let zero_fee = nebula_privacy::commit(0, &nebula_privacy::Blinding::from_bytes([0u8; 32]));
+        if !nebula_privacy::amounts_balance(&input_commitments, &output_commitments, &zero_fee) {
+            return Err(
+                "shielded transfer does not balance: input commitments must equal outputs"
+                    .to_string(),
+            );
+        }
+
+        for input in inputs {
+            self.shielded_notes.remove(input);
+        }
+        for output in outputs {
+            self.shielded_notes.insert(output.commitment.clone());
+        }
+        Ok(())
+    }
+
+    /// Reveal a shielded note's amount and blinding to move it back to transparent NBLA on
+    /// `account`. The opening must reproduce the stored commitment.
+    pub fn unshield(
+        &mut self,
+        commitment_hex: &str,
+        amount: u128,
+        blinding_hex: &str,
+        account: &str,
+    ) -> Result<(), String> {
+        self.ensure_accountability_clean()?;
+        validate_account_id(account)?;
+        if !self.shielded_notes.contains(commitment_hex) {
+            return Err(format!("shielded note {commitment_hex} is not unspent"));
+        }
+        let value =
+            u64::try_from(amount).map_err(|_| "unshield amount exceeds u64 range".to_string())?;
+        let blinding = parse_blinding(blinding_hex)?;
+        let expected = nebula_privacy::commit(value, &blinding).to_hex();
+        if expected != commitment_hex {
+            return Err("unshield opening does not match the shielded note".to_string());
+        }
+        self.shielded_notes.remove(commitment_hex);
+        let recipient = self
+            .accounts
+            .entry(account.to_string())
+            .or_insert_with(RuntimeAccount::empty);
+        recipient.nbla_nebulai = recipient
+            .nbla_nebulai
+            .checked_add(amount)
+            .ok_or_else(|| "unshield NBLA credit overflowed".to_string())?;
+        Ok(())
+    }
+
+    /// Read-only view of the unspent shielded-note commitments.
+    pub fn shielded_notes(&self) -> &BTreeSet<String> {
+        &self.shielded_notes
+    }
+
     fn state_root(&self) -> String {
-        stable_runtime_root(&json!({
-            "state_domain": "nebula-runtime-state-v1",
-            "accounts": self.accounts,
-            "bridge_deposits": self.bridge_deposits,
-            "withdrawals": self.withdrawals,
-            "total_nxmr_fees_units": self.total_nxmr_fees_units,
-            "buyback_pool_nebulai": self.buyback_pool_nebulai,
-            "validator_reward_nebulai": self.validator_reward_nebulai,
-        }))
+        runtime_state_root(
+            &self.accounts,
+            &self.bridge_deposits,
+            &self.withdrawals,
+            self.total_nxmr_fees_units,
+            self.buyback_pool_nebulai,
+            self.validator_reward_nebulai,
+            &self.shielded_notes,
+        )
     }
 }
 
@@ -5083,6 +5325,51 @@ fn dispatch_json_rpc_method(
             state.persist()?;
             Ok(json!(report))
         }
+        "nebula_shield" => {
+            ensure_block_producer(state)?;
+            let account = required_str_param(&params, "account")?;
+            let amount = required_u128_param(&params, "amount")?;
+            let blinding_hex = required_str_param(&params, "blinding_hex")?;
+            let nonce = required_u64_param(&params, "nonce")?;
+            let signature = required_str_param(&params, "signature")?;
+            let commitment = {
+                let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+                runtime.shield(&account, amount, &blinding_hex, nonce, &signature)?
+            };
+            state.commit_direct_state_mutation()?;
+            state.persist()?;
+            Ok(json!({ "commitment": commitment }))
+        }
+        "nebula_shieldedTransfer" => {
+            ensure_block_producer(state)?;
+            let inputs = required_string_array_param(&params, "inputs")?;
+            let outputs = optional_json_array_param::<ShieldedOutput>(&params, "outputs")?;
+            {
+                let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+                runtime.shielded_transfer(&inputs, &outputs)?;
+            }
+            state.commit_direct_state_mutation()?;
+            state.persist()?;
+            Ok(json!({ "shielded": true }))
+        }
+        "nebula_unshield" => {
+            ensure_block_producer(state)?;
+            let commitment = required_str_param(&params, "commitment")?;
+            let amount = required_u128_param(&params, "amount")?;
+            let blinding_hex = required_str_param(&params, "blinding_hex")?;
+            let account = required_str_param(&params, "account")?;
+            {
+                let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+                runtime.unshield(&commitment, amount, &blinding_hex, &account)?;
+            }
+            state.commit_direct_state_mutation()?;
+            state.persist()?;
+            Ok(json!({ "unshielded": true }))
+        }
+        "nebula_shieldedNotes" => {
+            let runtime = state.runtime.lock().expect("runtime mutex poisoned");
+            Ok(json!({ "shielded_notes": runtime.shielded_notes() }))
+        }
         "nebula_requestWithdrawal" => {
             ensure_block_producer(state)?;
             let account = required_str_param(&params, "account")?;
@@ -5451,14 +5738,9 @@ fn verify_account_signature(
     signature_hex: &str,
     signature_name: &str,
 ) -> Result<(), String> {
-    let account_public_key_hex = account_public_key_hex(account)?;
-    verify_ed25519_signature(
-        &account_public_key_hex,
-        "account_public_key_hex",
-        signing_root,
-        signature_hex,
-        signature_name,
-    )
+    let account_public_key = account_public_key(account)?;
+    nebula_crypto::scheme_verify_root(&account_public_key, signing_root, signature_hex)
+        .map_err(|error| format!("{signature_name}: {error}"))
 }
 
 fn verify_ed25519_signature(
@@ -5468,19 +5750,13 @@ fn verify_ed25519_signature(
     signature_hex: &str,
     signature_name: &str,
 ) -> Result<(), String> {
-    validate_fixed_hex(public_key_hex, public_key_name, 64)?;
-    validate_fixed_hex(signing_root, "signing_root", 64)?;
-    validate_fixed_hex(signature_hex, signature_name, 128)?;
-    let verifying_key = verifying_key_from_hex_named(public_key_hex, public_key_name)?;
-    let signature_bytes = decode_fixed_hex(signature_hex, signature_name, 64)?;
-    let signature_bytes: [u8; 64] = signature_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| format!("{signature_name} must decode to 64 bytes"))?;
-    let signature = Signature::from_bytes(&signature_bytes);
-    verifying_key
-        .verify(signing_root.as_bytes(), &signature)
-        .map_err(|error| format!("{signature_name} Ed25519 verification failed: {error}"))
+    nebula_crypto::verify_ed25519_signature(
+        public_key_hex,
+        public_key_name,
+        signing_root,
+        signature_hex,
+        signature_name,
+    )
 }
 
 fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
@@ -5664,15 +5940,15 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
         }
     }
 
-    let expected_state_root = stable_runtime_root(&json!({
-        "state_domain": "nebula-runtime-state-v1",
-        "accounts": snapshot.accounts,
-        "bridge_deposits": snapshot.bridge_deposits,
-        "withdrawals": snapshot.withdrawals,
-        "total_nxmr_fees_units": snapshot.total_nxmr_fees_units,
-        "buyback_pool_nebulai": snapshot.buyback_pool_nebulai,
-        "validator_reward_nebulai": snapshot.validator_reward_nebulai,
-    }));
+    let expected_state_root = runtime_state_root(
+        &snapshot.accounts,
+        &snapshot.bridge_deposits,
+        &snapshot.withdrawals,
+        snapshot.total_nxmr_fees_units,
+        snapshot.buyback_pool_nebulai,
+        snapshot.validator_reward_nebulai,
+        &snapshot.shielded_notes,
+    );
     if snapshot.state_root != expected_state_root {
         return Err("snapshot state_root does not match snapshot state".to_string());
     }
@@ -5896,18 +6172,16 @@ fn nxmr_custody_reconciliation(
 }
 
 fn validate_sequencer_key_history(snapshot: &RuntimeSnapshot) -> Result<(), String> {
-    let current_public_key = normalize_fixed_hex(
+    let current_public_key = nebula_crypto::scheme_normalize_public(
         &snapshot.config.sequencer_public_key_hex,
         "sequencer_public_key_hex",
-        64,
     )?;
-    verifying_key_from_hex(&current_public_key)?;
     let mut active_public_key = snapshot
         .sequencer_key_rotations
         .first()
         .map(|rotation| rotation.old_public_key_hex.to_ascii_lowercase())
         .unwrap_or_else(|| current_public_key.clone());
-    verifying_key_from_hex(&active_public_key)?;
+    nebula_crypto::validate_scheme_public(&active_public_key, "active_sequencer_public_key")?;
     let mut previous_activation_height: Option<u64> = None;
 
     for (index, rotation) in snapshot.sequencer_key_rotations.iter().enumerate() {
@@ -5971,7 +6245,7 @@ fn validate_sequencer_key_rotation(
         &rotation.operator_approval_roots,
         "operator_approval_ids",
         "operator_approval_roots",
-        MIN_SEQUENCER_ROTATION_OPERATOR_QUORUM,
+        rotation_quorum(launch_binding),
     )?;
     validate_fixed_hex(
         previous_sequencer_key_history_root,
@@ -6080,7 +6354,7 @@ fn validate_bridge_deposit_for_launch_binding(
         &deposit.observer_signature_roots,
         "observer_ids",
         "observer_signature_roots",
-        MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM,
+        observer_quorum(launch_binding),
     )?;
     if !deposit
         .observer_ids
@@ -6162,7 +6436,7 @@ fn validate_withdrawal_for_launch_binding(
                 &withdrawal.operator_approval_roots,
                 "operator_approval_ids",
                 "operator_approval_roots",
-                MIN_WITHDRAWAL_OPERATOR_QUORUM,
+                operator_quorum(launch_binding),
             )?;
             let monero_tx_id = withdrawal
                 .finalized_monero_tx_id
@@ -6663,6 +6937,53 @@ fn validate_sequencer_key_rotation_operator_approvals(
     Ok(())
 }
 
+/// Validate a configured per-role quorum: at least the safe minimum, at most the roster size.
+fn validate_role_quorum(
+    quorum: usize,
+    minimum: usize,
+    roster: usize,
+    name: &str,
+) -> Result<(), String> {
+    if quorum < minimum {
+        return Err(format!(
+            "{name} quorum {quorum} must be at least the minimum {minimum}"
+        ));
+    }
+    if quorum > roster {
+        return Err(format!(
+            "{name} quorum {quorum} exceeds the roster size {roster}"
+        ));
+    }
+    Ok(())
+}
+
+/// Effective deposit-observer quorum: the launch binding's override, else the safe default.
+fn observer_quorum(binding: Option<&RuntimeLaunchBinding>) -> usize {
+    binding
+        .and_then(|b| b.quorum_policy.as_ref())
+        .map_or(MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM, |p| {
+            p.bridge_deposit_observer
+        })
+}
+
+/// Effective withdrawal-operator quorum: the launch binding's override, else the safe default.
+fn operator_quorum(binding: Option<&RuntimeLaunchBinding>) -> usize {
+    binding
+        .and_then(|b| b.quorum_policy.as_ref())
+        .map_or(MIN_WITHDRAWAL_OPERATOR_QUORUM, |p| {
+            p.bridge_withdrawal_operator
+        })
+}
+
+/// Effective sequencer-rotation-operator quorum: the launch binding's override, else the default.
+fn rotation_quorum(binding: Option<&RuntimeLaunchBinding>) -> usize {
+    binding
+        .and_then(|b| b.quorum_policy.as_ref())
+        .map_or(MIN_SEQUENCER_ROTATION_OPERATOR_QUORUM, |p| {
+            p.sequencer_rotation_operator
+        })
+}
+
 fn validate_identity_root_quorum(
     identities: &[String],
     roots: &[String],
@@ -6872,16 +7193,30 @@ fn launch_bridge_observer_key_map(
 }
 
 fn validate_monero_address(monero_address: &str) -> Result<(), String> {
-    if monero_address.trim().is_empty() {
-        return Err("monero_address must not be empty".to_string());
+    nebula_monero::validate_address(monero_address)
+        .map(|_| ())
+        .map_err(|error| format!("monero_address invalid: {error}"))
+}
+
+/// Verify that a Monero `tx_extra` blob carries a Nebula account binding naming `account`. The
+/// chain parses `tx_extra` deterministically (it cannot fetch it — that is an observer's job), so
+/// this binding check is consensus-verifiable.
+fn verify_deposit_account_binding(tx_extra_hex: &str, account: &str) -> Result<(), String> {
+    let bytes = hex::decode(tx_extra_hex)
+        .map_err(|error| format!("monero_tx_extra_hex is not valid hex: {error}"))?;
+    let parsed = nebula_monero::tx_extra::parse_tx_extra(&bytes)
+        .map_err(|error| format!("monero tx_extra parse failed: {error}"))?;
+    match parsed
+        .nonce
+        .as_deref()
+        .and_then(nebula_monero::tx_extra::nebula_account_binding)
+    {
+        Some(bound) if bound == account => Ok(()),
+        Some(bound) => Err(format!(
+            "monero tx_extra binds account {bound}, but the deposit credits {account}"
+        )),
+        None => Err("monero tx_extra carries no Nebula account binding".to_string()),
     }
-    if monero_address.chars().any(char::is_whitespace) {
-        return Err("monero_address must not contain whitespace".to_string());
-    }
-    if monero_address.len() < 20 {
-        return Err("monero_address is too short for a public testnet withdrawal".to_string());
-    }
-    Ok(())
 }
 
 fn validate_label_no_whitespace(value: &str, name: &str) -> Result<(), String> {
@@ -6909,62 +7244,32 @@ fn normalize_fixed_hex(value: &str, name: &str, len: usize) -> Result<String, St
     Ok(value.to_ascii_lowercase())
 }
 
-fn decode_fixed_hex(value: &str, name: &str, bytes_len: usize) -> Result<Vec<u8>, String> {
-    validate_fixed_hex(value, name, bytes_len * 2)?;
-    hex::decode(value).map_err(|error| format!("{name} is not valid hex: {error}"))
-}
-
-fn signing_key_from_hex(secret_key_hex: &str) -> Result<SigningKey, String> {
-    signing_key_from_hex_named(secret_key_hex, "sequencer_secret_key_hex")
-}
-
-fn signing_key_from_hex_named(secret_key_hex: &str, name: &str) -> Result<SigningKey, String> {
-    let bytes = decode_fixed_hex(secret_key_hex, name, 32)?;
-    let bytes: [u8; 32] = bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| format!("{name} must decode to 32 bytes"))?;
-    Ok(SigningKey::from_bytes(&bytes))
-}
-
 fn verifying_key_from_hex(public_key_hex: &str) -> Result<VerifyingKey, String> {
     verifying_key_from_hex_named(public_key_hex, "sequencer_public_key_hex")
 }
 
 fn verifying_key_from_hex_named(public_key_hex: &str, name: &str) -> Result<VerifyingKey, String> {
-    let bytes = decode_fixed_hex(public_key_hex, name, 32)?;
-    let bytes: [u8; 32] = bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| format!("{name} must decode to 32 bytes"))?;
-    VerifyingKey::from_bytes(&bytes)
-        .map_err(|error| format!("{name} is not an Ed25519 key: {error}"))
+    nebula_crypto::verifying_key_from_hex(public_key_hex, name)
 }
 
 pub fn public_key_hex_for_secret(secret_key_hex: &str) -> Result<String, String> {
-    let signing_key = signing_key_from_hex_named(secret_key_hex, "secret_key_hex")?;
-    Ok(hex::encode(signing_key.verifying_key().to_bytes()))
+    nebula_crypto::public_key_hex_for_secret(secret_key_hex, "secret_key_hex")
 }
 
-pub fn account_id_for_public_key(public_key_hex: &str) -> Result<String, String> {
+pub fn account_id_for_public_key(public_key: &str) -> Result<String, String> {
     Ok(format!(
         "{NBLA_ACCOUNT_PREFIX}{}",
-        normalize_fixed_hex(public_key_hex, "public_key_hex", 64)?
+        nebula_crypto::scheme_normalize_public(public_key, "public_key")?
     ))
 }
 
-fn account_public_key_hex(account: &str) -> Result<String, String> {
-    if let Some(public_key_hex) = account.strip_prefix(NBLA_ACCOUNT_PREFIX) {
-        return normalize_fixed_hex(public_key_hex, "account public key", 64);
-    }
-    normalize_fixed_hex(account, "account", 64)
+fn account_public_key(account: &str) -> Result<String, String> {
+    let raw = account.strip_prefix(NBLA_ACCOUNT_PREFIX).unwrap_or(account);
+    nebula_crypto::scheme_normalize_public(raw, "account public key")
 }
 
 pub fn sign_runtime_root(secret_key_hex: &str, root: &str) -> Result<String, String> {
-    validate_fixed_hex(root, "signing_root", 64)?;
-    let signing_key = signing_key_from_hex_named(secret_key_hex, "secret_key_hex")?;
-    let signature: Signature = signing_key.sign(root.as_bytes());
-    Ok(hex::encode(signature.to_bytes()))
+    nebula_crypto::scheme_sign_root(secret_key_hex, root)
 }
 
 pub fn verify_runtime_root_signature(
@@ -6972,13 +7277,7 @@ pub fn verify_runtime_root_signature(
     root: &str,
     signature_hex: &str,
 ) -> Result<(), String> {
-    verify_ed25519_signature(
-        public_key_hex,
-        "public_key_hex",
-        root,
-        signature_hex,
-        "signature",
-    )
+    nebula_crypto::scheme_verify_root(public_key_hex, root, signature_hex)
 }
 
 pub fn default_dev_sequencer_public_key_hex() -> String {
@@ -6990,10 +7289,9 @@ fn prepare_runtime_config(
     mut config: RuntimeConfig,
     sequencer_secret_key_hex: Option<String>,
 ) -> Result<(RuntimeConfig, Option<String>), String> {
-    config.sequencer_public_key_hex = normalize_fixed_hex(
+    config.sequencer_public_key_hex = nebula_crypto::scheme_normalize_public(
         &config.sequencer_public_key_hex,
         "sequencer_public_key_hex",
-        64,
     )?;
     config.validate()?;
     let sequencer_secret_key_hex = resolve_sequencer_secret(&config, sequencer_secret_key_hex)?;
@@ -7020,8 +7318,9 @@ fn resolve_sequencer_secret(
         }
         None => return Ok(None),
     };
-    let selected = normalize_fixed_hex(&selected, "sequencer_secret_key_hex", 64)?;
-    let derived_public_key = public_key_hex_for_secret(&selected)?;
+    let selected = selected.to_ascii_lowercase();
+    let derived_public_key = nebula_crypto::scheme_derive_public(&selected)
+        .map_err(|error| format!("sequencer_secret_key_hex is invalid: {error}"))?;
     if !derived_public_key.eq_ignore_ascii_case(&config.sequencer_public_key_hex) {
         return Err(format!(
             "sequencer_secret_key_hex derives public key {derived_public_key}, expected {}",
@@ -7032,18 +7331,13 @@ fn resolve_sequencer_secret(
 }
 
 fn sign_block_hash(block_hash: &str, secret_key_hex: &str) -> Result<String, String> {
-    validate_fixed_hex(block_hash, "block_hash", 64)?;
-    let signing_key = signing_key_from_hex(secret_key_hex)?;
-    let signature: Signature = signing_key.sign(block_hash.as_bytes());
-    Ok(hex::encode(signature.to_bytes()))
+    nebula_crypto::scheme_sign_root(secret_key_hex, block_hash)
 }
 
 fn verify_block_signature(
     block: &RuntimeBlock,
     expected_public_key_hex: &str,
 ) -> Result<(), String> {
-    validate_fixed_hex(&block.block_hash, "block_hash", 64)?;
-    validate_fixed_hex(&block.signature, "block_signature", 128)?;
     if !block
         .producer_public_key
         .eq_ignore_ascii_case(expected_public_key_hex)
@@ -7053,16 +7347,7 @@ fn verify_block_signature(
             block.producer_public_key, expected_public_key_hex
         ));
     }
-    let verifying_key = verifying_key_from_hex(expected_public_key_hex)?;
-    let signature_bytes = decode_fixed_hex(&block.signature, "block_signature", 64)?;
-    let signature_bytes: [u8; 64] = signature_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| "block_signature must decode to 64 bytes".to_string())?;
-    let signature = Signature::from_bytes(&signature_bytes);
-    verifying_key
-        .verify(block.block_hash.as_bytes(), &signature)
-        .map_err(|error| format!("Ed25519 verification failed: {error}"))
+    nebula_crypto::scheme_verify_root(expected_public_key_hex, &block.block_hash, &block.signature)
 }
 
 fn parse_fee_asset(input: &str) -> Result<FeeAsset, String> {
@@ -7655,8 +7940,35 @@ fn accountability_root(reports: &[RuntimeAccountabilityReport]) -> String {
     }))
 }
 
+/// Canonical runtime state root. The shielded pool is folded in only when non-empty, so chains
+/// that never use shielded notes keep exactly the historical encoding. Shared by the live runtime
+/// and snapshot validation so the two can never drift.
+fn runtime_state_root(
+    accounts: &BTreeMap<String, RuntimeAccount>,
+    bridge_deposits: &BTreeMap<String, RuntimeBridgeDeposit>,
+    withdrawals: &BTreeMap<String, RuntimeWithdrawalRequest>,
+    total_nxmr_fees_units: u128,
+    buyback_pool_nebulai: u128,
+    validator_reward_nebulai: u128,
+    shielded_notes: &BTreeSet<String>,
+) -> String {
+    let mut value = json!({
+        "state_domain": "nebula-runtime-state-v1",
+        "accounts": accounts,
+        "bridge_deposits": bridge_deposits,
+        "withdrawals": withdrawals,
+        "total_nxmr_fees_units": total_nxmr_fees_units,
+        "buyback_pool_nebulai": buyback_pool_nebulai,
+        "validator_reward_nebulai": validator_reward_nebulai,
+    });
+    if !shielded_notes.is_empty() {
+        value["shielded_notes"] = json!(shielded_notes);
+    }
+    stable_runtime_root(&value)
+}
+
 fn snapshot_root(snapshot: &RuntimeSnapshot) -> String {
-    stable_runtime_root(&json!({
+    let mut value = json!({
         "snapshot_domain": "nebula-runtime-snapshot-v1",
         "snapshot_version": snapshot.snapshot_version,
         "config": snapshot.config,
@@ -7674,7 +7986,11 @@ fn snapshot_root(snapshot: &RuntimeSnapshot) -> String {
         "mempool_admission_rejection_count": snapshot.mempool_admission_rejection_count,
         "sequencer_key_rotations": snapshot.sequencer_key_rotations,
         "accountability_reports": snapshot.accountability_reports,
-    }))
+    });
+    if !snapshot.shielded_notes.is_empty() {
+        value["shielded_notes"] = json!(snapshot.shielded_notes);
+    }
+    stable_runtime_root(&value)
 }
 
 fn block_root(block: &RuntimeBlock) -> String {
@@ -7789,6 +8105,7 @@ mod tests {
                     public_key: test_public_key_hex(0xb2),
                 },
             ],
+            quorum_policy: None,
         }
     }
 
@@ -7912,13 +8229,13 @@ mod tests {
     }
 
     fn sign_root_with_seed(seed: u8, root: &str) -> String {
-        let signing_key = signing_key_from_hex(&test_secret_key_hex(seed)).unwrap();
-        hex::encode(signing_key.sign(root.as_bytes()).to_bytes())
+        nebula_crypto::sign_ed25519_root(&test_secret_key_hex(seed), "secret_key_hex", root)
+            .unwrap()
     }
 
     fn sign_test_root(root: &str) -> String {
-        let signing_key = signing_key_from_hex(&test_account_secret_key_hex()).unwrap();
-        hex::encode(signing_key.sign(root.as_bytes()).to_bytes())
+        nebula_crypto::sign_ed25519_root(&test_account_secret_key_hex(), "secret_key_hex", root)
+            .unwrap()
     }
 
     fn sign_test_transaction(mut tx: RuntimeTransaction) -> RuntimeTransaction {
@@ -7964,15 +8281,15 @@ mod tests {
     }
 
     fn refresh_default_signed_snapshot_roots(snapshot: &mut RuntimeSnapshot) {
-        snapshot.state_root = stable_runtime_root(&json!({
-            "state_domain": "nebula-runtime-state-v1",
-            "accounts": snapshot.accounts,
-            "bridge_deposits": snapshot.bridge_deposits,
-            "withdrawals": snapshot.withdrawals,
-            "total_nxmr_fees_units": snapshot.total_nxmr_fees_units,
-            "buyback_pool_nebulai": snapshot.buyback_pool_nebulai,
-            "validator_reward_nebulai": snapshot.validator_reward_nebulai,
-        }));
+        snapshot.state_root = runtime_state_root(
+            &snapshot.accounts,
+            &snapshot.bridge_deposits,
+            &snapshot.withdrawals,
+            snapshot.total_nxmr_fees_units,
+            snapshot.buyback_pool_nebulai,
+            snapshot.validator_reward_nebulai,
+            &snapshot.shielded_notes,
+        );
         let latest = snapshot
             .blocks
             .last_mut()
@@ -8011,6 +8328,7 @@ mod tests {
             observer_signature_roots: vec!["9".repeat(64), "a".repeat(64)],
             observer_evidence: Vec::new(),
             observed_at_unix_ms: 1,
+            monero_tx_extra_hex: None,
         }
     }
 
@@ -8266,15 +8584,15 @@ mod tests {
     }
 
     fn snapshot_test_state_root(snapshot: &RuntimeSnapshot) -> String {
-        stable_runtime_root(&json!({
-            "state_domain": "nebula-runtime-state-v1",
-            "accounts": snapshot.accounts,
-            "bridge_deposits": snapshot.bridge_deposits,
-            "withdrawals": snapshot.withdrawals,
-            "total_nxmr_fees_units": snapshot.total_nxmr_fees_units,
-            "buyback_pool_nebulai": snapshot.buyback_pool_nebulai,
-            "validator_reward_nebulai": snapshot.validator_reward_nebulai,
-        }))
+        runtime_state_root(
+            &snapshot.accounts,
+            &snapshot.bridge_deposits,
+            &snapshot.withdrawals,
+            snapshot.total_nxmr_fees_units,
+            snapshot.buyback_pool_nebulai,
+            snapshot.validator_reward_nebulai,
+            &snapshot.shielded_notes,
+        )
     }
 
     fn test_nbla_transaction(nonce: u64, to: &str) -> RuntimeTransaction {
@@ -10076,6 +10394,328 @@ mod tests {
     }
 
     #[test]
+    fn runtime_produces_and_verifies_hybrid_signed_blocks() {
+        // A hybrid (Ed25519 + ML-DSA-65) sequencer key opts the chain into post-quantum block
+        // signatures. The key is scheme-tagged; bare keys remain Ed25519.
+        let hybrid_seed = format!("{}{}", "07".repeat(32), "09".repeat(32));
+        let secret = nebula_crypto::scheme_secret_from_seed(
+            nebula_crypto::SchemeId::HybridEd25519MlDsa65,
+            &hybrid_seed,
+        )
+        .unwrap();
+        let public = nebula_crypto::scheme_derive_public(&secret).unwrap();
+        assert!(public.starts_with("hybrid-ed25519-mldsa65:"));
+
+        let mut config = RuntimeConfig::public_testnet_default();
+        config.sequencer_public_key_hex = public.clone();
+        let mut runtime =
+            NebulaRuntime::with_sequencer_secret(config.clone(), Some(secret)).unwrap();
+
+        let block = runtime.produce_block();
+        assert_eq!(block.producer_public_key, public);
+        assert!(block.signature.starts_with("hybrid-ed25519-mldsa65:"));
+        // A hybrid signature is far larger than a bare 128-hex Ed25519 signature.
+        assert!(block.signature.len() > 256);
+        verify_block_signature(&block, &public).unwrap();
+
+        // A follower holding only the public key imports and verifies the hybrid-signed snapshot.
+        let snapshot = runtime.export_snapshot();
+        validate_snapshot(&snapshot).unwrap();
+        config.produce_blocks = false;
+        let follower = NebulaRuntime::from_snapshot(config, snapshot).unwrap();
+        assert!(!follower.config().produce_blocks);
+    }
+
+    #[test]
+    fn runtime_accepts_hybrid_signed_transactions() {
+        // A hybrid (Ed25519 + ML-DSA-65) account signs a transaction; the chain verifies the
+        // post-quantum-protected signature before including it.
+        let hybrid_seed = format!("{}{}", "11".repeat(32), "22".repeat(32));
+        let secret = nebula_crypto::scheme_secret_from_seed(
+            nebula_crypto::SchemeId::HybridEd25519MlDsa65,
+            &hybrid_seed,
+        )
+        .unwrap();
+        let public = nebula_crypto::scheme_derive_public(&secret).unwrap();
+        let account = account_id_for_public_key(&public).unwrap();
+        assert!(account.starts_with(NBLA_ACCOUNT_PREFIX));
+
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        runtime.faucet(&account).unwrap();
+
+        let mut tx = RuntimeTransaction {
+            from: account.clone(),
+            to: "nbla-recipient".to_string(),
+            amount_nebulai: 10,
+            gas_units: 5,
+            gas_price_nebulai: 2,
+            fee_asset: NBLA_SYMBOL.to_string(),
+            nonce: 0,
+            signature: String::new(),
+            memo: None,
+        };
+        tx.signature = nebula_crypto::scheme_sign_root(&secret, &tx.signing_root()).unwrap();
+        assert!(tx.signature.starts_with("hybrid-ed25519-mldsa65:"));
+
+        // submit_transaction verifies the signature: a bad hybrid signature is rejected here.
+        runtime.submit_transaction(tx.clone()).unwrap();
+        let block = runtime.produce_block();
+        assert!(
+            block
+                .transactions
+                .iter()
+                .any(|included| included.id() == tx.id()),
+            "hybrid-signed transaction was not included"
+        );
+        assert!(block.rejected_tx_ids.is_empty());
+    }
+
+    #[test]
+    fn shielded_transfer_hides_amounts_and_conserves_value() {
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let account = test_account_id();
+        runtime.faucet(&account).unwrap();
+        let starting = runtime.account(&account).unwrap().nbla_nebulai;
+
+        // Shield 100 NBLA. Blindings are chosen so a later 70/30 split balances exactly
+        // (b_in = b1 + b2), which is what lets the runtime confirm conservation of value.
+        let b1 = nebula_privacy::Blinding::from_bytes([1u8; 32]);
+        let b2 = nebula_privacy::Blinding::from_bytes([2u8; 32]);
+        let b_in = b1.add(&b2);
+        let note = shield_signed(&mut runtime, 100, &b_in, 0);
+        assert!(runtime.shielded_notes().contains(&note));
+        assert_eq!(
+            runtime.account(&account).unwrap().nbla_nebulai,
+            starting - 100
+        );
+
+        // Confidential split 100 -> 70 + 30. The runtime sees only commitments + range proofs.
+        let (c1, p1) = nebula_privacy::prove_amount(70, &b1);
+        let (c2, p2) = nebula_privacy::prove_amount(30, &b2);
+        let outputs = vec![
+            ShieldedOutput {
+                commitment: c1.to_hex(),
+                range_proof_hex: hex::encode(&p1),
+            },
+            ShieldedOutput {
+                commitment: c2.to_hex(),
+                range_proof_hex: hex::encode(&p2),
+            },
+        ];
+        runtime
+            .shielded_transfer(std::slice::from_ref(&note), &outputs)
+            .unwrap();
+        assert!(!runtime.shielded_notes().contains(&note));
+        assert!(runtime.shielded_notes().contains(&c1.to_hex()));
+        assert!(runtime.shielded_notes().contains(&c2.to_hex()));
+
+        // The shielded pool is now committed into the signed block's state root.
+        let block = runtime.produce_block();
+        verify_block_signature(&block, &runtime.config().sequencer_public_key_hex).unwrap();
+
+        // Unshield the 70 note back to transparent NBLA.
+        runtime
+            .unshield(&c1.to_hex(), 70, &hex::encode(b1.to_bytes()), &account)
+            .unwrap();
+        assert_eq!(
+            runtime.account(&account).unwrap().nbla_nebulai,
+            starting - 100 + 70
+        );
+        assert!(!runtime.shielded_notes().contains(&c1.to_hex()));
+
+        // Seal the post-unshield state into a block, then a follower importing the snapshot keeps
+        // the remaining shielded note.
+        runtime.produce_block();
+        let snapshot = runtime.export_snapshot();
+        validate_snapshot(&snapshot).unwrap();
+        let follower = NebulaRuntime::from_snapshot_with_sequencer_secret(
+            runtime.config().clone(),
+            snapshot,
+            None,
+        )
+        .unwrap();
+        assert!(follower.shielded_notes().contains(&c2.to_hex()));
+    }
+
+    #[test]
+    fn shielded_transfer_rejects_inflation_and_bad_proofs() {
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let account = test_account_id();
+        runtime.faucet(&account).unwrap();
+        let b1 = nebula_privacy::Blinding::from_bytes([1u8; 32]);
+        let b2 = nebula_privacy::Blinding::from_bytes([2u8; 32]);
+        let b_in = b1.add(&b2);
+        let note = shield_signed(&mut runtime, 100, &b_in, 0);
+
+        // Inflation: outputs sum to 110 (80 + 30) with valid range proofs, but they cannot balance
+        // the 100-value input commitment.
+        let (c1, p1) = nebula_privacy::prove_amount(80, &b1);
+        let (c2, p2) = nebula_privacy::prove_amount(30, &b2);
+        let inflated = vec![
+            ShieldedOutput {
+                commitment: c1.to_hex(),
+                range_proof_hex: hex::encode(&p1),
+            },
+            ShieldedOutput {
+                commitment: c2.to_hex(),
+                range_proof_hex: hex::encode(&p2),
+            },
+        ];
+        assert!(runtime
+            .shielded_transfer(std::slice::from_ref(&note), &inflated)
+            .is_err());
+        // Rejected atomically: the input note is still unspent.
+        assert!(runtime.shielded_notes().contains(&note));
+
+        // A tampered range proof is rejected even though the amounts balance.
+        let (c3, p3) = nebula_privacy::prove_amount(70, &b1);
+        let (c4, p4) = nebula_privacy::prove_amount(30, &b2);
+        let mut bad_proof = hex::encode(&p3);
+        bad_proof.replace_range(0..1, if bad_proof.starts_with('0') { "1" } else { "0" });
+        let tampered = vec![
+            ShieldedOutput {
+                commitment: c3.to_hex(),
+                range_proof_hex: bad_proof,
+            },
+            ShieldedOutput {
+                commitment: c4.to_hex(),
+                range_proof_hex: hex::encode(&p4),
+            },
+        ];
+        assert!(runtime
+            .shielded_transfer(std::slice::from_ref(&note), &tampered)
+            .is_err());
+
+        // Spending a note that is not in the pool is rejected.
+        assert!(runtime
+            .shielded_transfer(&["0".repeat(64)], &tampered)
+            .is_err());
+    }
+
+    fn shield_signed(
+        runtime: &mut NebulaRuntime,
+        amount: u128,
+        blinding: &nebula_privacy::Blinding,
+        nonce: u64,
+    ) -> String {
+        let account = test_account_id();
+        let commitment = nebula_privacy::commit(amount as u64, blinding).to_hex();
+        let authorization_root = shield_authorization_root(&account, amount, &commitment, nonce);
+        let signature = sign_test_root(&authorization_root);
+        runtime
+            .shield(
+                &account,
+                amount,
+                &hex::encode(blinding.to_bytes()),
+                nonce,
+                &signature,
+            )
+            .unwrap()
+    }
+
+    fn tx_extra_with_binding(account: &str) -> Vec<u8> {
+        let nonce = nebula_monero::tx_extra::encode_nebula_account_binding(account);
+        let mut extra = vec![0x02u8, nonce.len() as u8];
+        extra.extend_from_slice(&nonce);
+        extra
+    }
+
+    #[test]
+    fn shield_requires_account_authorization() {
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let account = test_account_id();
+        runtime.faucet(&account).unwrap();
+        let blinding = nebula_privacy::Blinding::from_bytes([5u8; 32]);
+        let commitment = nebula_privacy::commit(50, &blinding).to_hex();
+        let blinding_hex = hex::encode(blinding.to_bytes());
+
+        // A signature from a different key does not authorize debiting this account.
+        let wrong_sig = sign_root_with_seed(
+            0xee,
+            &shield_authorization_root(&account, 50, &commitment, 0),
+        );
+        assert!(runtime
+            .shield(&account, 50, &blinding_hex, 0, &wrong_sig)
+            .is_err());
+
+        // A correctly-signed shield for the wrong nonce is rejected (replay protection).
+        let stale_sig = sign_test_root(&shield_authorization_root(&account, 50, &commitment, 5));
+        assert!(runtime
+            .shield(&account, 50, &blinding_hex, 5, &stale_sig)
+            .is_err());
+
+        // The properly-authorized shield at the current nonce succeeds.
+        let good_sig = sign_test_root(&shield_authorization_root(&account, 50, &commitment, 0));
+        runtime
+            .shield(&account, 50, &blinding_hex, 0, &good_sig)
+            .unwrap();
+        assert!(runtime.shielded_notes().contains(&commitment));
+    }
+
+    #[test]
+    fn bridge_deposit_verifies_tx_extra_account_binding() {
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let account = test_account_id();
+
+        // A deposit whose Monero tx_extra binds the crediting account is accepted.
+        let mut deposit = test_bridge_deposit('5', '6');
+        deposit.account = account.clone();
+        deposit.monero_tx_extra_hex = Some(hex::encode(tx_extra_with_binding(&account)));
+        runtime.observe_bridge_deposit(deposit).unwrap();
+
+        // A deposit whose tx_extra binds a different account is rejected.
+        let mut wrong = test_bridge_deposit('7', '8');
+        wrong.account = account.clone();
+        wrong.monero_tx_extra_hex = Some(hex::encode(tx_extra_with_binding("nblasomeoneelse")));
+        assert!(runtime.observe_bridge_deposit(wrong).is_err());
+
+        // A deposit carrying tx_extra with a (non-Nebula) payment-id nonce has no binding.
+        let mut unbound = test_bridge_deposit('9', 'a');
+        unbound.account = account.clone();
+        let mut payment_id_nonce = vec![0x00u8];
+        payment_id_nonce.extend_from_slice(&[0u8; 32]);
+        let mut extra = vec![0x02u8, payment_id_nonce.len() as u8];
+        extra.extend_from_slice(&payment_id_nonce);
+        unbound.monero_tx_extra_hex = Some(hex::encode(extra));
+        assert!(runtime.observe_bridge_deposit(unbound).is_err());
+    }
+
+    #[test]
+    fn configurable_quorum_overrides_defaults() {
+        let mut binding = test_launch_binding();
+        // Absent policy → the safe defaults; None binding → defaults too.
+        assert_eq!(
+            observer_quorum(Some(&binding)),
+            MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM
+        );
+        assert_eq!(
+            operator_quorum(Some(&binding)),
+            MIN_WITHDRAWAL_OPERATOR_QUORUM
+        );
+        assert_eq!(observer_quorum(None), MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM);
+
+        // A policy raises the effective per-role quorum.
+        binding.quorum_policy = Some(RuntimeQuorumPolicy {
+            bridge_deposit_observer: 3,
+            bridge_withdrawal_operator: 4,
+            sequencer_rotation_operator: 5,
+        });
+        assert_eq!(observer_quorum(Some(&binding)), 3);
+        assert_eq!(operator_quorum(Some(&binding)), 4);
+        assert_eq!(rotation_quorum(Some(&binding)), 5);
+    }
+
+    #[test]
+    fn role_quorum_validation_enforces_bounds() {
+        assert!(validate_role_quorum(2, 2, 5, "role").is_ok());
+        assert!(validate_role_quorum(5, 2, 5, "role").is_ok());
+        // Below the safe minimum.
+        assert!(validate_role_quorum(1, 2, 5, "role").is_err());
+        // Above the roster size.
+        assert!(validate_role_quorum(6, 2, 5, "role").is_err());
+    }
+
+    #[test]
     fn runtime_rotates_sequencer_key_and_validates_history() {
         let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
         let old_public_key_hex = runtime.config().sequencer_public_key_hex.clone();
@@ -10614,7 +11254,7 @@ mod tests {
         let mut deposit = test_bridge_deposit('c', 'd');
         deposit.account = account.clone();
         runtime.observe_bridge_deposit(deposit).unwrap();
-        let monero_address = "9xTestnetMoneroAddressForNebulaWithdrawals";
+        let monero_address = "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY";
         let withdrawal_signature = sign_test_root(&withdrawal_authorization_root(
             &account,
             monero_address,
@@ -10696,7 +11336,7 @@ mod tests {
         assert!(runtime
             .request_withdrawal(
                 &account,
-                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
                 2_000,
                 0,
                 &"0".repeat(128),
@@ -10835,10 +11475,10 @@ mod tests {
         let report = runtime
             .request_withdrawal(
                 &test_account_id(),
-                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
                 2_000,
                 0,
-                &test_withdrawal_signature("9xTestnetMoneroAddressForNebulaWithdrawals", 2_000, 0),
+                &test_withdrawal_signature("9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY", 2_000, 0),
             )
             .unwrap();
         assert!(report.accepted);
@@ -10979,10 +11619,10 @@ mod tests {
         let withdrawal_id = runtime
             .request_withdrawal(
                 &test_account_id(),
-                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
                 2_000,
                 0,
-                &test_withdrawal_signature("9xTestnetMoneroAddressForNebulaWithdrawals", 2_000, 0),
+                &test_withdrawal_signature("9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY", 2_000, 0),
             )
             .unwrap()
             .withdrawal
@@ -11053,10 +11693,10 @@ mod tests {
         let second_withdrawal_id = runtime
             .request_withdrawal(
                 &test_account_id(),
-                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
                 1_000,
                 1,
-                &test_withdrawal_signature("9xTestnetMoneroAddressForNebulaWithdrawals", 1_000, 1),
+                &test_withdrawal_signature("9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY", 1_000, 1),
             )
             .unwrap()
             .withdrawal
@@ -11098,10 +11738,10 @@ mod tests {
         let withdrawal = runtime
             .request_withdrawal(
                 &test_account_id(),
-                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
                 2_000,
                 0,
-                &test_withdrawal_signature("9xTestnetMoneroAddressForNebulaWithdrawals", 2_000, 0),
+                &test_withdrawal_signature("9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY", 2_000, 0),
             )
             .unwrap()
             .withdrawal;
@@ -11164,10 +11804,10 @@ mod tests {
         let withdrawal = runtime
             .request_withdrawal(
                 &test_account_id(),
-                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
                 2_000,
                 0,
-                &test_withdrawal_signature("9xTestnetMoneroAddressForNebulaWithdrawals", 2_000, 0),
+                &test_withdrawal_signature("9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY", 2_000, 0),
             )
             .unwrap()
             .withdrawal;
@@ -11285,10 +11925,10 @@ mod tests {
         runtime
             .request_withdrawal(
                 &test_account_id(),
-                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
                 2_000,
                 0,
-                &test_withdrawal_signature("9xTestnetMoneroAddressForNebulaWithdrawals", 2_000, 0),
+                &test_withdrawal_signature("9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY", 2_000, 0),
             )
             .unwrap();
         runtime.produce_block();

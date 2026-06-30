@@ -1,6 +1,6 @@
 #![recursion_limit = "512"]
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha3::{Digest, Sha3_256};
@@ -2769,12 +2769,12 @@ fn prove_live_rpc_devnet_rehearsal_with_bindings(
         "nebula_requestWithdrawal",
         json!({
             "account": bridge_account.clone(),
-            "monero_address": "9xTestnetMoneroAddressForNebulaWithdrawals",
+            "monero_address": "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
             "amount_nxmr_units": 2_000,
             "nonce": 2,
             "signature": live_withdrawal_signature(
                 bridge_account_seed,
-                "9xTestnetMoneroAddressForNebulaWithdrawals",
+                "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY",
                 2_000,
                 2,
             ),
@@ -5700,6 +5700,7 @@ pub fn build_runtime_launch_binding_from_jsons(
         validator_reward_accounts,
         bridge_operator_keys,
         bridge_observer_keys,
+        quorum_policy: None,
     };
     let mut validation_config = runtime::RuntimeConfig::public_testnet_default();
     validation_config.validator_id = validator_id.to_string();
@@ -8264,6 +8265,7 @@ fn live_bridge_deposit(seed: u8, amount_nxmr_units: u128) -> Value {
         observer_signature_roots: Vec::new(),
         observer_evidence: Vec::new(),
         observed_at_unix_ms: unix_ms(),
+        monero_tx_extra_hex: None,
     };
     let observer_a = live_observer_evidence(&deposit, "observer-us-east-1", 0xb1);
     let observer_b = live_observer_evidence(&deposit, "observer-eu-west-1", 0xb2);
@@ -13127,43 +13129,19 @@ fn require_signature_hex(errors: &mut Vec<String>, label: &str, value: &str) {
     }
 }
 
-fn decode_fixed_hex(value: &str, label: &str, expected_len: usize) -> Result<Vec<u8>, String> {
-    let decoded = hex::decode(value).map_err(|error| format!("{label} must be hex: {error}"))?;
-    if decoded.len() != expected_len {
-        return Err(format!("{label} must decode to {expected_len} bytes"));
-    }
-    Ok(decoded)
-}
-
-fn verifying_key_from_hex(public_key_hex: &str, label: &str) -> Result<VerifyingKey, String> {
-    let bytes = decode_fixed_hex(public_key_hex, label, 32)?;
-    let bytes: [u8; 32] = bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| format!("{label} must decode to 32 bytes"))?;
-    VerifyingKey::from_bytes(&bytes)
-        .map_err(|error| format!("{label} is not an Ed25519 key: {error}"))
-}
-
 fn verify_ed25519_signature(
     public_key_hex: &str,
     signing_root: &str,
     signature_hex: &str,
     signature_label: &str,
 ) -> Result<(), String> {
-    if signing_root.len() != 64 || !signing_root.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err("signing root must be a 64-character hex root".to_string());
-    }
-    let verifying_key = verifying_key_from_hex(public_key_hex, "public_key")?;
-    let signature_bytes = decode_fixed_hex(signature_hex, signature_label, 64)?;
-    let signature_bytes: [u8; 64] = signature_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| format!("{signature_label} must decode to 64 bytes"))?;
-    let signature = Signature::from_bytes(&signature_bytes);
-    verifying_key
-        .verify(signing_root.as_bytes(), &signature)
-        .map_err(|error| format!("{signature_label} Ed25519 verification failed: {error}"))
+    nebula_crypto::verify_ed25519_signature(
+        public_key_hex,
+        "public_key",
+        signing_root,
+        signature_hex,
+        signature_label,
+    )
 }
 
 fn verify_signature_material(
@@ -13444,29 +13422,11 @@ fn sample_ed25519_secret_key_hex(seed: u8) -> String {
 }
 
 fn sign_root_with_secret_key(secret_key_hex: &str, signing_root: &str) -> Result<String, String> {
-    if signing_root.len() != 64 || !signing_root.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err("signing root must be a 64-character hex root".to_string());
-    }
-    let bytes = decode_fixed_hex(secret_key_hex, "secret_key_hex", 32)?;
-    let bytes: [u8; 32] = bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| "secret_key_hex must decode to 32 bytes".to_string())?;
-    let signing_key = SigningKey::from_bytes(&bytes);
-    Ok(hex::encode(
-        signing_key.sign(signing_root.as_bytes()).to_bytes(),
-    ))
+    nebula_crypto::sign_ed25519_root(secret_key_hex, "secret_key_hex", signing_root)
 }
 
 fn public_key_hex_for_secret_key(secret_key_hex: &str) -> Result<String, String> {
-    let bytes = decode_fixed_hex(secret_key_hex, "secret_key_hex", 32)?;
-    let bytes: [u8; 32] = bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| "secret_key_hex must decode to 32 bytes".to_string())?;
-    Ok(hex::encode(
-        SigningKey::from_bytes(&bytes).verifying_key().to_bytes(),
-    ))
+    nebula_crypto::public_key_hex_for_secret(secret_key_hex, "secret_key_hex")
 }
 
 fn sample_secret_key_for_public_key(public_key_hex: &str) -> Option<String> {

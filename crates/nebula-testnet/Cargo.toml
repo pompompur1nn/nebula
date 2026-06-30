@@ -6,6 +6,9 @@ license-file = "../../LICENSE"
 publish = false
 
 [dependencies]
+nebula-crypto = { path = "../nebula-crypto" }
+nebula-monero = { path = "../nebula-monero" }
+nebula-privacy = { path = "../nebula-privacy" }
 ed25519-dalek = "2"
 getrandom = "0.2"
 hex = "0.4"
