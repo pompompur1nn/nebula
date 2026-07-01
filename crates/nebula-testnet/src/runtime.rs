@@ -36,6 +36,8 @@ pub const NULLIFIER_HEX_LEN: usize = 64;
 pub const MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM: usize = 2;
 pub const MIN_WITHDRAWAL_OPERATOR_QUORUM: usize = 2;
 pub const MIN_SEQUENCER_ROTATION_OPERATOR_QUORUM: usize = 2;
+pub const MIN_BRIDGE_OPERATOR_BOND_NEBULAI: u128 = 1_000 * NEBULAI_PER_NBLA;
+pub const MIN_BRIDGE_OBSERVER_BOND_NEBULAI: u128 = 500 * NEBULAI_PER_NBLA;
 pub const PUBLIC_LAUNCH_SIGNED_EVIDENCE_MAX_AGE_MS: u128 = 86_400_000;
 pub const PUBLIC_LAUNCH_SIGNED_EVIDENCE_FUTURE_SKEW_MS: u128 = 300_000;
 pub const NBLA_ACCOUNT_PREFIX: &str = "nbla";
@@ -288,6 +290,8 @@ pub struct RuntimeQuorumPolicy {
     pub sequencer_rotation_operator: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_cosigner: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub withdrawal_challenge_window_ms: Option<u128>,
 }
 
 impl RuntimeLaunchBinding {
@@ -615,6 +619,31 @@ pub struct RuntimeWithdrawalRequest {
     pub finalized_monero_tx_id: Option<String>,
     pub finalization_proof_root: Option<String>,
     pub finalized_at_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub challenge_deadline_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_at_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reverted_at_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub challenge_evidence_root: Option<String>,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeBridgeBond {
+    pub participant_id: String,
+    pub role: String,
+    pub public_key_hex: String,
+    pub bond_nebulai: u128,
+    pub status: String,
+    pub funding_account: String,
+    pub posted_at_unix_ms: u128,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slashed_at_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slash_evidence_root: Option<String>,
     pub root: String,
 }
 
@@ -672,6 +701,8 @@ pub struct RuntimeSnapshot {
     pub note_commitments: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub nullifiers: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bridge_bonds: BTreeMap<String, RuntimeBridgeBond>,
     pub root: String,
 }
 
@@ -1110,6 +1141,7 @@ pub struct NebulaRuntime {
     shielded_notes: BTreeSet<String>,
     note_commitments: BTreeSet<String>,
     nullifiers: BTreeSet<String>,
+    bridge_bonds: BTreeMap<String, RuntimeBridgeBond>,
     monero_bridge: Option<MoneroBridgeVerifier>,
 }
 
@@ -3127,6 +3159,7 @@ impl NebulaRuntime {
             shielded_notes: BTreeSet::new(),
             note_commitments: BTreeSet::new(),
             nullifiers: BTreeSet::new(),
+            bridge_bonds: BTreeMap::new(),
             monero_bridge: None,
         };
         runtime.accounts.insert(
@@ -3220,6 +3253,7 @@ impl NebulaRuntime {
             shielded_notes: snapshot.shielded_notes,
             note_commitments: snapshot.note_commitments,
             nullifiers: snapshot.nullifiers,
+            bridge_bonds: snapshot.bridge_bonds,
             monero_bridge: None,
         })
     }
@@ -3250,6 +3284,7 @@ impl NebulaRuntime {
             shielded_notes: self.shielded_notes.clone(),
             note_commitments: self.note_commitments.clone(),
             nullifiers: self.nullifiers.clone(),
+            bridge_bonds: self.bridge_bonds.clone(),
             root: String::new(),
         };
         snapshot.root = snapshot_root(&snapshot);
@@ -3515,7 +3550,7 @@ impl NebulaRuntime {
         let pending_withdrawal_units = self
             .withdrawals
             .values()
-            .filter(|withdrawal| withdrawal.status != "finalized")
+            .filter(|withdrawal| !matches!(withdrawal.status.as_str(), "finalized" | "reverted"))
             .try_fold(0u128, |sum, withdrawal| {
                 sum.checked_add(withdrawal.amount_nxmr_units)
                     .ok_or_else(|| "nXMR custody accounting overflowed".to_string())
@@ -3530,6 +3565,158 @@ impl NebulaRuntime {
             required_units,
             on_chain_unlocked_units,
         })
+    }
+
+    pub fn post_bridge_bond(
+        &mut self,
+        participant_id: &str,
+        role: &str,
+        public_key_hex: &str,
+        funding_account: &str,
+        bond_nebulai: u128,
+        signature: &str,
+    ) -> Result<RuntimeBridgeBond, String> {
+        self.ensure_accountability_clean()?;
+        let binding = self
+            .config
+            .launch_binding
+            .as_ref()
+            .ok_or_else(|| "bridge bonds require a launch binding".to_string())?;
+        let key = participant_id.to_ascii_lowercase();
+        let (roster_key, min_bond) = match role {
+            "operator" => (
+                launch_bridge_operator_key_map(binding)
+                    .get(&key)
+                    .map(|entry| entry.public_key.clone()),
+                MIN_BRIDGE_OPERATOR_BOND_NEBULAI,
+            ),
+            "observer" => (
+                launch_bridge_observer_key_map(binding)
+                    .get(&key)
+                    .map(|entry| entry.public_key.clone()),
+                MIN_BRIDGE_OBSERVER_BOND_NEBULAI,
+            ),
+            _ => {
+                return Err(format!(
+                    "bridge bond role {role} must be operator or observer"
+                ))
+            }
+        };
+        let roster_key = roster_key.ok_or_else(|| {
+            format!("bridge bond participant {participant_id} is not in the {role} roster")
+        })?;
+        if !public_key_hex.eq_ignore_ascii_case(&roster_key) {
+            return Err(format!(
+                "bridge bond public_key does not match the launch-attested {role} key"
+            ));
+        }
+        if bond_nebulai < min_bond {
+            return Err(format!(
+                "bridge bond {bond_nebulai} is below the {role} minimum {min_bond}"
+            ));
+        }
+        if self
+            .bridge_bonds
+            .get(&key)
+            .map(|bond| bond.status == "active")
+            .unwrap_or(false)
+        {
+            return Err(format!(
+                "bridge participant {participant_id} already has an active bond"
+            ));
+        }
+        let authorization_root = bond_authorization_root(
+            participant_id,
+            role,
+            public_key_hex,
+            funding_account,
+            bond_nebulai,
+        );
+        verify_scheme_evidence_signature(
+            public_key_hex,
+            "bond_public_key",
+            &authorization_root,
+            signature,
+            "bond_signature",
+        )?;
+        let funder = self
+            .accounts
+            .get_mut(funding_account)
+            .ok_or_else(|| format!("funding account {funding_account} does not exist"))?;
+        if funder.nbla_nebulai < bond_nebulai {
+            return Err(format!(
+                "insufficient NBLA to bond: need {bond_nebulai}, have {}",
+                funder.nbla_nebulai
+            ));
+        }
+        funder.nbla_nebulai -= bond_nebulai;
+        let mut bond = RuntimeBridgeBond {
+            participant_id: participant_id.to_string(),
+            role: role.to_string(),
+            public_key_hex: public_key_hex.to_string(),
+            bond_nebulai,
+            status: "active".to_string(),
+            funding_account: funding_account.to_string(),
+            posted_at_unix_ms: unix_ms(),
+            slashed_at_unix_ms: None,
+            slash_evidence_root: None,
+            root: String::new(),
+        };
+        bond.root = bond_root(&bond);
+        self.bridge_bonds.insert(key, bond.clone());
+        Ok(bond)
+    }
+
+    pub fn slash_bridge_participant(
+        &mut self,
+        participant_id: &str,
+        slash_evidence_root: &str,
+    ) -> Result<RuntimeBridgeBond, String> {
+        self.ensure_accountability_clean()?;
+        validate_fixed_hex(slash_evidence_root, "slash_evidence_root", 64)?;
+        let key = participant_id.to_ascii_lowercase();
+        let bond = self
+            .bridge_bonds
+            .get_mut(&key)
+            .ok_or_else(|| format!("no bond for participant {participant_id}"))?;
+        if bond.status != "active" {
+            return Err(format!(
+                "bridge bond for {participant_id} is not active and cannot be slashed"
+            ));
+        }
+        bond.status = "slashed".to_string();
+        bond.slashed_at_unix_ms = Some(unix_ms());
+        bond.slash_evidence_root = Some(slash_evidence_root.to_ascii_lowercase());
+        bond.root = bond_root(bond);
+        Ok(bond.clone())
+    }
+
+    pub fn unbond_bridge_participant(
+        &mut self,
+        participant_id: &str,
+    ) -> Result<RuntimeBridgeBond, String> {
+        self.ensure_accountability_clean()?;
+        let key = participant_id.to_ascii_lowercase();
+        let bond = self
+            .bridge_bonds
+            .get(&key)
+            .ok_or_else(|| format!("no bond for participant {participant_id}"))?
+            .clone();
+        if bond.status != "active" {
+            return Err(format!(
+                "bridge bond for {participant_id} is not active and cannot be unbonded"
+            ));
+        }
+        let funder = self
+            .accounts
+            .entry(bond.funding_account.clone())
+            .or_insert_with(RuntimeAccount::empty);
+        funder.nbla_nebulai = funder
+            .nbla_nebulai
+            .checked_add(bond.bond_nebulai)
+            .ok_or_else(|| "unbond NBLA credit overflowed".to_string())?;
+        self.bridge_bonds.remove(&key);
+        Ok(bond)
     }
 
     pub fn observe_bridge_deposit(
@@ -3680,6 +3867,10 @@ impl NebulaRuntime {
             finalized_monero_tx_id: None,
             finalization_proof_root: None,
             finalized_at_unix_ms: None,
+            challenge_deadline_unix_ms: None,
+            settled_at_unix_ms: None,
+            reverted_at_unix_ms: None,
+            challenge_evidence_root: None,
             root: String::new(),
         };
         withdrawal.root = withdrawal_root(&withdrawal);
@@ -3806,17 +3997,122 @@ impl NebulaRuntime {
                 unix_ms(),
             )?;
         }
-        withdrawal.status = "finalized".to_string();
+        let window = withdrawal_challenge_window_ms(launch_binding.as_ref());
+        if window == 0 {
+            withdrawal.status = "finalized".to_string();
+        } else {
+            withdrawal.status = "finalizing".to_string();
+            withdrawal.challenge_deadline_unix_ms = Some(unix_ms().saturating_add(window));
+        }
         withdrawal.operator_approval_ids = operator_approval_ids;
         withdrawal.operator_approval_roots = operator_approval_roots;
         withdrawal.operator_approvals = operator_approvals;
         withdrawal.finalized_monero_tx_id = Some(finalized_monero_tx_id.to_ascii_lowercase());
         withdrawal.finalization_proof_root = Some(finalization_proof_root.to_ascii_lowercase());
         withdrawal.finalized_at_unix_ms = Some(unix_ms());
+        let finalized = withdrawal.status == "finalized";
+        withdrawal.root = withdrawal_root(withdrawal);
+        validate_withdrawal_for_launch_binding(withdrawal, launch_binding.as_ref())?;
+        Ok(WithdrawalFinalizationReport {
+            finalized,
+            withdrawal: withdrawal.clone(),
+            operator_approval_count: withdrawal.operator_approval_roots.len(),
+            finalization_root: withdrawal.root.clone(),
+        })
+    }
+
+    pub fn settle_withdrawal(
+        &mut self,
+        withdrawal_id: &str,
+    ) -> Result<WithdrawalFinalizationReport, String> {
+        self.ensure_accountability_clean()?;
+        let launch_binding = self.config.launch_binding.clone();
+        let now = unix_ms();
+        let withdrawal = self
+            .withdrawals
+            .get_mut(withdrawal_id)
+            .ok_or_else(|| format!("withdrawal {withdrawal_id} not found"))?;
+        if withdrawal.status != "finalizing" {
+            return Err(format!(
+                "withdrawal {withdrawal_id} status {} cannot be settled",
+                withdrawal.status
+            ));
+        }
+        let deadline = withdrawal
+            .challenge_deadline_unix_ms
+            .ok_or_else(|| format!("withdrawal {withdrawal_id} has no challenge deadline"))?;
+        if now < deadline {
+            return Err(format!(
+                "withdrawal {withdrawal_id} challenge window has not elapsed"
+            ));
+        }
+        withdrawal.status = "finalized".to_string();
+        withdrawal.settled_at_unix_ms = Some(now);
+        withdrawal.challenge_deadline_unix_ms = None;
         withdrawal.root = withdrawal_root(withdrawal);
         validate_withdrawal_for_launch_binding(withdrawal, launch_binding.as_ref())?;
         Ok(WithdrawalFinalizationReport {
             finalized: true,
+            withdrawal: withdrawal.clone(),
+            operator_approval_count: withdrawal.operator_approval_roots.len(),
+            finalization_root: withdrawal.root.clone(),
+        })
+    }
+
+    pub fn challenge_withdrawal(
+        &mut self,
+        withdrawal_id: &str,
+        challenge_evidence_root: &str,
+    ) -> Result<WithdrawalFinalizationReport, String> {
+        self.ensure_accountability_clean()?;
+        validate_fixed_hex(challenge_evidence_root, "challenge_evidence_root", 64)?;
+        let launch_binding = self.config.launch_binding.clone();
+        let now = unix_ms();
+        let (account, amount, deadline) = {
+            let withdrawal = self
+                .withdrawals
+                .get(withdrawal_id)
+                .ok_or_else(|| format!("withdrawal {withdrawal_id} not found"))?;
+            if withdrawal.status != "finalizing" {
+                return Err(format!(
+                    "withdrawal {withdrawal_id} status {} cannot be challenged",
+                    withdrawal.status
+                ));
+            }
+            let deadline = withdrawal
+                .challenge_deadline_unix_ms
+                .ok_or_else(|| format!("withdrawal {withdrawal_id} has no challenge deadline"))?;
+            (
+                withdrawal.account.clone(),
+                withdrawal.amount_nxmr_units,
+                deadline,
+            )
+        };
+        if now >= deadline {
+            return Err(format!(
+                "withdrawal {withdrawal_id} challenge window has already elapsed"
+            ));
+        }
+        let refunded = self
+            .accounts
+            .entry(account)
+            .or_insert_with(RuntimeAccount::empty);
+        refunded.nxmr_units = refunded
+            .nxmr_units
+            .checked_add(amount)
+            .ok_or_else(|| "challenge refund nXMR credit overflowed".to_string())?;
+        let withdrawal = self
+            .withdrawals
+            .get_mut(withdrawal_id)
+            .expect("withdrawal exists");
+        withdrawal.status = "reverted".to_string();
+        withdrawal.reverted_at_unix_ms = Some(now);
+        withdrawal.challenge_evidence_root = Some(challenge_evidence_root.to_ascii_lowercase());
+        withdrawal.challenge_deadline_unix_ms = None;
+        withdrawal.root = withdrawal_root(withdrawal);
+        validate_withdrawal_for_launch_binding(withdrawal, launch_binding.as_ref())?;
+        Ok(WithdrawalFinalizationReport {
+            finalized: false,
             withdrawal: withdrawal.clone(),
             operator_approval_count: withdrawal.operator_approval_roots.len(),
             finalization_root: withdrawal.root.clone(),
@@ -4505,6 +4801,7 @@ impl NebulaRuntime {
             &self.shielded_notes,
             &self.note_commitments,
             &self.nullifiers,
+            &self.bridge_bonds,
         )
     }
 }
@@ -5811,6 +6108,80 @@ fn dispatch_json_rpc_method(
             };
             Ok(json!(report))
         }
+        "nebula_postBridgeBond" => {
+            ensure_admin_rpc(state, &params, method)?;
+            ensure_block_producer(state)?;
+            let participant_id = required_str_param(&params, "participant_id")?;
+            let role = required_str_param(&params, "role")?;
+            let public_key_hex = required_str_param(&params, "public_key_hex")?;
+            let funding_account = required_str_param(&params, "funding_account")?;
+            let bond_nebulai = required_u128_param(&params, "bond_nebulai")?;
+            let signature = required_str_param(&params, "signature")?;
+            let bond = {
+                let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+                runtime.post_bridge_bond(
+                    &participant_id,
+                    &role,
+                    &public_key_hex,
+                    &funding_account,
+                    bond_nebulai,
+                    &signature,
+                )?
+            };
+            state.commit_direct_state_mutation()?;
+            state.persist()?;
+            Ok(json!(bond))
+        }
+        "nebula_slashBridgeParticipant" => {
+            ensure_admin_rpc(state, &params, method)?;
+            ensure_block_producer(state)?;
+            let participant_id = required_str_param(&params, "participant_id")?;
+            let slash_evidence_root = required_str_param(&params, "slash_evidence_root")?;
+            let bond = {
+                let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+                runtime.slash_bridge_participant(&participant_id, &slash_evidence_root)?
+            };
+            state.commit_direct_state_mutation()?;
+            state.persist()?;
+            Ok(json!(bond))
+        }
+        "nebula_unbondBridgeParticipant" => {
+            ensure_admin_rpc(state, &params, method)?;
+            ensure_block_producer(state)?;
+            let participant_id = required_str_param(&params, "participant_id")?;
+            let bond = {
+                let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+                runtime.unbond_bridge_participant(&participant_id)?
+            };
+            state.commit_direct_state_mutation()?;
+            state.persist()?;
+            Ok(json!(bond))
+        }
+        "nebula_settleWithdrawal" => {
+            ensure_admin_rpc(state, &params, method)?;
+            ensure_block_producer(state)?;
+            let withdrawal_id = required_str_param(&params, "withdrawal_id")?;
+            let report = {
+                let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+                runtime.settle_withdrawal(&withdrawal_id)?
+            };
+            state.commit_direct_state_mutation()?;
+            state.persist()?;
+            Ok(json!(report))
+        }
+        "nebula_challengeWithdrawal" => {
+            ensure_admin_rpc(state, &params, method)?;
+            ensure_block_producer(state)?;
+            let withdrawal_id = required_str_param(&params, "withdrawal_id")?;
+            let challenge_evidence_root = required_str_param(&params, "challenge_evidence_root")?;
+            let report = {
+                let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+                runtime.challenge_withdrawal(&withdrawal_id, &challenge_evidence_root)?
+            };
+            state.commit_direct_state_mutation()?;
+            state.persist()?;
+            Ok(json!(report))
+        }
         "nebula_rotateSequencerKey" => {
             ensure_admin_rpc(state, &params, method)?;
             ensure_block_producer(state)?;
@@ -5886,6 +6257,12 @@ fn is_admin_rpc_method(method: &str) -> bool {
             | "nebula_rotateSequencerKey"
             | "nebula_reportEquivocation"
             | "nebula_produceBlock"
+            | "nebula_verifyCustody"
+            | "nebula_postBridgeBond"
+            | "nebula_slashBridgeParticipant"
+            | "nebula_unbondBridgeParticipant"
+            | "nebula_settleWithdrawal"
+            | "nebula_challengeWithdrawal"
     )
 }
 
@@ -6346,6 +6723,7 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
         &snapshot.shielded_notes,
         &snapshot.note_commitments,
         &snapshot.nullifiers,
+        &snapshot.bridge_bonds,
     );
     if snapshot.state_root != expected_state_root {
         return Err("snapshot state_root does not match snapshot state".to_string());
@@ -6375,6 +6753,10 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
         ));
     }
     reexecute_replayable_state(snapshot)?;
+    validate_bridge_bonds(
+        &snapshot.bridge_bonds,
+        snapshot.config.launch_binding.as_ref(),
+    )?;
     Ok(())
 }
 
@@ -6616,8 +6998,10 @@ fn nxmr_custody_reconciliation(
         sum.checked_add(account.nxmr_units)
             .ok_or_else(|| "account nXMR accounting overflowed".to_string())
     })?;
-    let withdrawal_reserved_nxmr_units =
-        withdrawals.values().try_fold(0u128, |sum, withdrawal| {
+    let withdrawal_reserved_nxmr_units = withdrawals
+        .values()
+        .filter(|withdrawal| withdrawal.status != "reverted")
+        .try_fold(0u128, |sum, withdrawal| {
             sum.checked_add(withdrawal.amount_nxmr_units)
                 .ok_or_else(|| "withdrawal nXMR accounting overflowed".to_string())
         })?;
@@ -6906,7 +7290,7 @@ fn validate_withdrawal_for_launch_binding(
                 ));
             }
         }
-        "finalized" => {
+        "finalized" | "finalizing" | "reverted" => {
             validate_identity_root_quorum(
                 &withdrawal.operator_approval_ids,
                 &withdrawal.operator_approval_roots,
@@ -7469,6 +7853,13 @@ fn block_cosigner_quorum(binding: Option<&RuntimeLaunchBinding>) -> usize {
     binding
         .and_then(|b| b.quorum_policy.as_ref())
         .and_then(|p| p.block_cosigner)
+        .unwrap_or(0)
+}
+
+fn withdrawal_challenge_window_ms(binding: Option<&RuntimeLaunchBinding>) -> u128 {
+    binding
+        .and_then(|b| b.quorum_policy.as_ref())
+        .and_then(|p| p.withdrawal_challenge_window_ms)
         .unwrap_or(0)
 }
 
@@ -8307,6 +8698,10 @@ pub fn withdrawal_pending_root(withdrawal: &RuntimeWithdrawalRequest) -> String 
     pending.finalized_monero_tx_id = None;
     pending.finalization_proof_root = None;
     pending.finalized_at_unix_ms = None;
+    pending.challenge_deadline_unix_ms = None;
+    pending.settled_at_unix_ms = None;
+    pending.reverted_at_unix_ms = None;
+    pending.challenge_evidence_root = None;
     pending.root = String::new();
     withdrawal_root(&pending)
 }
@@ -8405,7 +8800,7 @@ pub fn sequencer_key_rotation_approval_root(
 }
 
 fn withdrawal_root(withdrawal: &RuntimeWithdrawalRequest) -> String {
-    stable_runtime_root(&json!({
+    let mut value = json!({
         "withdrawal_domain": "nebula-runtime-monero-withdrawal-v1",
         "withdrawal_id": withdrawal.withdrawal_id,
         "account": withdrawal.account,
@@ -8422,7 +8817,131 @@ fn withdrawal_root(withdrawal: &RuntimeWithdrawalRequest) -> String {
         "finalized_monero_tx_id": withdrawal.finalized_monero_tx_id,
         "finalization_proof_root": withdrawal.finalization_proof_root,
         "finalized_at_unix_ms": withdrawal.finalized_at_unix_ms,
+    });
+    if let Some(deadline) = withdrawal.challenge_deadline_unix_ms {
+        value["challenge_deadline_unix_ms"] = json!(deadline);
+    }
+    if let Some(settled) = withdrawal.settled_at_unix_ms {
+        value["settled_at_unix_ms"] = json!(settled);
+    }
+    if let Some(reverted) = withdrawal.reverted_at_unix_ms {
+        value["reverted_at_unix_ms"] = json!(reverted);
+    }
+    if let Some(evidence) = &withdrawal.challenge_evidence_root {
+        value["challenge_evidence_root"] = json!(evidence);
+    }
+    stable_runtime_root(&value)
+}
+
+fn bond_root(bond: &RuntimeBridgeBond) -> String {
+    let mut value = json!({
+        "bond_domain": "nebula-runtime-bridge-bond-v1",
+        "participant_id": bond.participant_id,
+        "role": bond.role,
+        "public_key_hex": bond.public_key_hex,
+        "bond_nebulai": bond.bond_nebulai,
+        "status": bond.status,
+        "funding_account": bond.funding_account,
+        "posted_at_unix_ms": bond.posted_at_unix_ms,
+    });
+    if let Some(slashed) = bond.slashed_at_unix_ms {
+        value["slashed_at_unix_ms"] = json!(slashed);
+    }
+    if let Some(evidence) = &bond.slash_evidence_root {
+        value["slash_evidence_root"] = json!(evidence);
+    }
+    stable_runtime_root(&value)
+}
+
+fn bond_authorization_root(
+    participant_id: &str,
+    role: &str,
+    public_key_hex: &str,
+    funding_account: &str,
+    bond_nebulai: u128,
+) -> String {
+    stable_runtime_root(&json!({
+        "bond_authorization_domain": "nebula-runtime-bridge-bond-authorization-v1",
+        "participant_id": participant_id,
+        "role": role,
+        "public_key_hex": public_key_hex,
+        "funding_account": funding_account,
+        "bond_nebulai": bond_nebulai,
     }))
+}
+
+fn validate_bridge_bonds(
+    bonds: &BTreeMap<String, RuntimeBridgeBond>,
+    launch_binding: Option<&RuntimeLaunchBinding>,
+) -> Result<(), String> {
+    if bonds.is_empty() {
+        return Ok(());
+    }
+    let binding =
+        launch_binding.ok_or_else(|| "bridge bonds require a launch binding".to_string())?;
+    let operators = launch_bridge_operator_key_map(binding);
+    let observers = launch_bridge_observer_key_map(binding);
+    for (key, bond) in bonds {
+        if key != &bond.participant_id.to_ascii_lowercase() {
+            return Err(format!(
+                "bridge bond map key {key} does not match participant_id {}",
+                bond.participant_id
+            ));
+        }
+        if bond.root != bond_root(bond) {
+            return Err(format!(
+                "bridge bond {} root does not match its contents",
+                bond.participant_id
+            ));
+        }
+        let roster_key = match bond.role.as_str() {
+            "operator" => operators.get(key).map(|entry| entry.public_key.clone()),
+            "observer" => observers.get(key).map(|entry| entry.public_key.clone()),
+            other => {
+                return Err(format!(
+                    "bridge bond {} has an invalid role {other}",
+                    bond.participant_id
+                ))
+            }
+        };
+        let roster_key = roster_key.ok_or_else(|| {
+            format!(
+                "bridge bond {} is not in the {} roster",
+                bond.participant_id, bond.role
+            )
+        })?;
+        if !bond.public_key_hex.eq_ignore_ascii_case(&roster_key) {
+            return Err(format!(
+                "bridge bond {} public_key does not match the launch-attested roster key",
+                bond.participant_id
+            ));
+        }
+        match bond.status.as_str() {
+            "active" => {
+                if bond.slashed_at_unix_ms.is_some() || bond.slash_evidence_root.is_some() {
+                    return Err(format!(
+                        "active bridge bond {} must not carry slash fields",
+                        bond.participant_id
+                    ));
+                }
+            }
+            "slashed" => {
+                if bond.slashed_at_unix_ms.is_none() || bond.slash_evidence_root.is_none() {
+                    return Err(format!(
+                        "slashed bridge bond {} must carry slash fields",
+                        bond.participant_id
+                    ));
+                }
+            }
+            other => {
+                return Err(format!(
+                    "bridge bond {} has an invalid status {other}",
+                    bond.participant_id
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 fn sequencer_key_rotation_root(rotation: &RuntimeSequencerKeyRotation) -> String {
@@ -8500,6 +9019,7 @@ fn runtime_state_root(
     shielded_notes: &BTreeSet<String>,
     note_commitments: &BTreeSet<String>,
     nullifiers: &BTreeSet<String>,
+    bridge_bonds: &BTreeMap<String, RuntimeBridgeBond>,
 ) -> String {
     let mut value = json!({
         "state_domain": "nebula-runtime-state-v1",
@@ -8518,6 +9038,9 @@ fn runtime_state_root(
     }
     if !nullifiers.is_empty() {
         value["nullifiers"] = json!(nullifiers);
+    }
+    if !bridge_bonds.is_empty() {
+        value["bridge_bonds"] = json!(bridge_bonds);
     }
     stable_runtime_root(&value)
 }
@@ -8550,6 +9073,9 @@ fn snapshot_root(snapshot: &RuntimeSnapshot) -> String {
     }
     if !snapshot.nullifiers.is_empty() {
         value["nullifiers"] = json!(snapshot.nullifiers);
+    }
+    if !snapshot.bridge_bonds.is_empty() {
+        value["bridge_bonds"] = json!(snapshot.bridge_bonds);
     }
     stable_runtime_root(&value)
 }
@@ -8853,6 +9379,7 @@ mod tests {
             &snapshot.shielded_notes,
             &snapshot.note_commitments,
             &snapshot.nullifiers,
+            &snapshot.bridge_bonds,
         );
         let latest = snapshot
             .blocks
@@ -9159,6 +9686,7 @@ mod tests {
             &snapshot.shielded_notes,
             &snapshot.note_commitments,
             &snapshot.nullifiers,
+            &snapshot.bridge_bonds,
         )
     }
 
@@ -11593,6 +12121,185 @@ mod tests {
     }
 
     #[test]
+    fn bridge_bond_post_slash_unbond_lifecycle() {
+        let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
+        let funding = "operator-a-funds".to_string();
+        runtime
+            .accounts
+            .entry(funding.clone())
+            .or_insert_with(RuntimeAccount::empty)
+            .nbla_nebulai = MIN_BRIDGE_OPERATOR_BOND_NEBULAI * 2;
+
+        let public_key = test_public_key_hex(0xa1);
+        let auth = bond_authorization_root(
+            "operator-a",
+            "operator",
+            &public_key,
+            &funding,
+            MIN_BRIDGE_OPERATOR_BOND_NEBULAI,
+        );
+        let signature = sign_root_with_seed(0xa1, &auth);
+        let bond = runtime
+            .post_bridge_bond(
+                "operator-a",
+                "operator",
+                &public_key,
+                &funding,
+                MIN_BRIDGE_OPERATOR_BOND_NEBULAI,
+                &signature,
+            )
+            .unwrap();
+        assert_eq!(bond.status, "active");
+        assert_eq!(
+            runtime.accounts.get(&funding).unwrap().nbla_nebulai,
+            MIN_BRIDGE_OPERATOR_BOND_NEBULAI
+        );
+
+        let low_auth = bond_authorization_root(
+            "operator-a",
+            "operator",
+            &public_key,
+            &funding,
+            MIN_BRIDGE_OPERATOR_BOND_NEBULAI - 1,
+        );
+        let low_sig = sign_root_with_seed(0xa1, &low_auth);
+        assert!(runtime
+            .post_bridge_bond(
+                "operator-a",
+                "operator",
+                &public_key,
+                &funding,
+                MIN_BRIDGE_OPERATOR_BOND_NEBULAI - 1,
+                &low_sig,
+            )
+            .is_err());
+        assert!(runtime
+            .post_bridge_bond(
+                "operator-a",
+                "operator",
+                &public_key,
+                &funding,
+                MIN_BRIDGE_OPERATOR_BOND_NEBULAI,
+                &signature,
+            )
+            .is_err());
+
+        runtime.produce_block();
+        validate_snapshot(&runtime.export_snapshot()).unwrap();
+
+        let slashed = runtime
+            .slash_bridge_participant("operator-a", &"c".repeat(64))
+            .unwrap();
+        assert_eq!(slashed.status, "slashed");
+        assert!(runtime
+            .slash_bridge_participant("operator-a", &"c".repeat(64))
+            .is_err());
+
+        let pk_b = test_public_key_hex(0xa2);
+        let auth_b = bond_authorization_root(
+            "operator-b",
+            "operator",
+            &pk_b,
+            &funding,
+            MIN_BRIDGE_OPERATOR_BOND_NEBULAI,
+        );
+        let sig_b = sign_root_with_seed(0xa2, &auth_b);
+        runtime
+            .post_bridge_bond(
+                "operator-b",
+                "operator",
+                &pk_b,
+                &funding,
+                MIN_BRIDGE_OPERATOR_BOND_NEBULAI,
+                &sig_b,
+            )
+            .unwrap();
+        let before = runtime.accounts.get(&funding).unwrap().nbla_nebulai;
+        runtime.unbond_bridge_participant("operator-b").unwrap();
+        assert_eq!(
+            runtime.accounts.get(&funding).unwrap().nbla_nebulai,
+            before + MIN_BRIDGE_OPERATOR_BOND_NEBULAI
+        );
+
+        runtime.produce_block();
+        validate_snapshot(&runtime.export_snapshot()).unwrap();
+    }
+
+    #[test]
+    fn withdrawal_challenge_window_settles_and_reverts() {
+        const ADDR: &str = "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY";
+        let mut config = runtime_config_with_launch_binding();
+        config.launch_binding.as_mut().unwrap().quorum_policy = Some(RuntimeQuorumPolicy {
+            bridge_deposit_observer: MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM,
+            bridge_withdrawal_operator: MIN_WITHDRAWAL_OPERATOR_QUORUM,
+            sequencer_rotation_operator: MIN_SEQUENCER_ROTATION_OPERATOR_QUORUM,
+            block_cosigner: None,
+            withdrawal_challenge_window_ms: Some(3_600_000),
+        });
+
+        let setup = || {
+            let mut runtime = NebulaRuntime::new(config.clone()).unwrap();
+            runtime
+                .observe_bridge_deposit(signed_test_bridge_deposit('7', '8'))
+                .unwrap();
+            let withdrawal = runtime
+                .request_withdrawal(
+                    &test_account_id(),
+                    ADDR,
+                    2_000,
+                    0,
+                    &test_withdrawal_signature(ADDR, 2_000, 0),
+                )
+                .unwrap()
+                .withdrawal;
+            let finalized_tx_id = "f".repeat(64);
+            let proof_root = "1".repeat(64);
+            let (ids, roots, apprs) =
+                test_operator_approval_quorum(&withdrawal, &finalized_tx_id, &proof_root);
+            let report = runtime
+                .finalize_withdrawal(
+                    &withdrawal.withdrawal_id,
+                    &finalized_tx_id,
+                    &proof_root,
+                    ids,
+                    roots,
+                    apprs,
+                    None,
+                )
+                .unwrap();
+            (runtime, withdrawal.withdrawal_id, report)
+        };
+
+        let (mut runtime, id, report) = setup();
+        assert!(!report.finalized);
+        assert_eq!(runtime.withdrawals.get(&id).unwrap().status, "finalizing");
+        assert!(runtime.settle_withdrawal(&id).is_err());
+        runtime
+            .withdrawals
+            .get_mut(&id)
+            .unwrap()
+            .challenge_deadline_unix_ms = Some(1);
+        let settled = runtime.settle_withdrawal(&id).unwrap();
+        assert!(settled.finalized);
+        assert_eq!(runtime.withdrawals.get(&id).unwrap().status, "finalized");
+
+        let (mut runtime, id, _) = setup();
+        let before = runtime
+            .account(&test_account_id())
+            .map(|account| account.nxmr_units)
+            .unwrap_or(0);
+        let reverted = runtime.challenge_withdrawal(&id, &"a".repeat(64)).unwrap();
+        assert!(!reverted.finalized);
+        assert_eq!(runtime.withdrawals.get(&id).unwrap().status, "reverted");
+        assert_eq!(
+            runtime.account(&test_account_id()).unwrap().nxmr_units,
+            before + 2_000
+        );
+        runtime.produce_block();
+        validate_snapshot(&runtime.export_snapshot()).unwrap();
+    }
+
+    #[test]
     fn verify_on_chain_custody_compares_against_wallet_balance() {
         use nebula_monero::verify::{MoneroRpc, WalletTxProof};
 
@@ -11657,6 +12364,7 @@ mod tests {
             bridge_withdrawal_operator: 4,
             sequencer_rotation_operator: 5,
             block_cosigner: None,
+            withdrawal_challenge_window_ms: None,
         });
         assert_eq!(observer_quorum(Some(&binding)), 3);
         assert_eq!(operator_quorum(Some(&binding)), 4);
