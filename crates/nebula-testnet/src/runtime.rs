@@ -214,6 +214,23 @@ impl RuntimeConfig {
     }
 }
 
+fn reward_account_for_validator(
+    binding: Option<&RuntimeLaunchBinding>,
+    validator_id: &str,
+) -> String {
+    if let Some(binding) = binding {
+        if let Some(reward_account) = binding
+            .validator_reward_accounts
+            .iter()
+            .find(|account| account.validator_id.eq_ignore_ascii_case(validator_id))
+            .map(|account| account.reward_account.clone())
+        {
+            return reward_account;
+        }
+    }
+    format!("{VALIDATOR_REWARD_ACCOUNT_PREFIX}{validator_id}")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeBridgeOperatorKey {
@@ -405,6 +422,10 @@ impl RuntimeLaunchBinding {
                     self.validator_cosigner_keys.len(),
                     "block_cosigner",
                 )?;
+                return Err(
+                    "block_cosigner quorum cannot be enabled: block production does not gather co-signatures yet, so a configured value would halt the chain"
+                        .to_string(),
+                );
             }
         }
         let mut cosigner_ids = BTreeSet::new();
@@ -6762,7 +6783,9 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
 
 fn reexecute_replayable_state(snapshot: &RuntimeSnapshot) -> Result<(), String> {
     let mut nxmr_ledger: BTreeMap<String, i128> = BTreeMap::new();
+    let mut points_ledger: BTreeMap<String, u128> = BTreeMap::new();
     let mut validator_points_total: u128 = 0;
+    let binding = snapshot.config.launch_binding.as_ref();
 
     fn credit(ledger: &mut BTreeMap<String, i128>, id: &str, delta: i128) -> Result<(), String> {
         let entry = ledger.entry(id.to_string()).or_insert(0);
@@ -6786,6 +6809,7 @@ fn reexecute_replayable_state(snapshot: &RuntimeSnapshot) -> Result<(), String> 
         credit(&mut nxmr_ledger, &withdrawal.account, -amount)?;
     }
     for block in &snapshot.blocks {
+        let reward_account = reward_account_for_validator(binding, &block.producer);
         for tx in &block.transactions {
             let fee_asset = tx.fee_asset_kind()?;
             let quote = quote_hybrid_fee(
@@ -6798,6 +6822,10 @@ fn reexecute_replayable_state(snapshot: &RuntimeSnapshot) -> Result<(), String> 
             validator_points_total = validator_points_total
                 .checked_add(quote.validator_points)
                 .ok_or_else(|| "re-executed validator points overflowed".to_string())?;
+            let points_entry = points_ledger.entry(reward_account.clone()).or_insert(0);
+            *points_entry = points_entry
+                .checked_add(quote.validator_points)
+                .ok_or_else(|| "re-executed validator points ledger overflowed".to_string())?;
             if fee_asset == FeeAsset::NXmr {
                 let paid = i128::try_from(quote.paid_amount_units)
                     .map_err(|_| "nXMR fee exceeds the re-execution range".to_string())?;
@@ -6824,6 +6852,22 @@ fn reexecute_replayable_state(snapshot: &RuntimeSnapshot) -> Result<(), String> 
         }
     }
 
+    for (id, account) in &snapshot.accounts {
+        let expected_points = *points_ledger.get(id).unwrap_or(&0);
+        if account.validator_points != expected_points {
+            return Err(format!(
+                "re-executed validator points for account {id} expected {expected_points} but state has {}",
+                account.validator_points
+            ));
+        }
+    }
+    for (id, points) in &points_ledger {
+        if *points != 0 && !snapshot.accounts.contains_key(id) {
+            return Err(format!(
+                "re-executed validator points for account {id} is {points} but no account entry exists"
+            ));
+        }
+    }
     let points_in_state = snapshot.accounts.values().try_fold(0u128, |sum, account| {
         sum.checked_add(account.validator_points)
             .ok_or_else(|| "validator points state sum overflowed".to_string())
@@ -7291,6 +7335,48 @@ fn validate_withdrawal_for_launch_binding(
             }
         }
         "finalized" | "finalizing" | "reverted" => {
+            match withdrawal.status.as_str() {
+                "finalizing" => {
+                    if withdrawal.challenge_deadline_unix_ms.is_none() {
+                        return Err(format!(
+                            "finalizing withdrawal {} must carry a challenge_deadline_unix_ms",
+                            withdrawal.withdrawal_id
+                        ));
+                    }
+                    if withdrawal.settled_at_unix_ms.is_some()
+                        || withdrawal.reverted_at_unix_ms.is_some()
+                    {
+                        return Err(format!(
+                            "finalizing withdrawal {} must not carry settle/revert fields",
+                            withdrawal.withdrawal_id
+                        ));
+                    }
+                }
+                "reverted" => {
+                    if withdrawal.reverted_at_unix_ms.is_none()
+                        || withdrawal.challenge_evidence_root.is_none()
+                    {
+                        return Err(format!(
+                            "reverted withdrawal {} must carry revert fields",
+                            withdrawal.withdrawal_id
+                        ));
+                    }
+                    if withdrawal.challenge_deadline_unix_ms.is_some() {
+                        return Err(format!(
+                            "reverted withdrawal {} must not carry a challenge_deadline_unix_ms",
+                            withdrawal.withdrawal_id
+                        ));
+                    }
+                }
+                _ => {
+                    if withdrawal.challenge_deadline_unix_ms.is_some() {
+                        return Err(format!(
+                            "finalized withdrawal {} must not carry a challenge_deadline_unix_ms",
+                            withdrawal.withdrawal_id
+                        ));
+                    }
+                }
+            }
             validate_identity_root_quorum(
                 &withdrawal.operator_approval_ids,
                 &withdrawal.operator_approval_roots,
@@ -8916,6 +9002,17 @@ fn validate_bridge_bonds(
                 bond.participant_id
             ));
         }
+        let min_bond = if bond.role == "operator" {
+            MIN_BRIDGE_OPERATOR_BOND_NEBULAI
+        } else {
+            MIN_BRIDGE_OBSERVER_BOND_NEBULAI
+        };
+        if bond.bond_nebulai < min_bond {
+            return Err(format!(
+                "bridge bond {} is below the {} minimum {min_bond}",
+                bond.participant_id, bond.role
+            ));
+        }
         match bond.status.as_str() {
             "active" => {
                 if bond.slashed_at_unix_ms.is_some() || bond.slash_evidence_root.is_some() {
@@ -9847,6 +9944,52 @@ mod tests {
     }
 
     #[test]
+    fn reexec_rejects_redistributed_validator_points() {
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        let account = test_account_id();
+        runtime.faucet(&account).unwrap();
+        let tx = sign_test_transaction(RuntimeTransaction {
+            from: account,
+            to: "redistribution-recipient".to_string(),
+            amount_nebulai: 10,
+            gas_units: 5,
+            gas_price_nebulai: 2,
+            fee_asset: NBLA_SYMBOL.to_string(),
+            nonce: 0,
+            signature: String::new(),
+            memo: None,
+        });
+        runtime.submit_transaction(tx).unwrap();
+        runtime.produce_block();
+        let mut snapshot = runtime.export_snapshot();
+        assert!(validate_snapshot(&snapshot).is_ok());
+
+        let reward = reward_account_for_validator(
+            snapshot.config.launch_binding.as_ref(),
+            &snapshot.blocks.last().unwrap().producer,
+        );
+        let stolen = snapshot
+            .accounts
+            .get(&reward)
+            .map(|account| account.validator_points)
+            .unwrap_or(0);
+        assert!(
+            stolen > 0,
+            "reward account must have earned validator points"
+        );
+        snapshot.accounts.get_mut(&reward).unwrap().validator_points = 0;
+        snapshot
+            .accounts
+            .entry("mallory".to_string())
+            .or_insert_with(RuntimeAccount::empty)
+            .validator_points = stolen;
+        refresh_default_signed_snapshot_roots(&mut snapshot);
+
+        let error = validate_snapshot(&snapshot).unwrap_err();
+        assert!(error.contains("re-executed validator points"), "{error}");
+    }
+
+    #[test]
     fn co_signatures_do_not_change_block_hash() {
         let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
         runtime.faucet("alice").unwrap();
@@ -9911,6 +10054,30 @@ mod tests {
             },
         ];
         assert!(verify_block_cosigner_quorum(&tampered, &roster, 2).is_err());
+    }
+
+    #[test]
+    fn launch_binding_rejects_enabled_block_cosigner() {
+        let mut binding = test_launch_binding();
+        binding.validator_cosigner_keys = vec![RuntimeValidatorCosignerKey {
+            validator_id: "validator-a".to_string(),
+            public_key: public_key_hex_for_secret(&"41".repeat(32)).unwrap(),
+        }];
+        binding.quorum_policy = Some(RuntimeQuorumPolicy {
+            bridge_deposit_observer: MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM,
+            bridge_withdrawal_operator: MIN_WITHDRAWAL_OPERATOR_QUORUM,
+            sequencer_rotation_operator: MIN_SEQUENCER_ROTATION_OPERATOR_QUORUM,
+            block_cosigner: Some(1),
+            withdrawal_challenge_window_ms: None,
+        });
+
+        let error = binding
+            .validate_against_config(&RuntimeConfig::public_testnet_default())
+            .unwrap_err();
+        assert!(
+            error.contains("block production does not gather"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -12223,6 +12390,47 @@ mod tests {
 
         runtime.produce_block();
         validate_snapshot(&runtime.export_snapshot()).unwrap();
+    }
+
+    #[test]
+    fn validate_bridge_bonds_rejects_below_minimum_injected_bond() {
+        let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
+        let funding = "operator-a-funds".to_string();
+        runtime
+            .accounts
+            .entry(funding.clone())
+            .or_insert_with(RuntimeAccount::empty)
+            .nbla_nebulai = MIN_BRIDGE_OPERATOR_BOND_NEBULAI * 2;
+
+        let public_key = test_public_key_hex(0xa1);
+        let auth = bond_authorization_root(
+            "operator-a",
+            "operator",
+            &public_key,
+            &funding,
+            MIN_BRIDGE_OPERATOR_BOND_NEBULAI,
+        );
+        let signature = sign_root_with_seed(0xa1, &auth);
+        runtime
+            .post_bridge_bond(
+                "operator-a",
+                "operator",
+                &public_key,
+                &funding,
+                MIN_BRIDGE_OPERATOR_BOND_NEBULAI,
+                &signature,
+            )
+            .unwrap();
+
+        {
+            let bond = runtime.bridge_bonds.get_mut("operator-a").unwrap();
+            bond.bond_nebulai = MIN_BRIDGE_OPERATOR_BOND_NEBULAI - 1;
+            bond.root = bond_root(bond);
+        }
+        runtime.produce_block();
+
+        let error = validate_snapshot(&runtime.export_snapshot()).unwrap_err();
+        assert!(error.contains("below the operator minimum"), "{error}");
     }
 
     #[test]

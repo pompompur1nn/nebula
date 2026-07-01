@@ -29,7 +29,10 @@ fn security_doc_constants_match_code() {
     let security = repo_file("SECURITY.md");
 
     assert_eq!(nebula_testnet::runtime::MIN_BRIDGE_CONFIRMATIONS, 10);
-    assert_eq!(nebula_testnet::runtime::MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM, 2);
+    assert_eq!(
+        nebula_testnet::runtime::MIN_BRIDGE_DEPOSIT_OBSERVER_QUORUM,
+        2
+    );
     assert_eq!(nebula_testnet::runtime::MIN_WITHDRAWAL_OPERATOR_QUORUM, 2);
     assert!(
         !nebula_testnet::runtime::bridge_policy().live_value_enabled,

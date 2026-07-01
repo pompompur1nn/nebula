@@ -31,9 +31,12 @@ with the mitigations Nebula implements and the residual gaps. Read alongside
   nonce+signature binding before nXMR burn, launch-attested operator quorum, replay guards,
   optional on-chain payout proof (`check_tx_key` against the withdrawal address), and a
   configurable **withdrawal challenge window** (`finalizing` → `settle`/`challenge` → `reverted`)
-  that lets a fraudulent finalization be reverted (refunding the user from the slashed operator
-  bond). **Residual:** the window makes the user whole from the bond; it cannot claw back XMR
-  already sent on-chain.
+  that lets a fraudulent finalization be reverted before it settles, restoring the user's own
+  burned nXMR escrow (`challenge_withdrawal`). Operator bond slashing
+  (`slash_bridge_participant`) is a *separate*, unlinked economic penalty — the burned bond is not
+  paid out to the user. **Residual:** the window only helps while the payout has not yet settled;
+  it cannot claw back XMR already sent on-chain, and it does not compensate a user for a payout
+  that both settled and was fraudulent.
 
 ### Compromised sequencer key
 - Can forge state, censor, or halt the chain. **Mitigations:** followers verify the per-height
