@@ -61,8 +61,11 @@ with the mitigations Nebula implements and the residual gaps. Read alongside
   single sequencer — decentralized BFT is future work. Each block that stamps `nxmr` fee routing
   must carry the producing validator's own signed, sequence-numbered fee-preference authorization
   (verified under the launch-attested cosigner key, a key distinct from the sequencer block key),
-  and `validate_snapshot` rejects a stamp without a valid authorization — so the raw sequencer key
-  alone cannot redirect the in-kind nXMR reward.
+  and it must be the authorization *active at that block's height* per the per-validator
+  activation log — so the raw sequencer key can neither forge nor replay a superseded (revoked)
+  authorization to redirect the in-kind nXMR reward. The sequencer can still *delay* processing a
+  preference change (choosing its activation height), but that reduces to the same censorship
+  power the single sequencer already holds and cannot fabricate an unsigned routing choice.
 
 ### Network attacker (MITM on Monero or peer RPC)
 - **Monero RPC:** mitigated by TLS with optional SHA-256 leaf-certificate pinning

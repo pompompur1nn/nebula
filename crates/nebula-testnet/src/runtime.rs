@@ -578,6 +578,14 @@ pub struct RuntimeValidatorFeePreference {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct RuntimeValidatorFeePreferenceActivation {
+    pub validator_id: String,
+    pub activation_height: u64,
+    pub authorization: RuntimeValidatorFeePreference,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeBridgeObserverEvidence {
     pub observer_id: String,
     pub observer_public_key_hex: String,
@@ -749,6 +757,8 @@ pub struct RuntimeSnapshot {
     pub bridge_bonds: BTreeMap<String, RuntimeBridgeBond>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub validator_fee_preferences: BTreeMap<String, RuntimeValidatorFeePreference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validator_fee_preference_log: Vec<RuntimeValidatorFeePreferenceActivation>,
     #[serde(default, skip_serializing_if = "nebula_evm::EvmStateExport::is_empty")]
     pub evm_state: nebula_evm::EvmStateExport,
     pub root: String,
@@ -1207,6 +1217,7 @@ pub struct NebulaRuntime {
     nullifiers: BTreeSet<String>,
     bridge_bonds: BTreeMap<String, RuntimeBridgeBond>,
     validator_fee_preferences: BTreeMap<String, RuntimeValidatorFeePreference>,
+    validator_fee_preference_log: Vec<RuntimeValidatorFeePreferenceActivation>,
     evm: nebula_evm::EvmExecutor,
     monero_bridge: Option<MoneroBridgeVerifier>,
 }
@@ -3322,6 +3333,7 @@ impl NebulaRuntime {
             nullifiers: BTreeSet::new(),
             bridge_bonds: BTreeMap::new(),
             validator_fee_preferences: BTreeMap::new(),
+            validator_fee_preference_log: Vec::new(),
             evm: nebula_evm::EvmExecutor::new(),
             monero_bridge: None,
         };
@@ -3418,6 +3430,7 @@ impl NebulaRuntime {
             nullifiers: snapshot.nullifiers,
             bridge_bonds: snapshot.bridge_bonds,
             validator_fee_preferences: snapshot.validator_fee_preferences,
+            validator_fee_preference_log: snapshot.validator_fee_preference_log,
             evm: nebula_evm::EvmExecutor::import_state(&snapshot.evm_state)
                 .map_err(|error| format!("snapshot EVM state rejected: {error}"))?,
             monero_bridge: None,
@@ -3452,6 +3465,7 @@ impl NebulaRuntime {
             nullifiers: self.nullifiers.clone(),
             bridge_bonds: self.bridge_bonds.clone(),
             validator_fee_preferences: self.validator_fee_preferences.clone(),
+            validator_fee_preference_log: self.validator_fee_preference_log.clone(),
             evm_state: self.evm.export_state(),
             root: String::new(),
         };
@@ -4044,9 +4058,35 @@ impl NebulaRuntime {
             public_key_hex: public_key_hex.to_string(),
             signature: signature.to_string(),
         };
+        let activation_height = self
+            .blocks
+            .last()
+            .map(|block| block.height)
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| "fee preference activation height overflowed".to_string())?;
+        self.validator_fee_preference_log
+            .push(RuntimeValidatorFeePreferenceActivation {
+                validator_id: validator_id.to_string(),
+                activation_height,
+                authorization: entry.clone(),
+            });
         self.validator_fee_preferences
             .insert(validator_id.to_string(), entry.clone());
         Ok(entry)
+    }
+
+    fn active_fee_preference_at(
+        log: &[RuntimeValidatorFeePreferenceActivation],
+        validator_id: &str,
+        height: u64,
+    ) -> Option<RuntimeValidatorFeePreference> {
+        log.iter()
+            .filter(|record| {
+                record.validator_id == validator_id && record.activation_height <= height
+            })
+            .max_by_key(|record| record.authorization.sequence)
+            .map(|record| record.authorization.clone())
     }
 
     pub fn validator_fee_preferences(&self) -> &BTreeMap<String, RuntimeValidatorFeePreference> {
@@ -5378,6 +5418,7 @@ impl NebulaRuntime {
             &self.nullifiers,
             &self.bridge_bonds,
             &self.validator_fee_preferences,
+            &self.validator_fee_preference_log,
             &self.evm.export_state(),
         )
     }
@@ -7270,39 +7311,98 @@ fn validate_fee_preference_key(
     Ok(())
 }
 
+fn validate_fee_preference_authorization(
+    binding: Option<&RuntimeLaunchBinding>,
+    chain_id: &str,
+    validator_id: &str,
+    authorization: &RuntimeValidatorFeePreference,
+) -> Result<(), String> {
+    if authorization.preference != VALIDATOR_FEE_PREFERENCE_NBLA
+        && authorization.preference != VALIDATOR_FEE_PREFERENCE_NXMR
+    {
+        return Err(format!(
+            "snapshot fee preference for {validator_id} has invalid value {}",
+            authorization.preference
+        ));
+    }
+    if authorization.sequence == 0 {
+        return Err(format!(
+            "snapshot fee preference for {validator_id} must have a sequence of at least 1"
+        ));
+    }
+    validate_fee_preference_key(binding, validator_id, &authorization.public_key_hex)?;
+    let authorization_root = fee_preference_authorization_root(
+        chain_id,
+        validator_id,
+        &authorization.preference,
+        authorization.sequence,
+    );
+    verify_scheme_evidence_signature(
+        &authorization.public_key_hex,
+        "fee_preference_public_key",
+        &authorization_root,
+        &authorization.signature,
+        "fee_preference_signature",
+    )
+    .map_err(|error| format!("snapshot fee preference for {validator_id} is not proven: {error}"))
+}
+
 fn validate_validator_fee_preferences(snapshot: &RuntimeSnapshot) -> Result<(), String> {
     let binding = snapshot.config.launch_binding.as_ref();
     for (validator_id, entry) in &snapshot.validator_fee_preferences {
-        if entry.preference != VALIDATOR_FEE_PREFERENCE_NBLA
-            && entry.preference != VALIDATOR_FEE_PREFERENCE_NXMR
-        {
-            return Err(format!(
-                "snapshot fee preference for {validator_id} has invalid value {}",
-                entry.preference
-            ));
-        }
-        if entry.sequence == 0 {
-            return Err(format!(
-                "snapshot fee preference for {validator_id} must have a sequence of at least 1"
-            ));
-        }
-        validate_fee_preference_key(binding, validator_id, &entry.public_key_hex)?;
-        let authorization_root = fee_preference_authorization_root(
+        validate_fee_preference_authorization(
+            binding,
             &snapshot.config.chain_id,
             validator_id,
-            &entry.preference,
-            entry.sequence,
-        );
-        verify_scheme_evidence_signature(
-            &entry.public_key_hex,
-            "fee_preference_public_key",
-            &authorization_root,
-            &entry.signature,
-            "fee_preference_signature",
-        )
-        .map_err(|error| {
-            format!("snapshot fee preference for {validator_id} is not proven: {error}")
-        })?;
+            entry,
+        )?;
+    }
+
+    // The activation log records, per validator, when each signed preference became
+    // effective. Each record must be independently proven, sequences and activation
+    // heights must strictly increase per validator (so an older authorization can never
+    // be reordered ahead of a newer one), and the current registry entry must equal the
+    // latest log record — this is what binds a block's routing to the validator's
+    // *current* intent and defeats replaying a revoked authorization at a later height.
+    let mut latest_by_validator: BTreeMap<&str, &RuntimeValidatorFeePreferenceActivation> =
+        BTreeMap::new();
+    for record in &snapshot.validator_fee_preference_log {
+        validate_fee_preference_authorization(
+            binding,
+            &snapshot.config.chain_id,
+            &record.validator_id,
+            &record.authorization,
+        )?;
+        if let Some(previous) = latest_by_validator.get(record.validator_id.as_str()) {
+            if record.authorization.sequence <= previous.authorization.sequence {
+                return Err(format!(
+                    "fee preference log for {} has non-increasing sequence {}",
+                    record.validator_id, record.authorization.sequence
+                ));
+            }
+            if record.activation_height <= previous.activation_height {
+                return Err(format!(
+                    "fee preference log for {} has non-increasing activation height {}",
+                    record.validator_id, record.activation_height
+                ));
+            }
+        }
+        latest_by_validator.insert(record.validator_id.as_str(), record);
+    }
+    for (validator_id, entry) in &snapshot.validator_fee_preferences {
+        match latest_by_validator.get(validator_id.as_str()) {
+            Some(record) if &record.authorization == entry => {}
+            Some(_) => {
+                return Err(format!(
+                    "fee preference registry entry for {validator_id} does not match the latest log record"
+                ))
+            }
+            None => {
+                return Err(format!(
+                    "fee preference registry entry for {validator_id} has no activation log record"
+                ))
+            }
+        }
     }
     Ok(())
 }
@@ -7386,36 +7486,33 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
                     block.height, authorization.preference
                 ));
             }
-            validate_fee_preference_key(
-                snapshot.config.launch_binding.as_ref(),
+            // Freshness: the carried authorization must be the one that is *active* for the
+            // producer at this block's height per the activation log. This rejects a
+            // sequencer replaying a still-signature-valid but superseded authorization
+            // (e.g. reusing nxmr@seq1 after the validator revoked to nbla@seq2).
+            let active = NebulaRuntime::active_fee_preference_at(
+                &snapshot.validator_fee_preference_log,
                 &block.producer,
-                &authorization.public_key_hex,
+                block.height,
             )
-            .map_err(|error| {
+            .ok_or_else(|| {
                 format!(
-                    "block {} fee_preference authorization key rejected: {error}",
+                    "block {} stamps a fee_preference with no active authorization at that height",
                     block.height
                 )
             })?;
-            let authorization_root = fee_preference_authorization_root(
-                &snapshot.config.chain_id,
-                &block.producer,
-                &authorization.preference,
-                authorization.sequence,
-            );
-            verify_scheme_evidence_signature(
-                &authorization.public_key_hex,
-                "fee_preference_public_key",
-                &authorization_root,
-                &authorization.signature,
-                "fee_preference_signature",
-            )
-            .map_err(|error| {
-                format!(
-                    "block {} fee_preference authorization is not proven: {error}",
+            if &active != authorization {
+                return Err(format!(
+                    "block {} fee_preference authorization is not the one active at that height",
                     block.height
-                )
-            })?;
+                ));
+            }
+            if active.preference != VALIDATOR_FEE_PREFERENCE_NXMR {
+                return Err(format!(
+                    "block {} routes nxmr fees but the active preference is {}",
+                    block.height, active.preference
+                ));
+            }
         } else if block.fee_preference_authorization.is_some() {
             return Err(format!(
                 "block {} carries a fee_preference authorization without a fee_preference stamp",
@@ -7577,6 +7674,7 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
         &snapshot.nullifiers,
         &snapshot.bridge_bonds,
         &snapshot.validator_fee_preferences,
+        &snapshot.validator_fee_preference_log,
         &snapshot.evm_state,
     );
     if snapshot.state_root != expected_state_root {
@@ -10038,6 +10136,7 @@ fn runtime_state_root(
     nullifiers: &BTreeSet<String>,
     bridge_bonds: &BTreeMap<String, RuntimeBridgeBond>,
     validator_fee_preferences: &BTreeMap<String, RuntimeValidatorFeePreference>,
+    validator_fee_preference_log: &[RuntimeValidatorFeePreferenceActivation],
     evm_state: &nebula_evm::EvmStateExport,
 ) -> String {
     let mut value = json!({
@@ -10063,6 +10162,9 @@ fn runtime_state_root(
     }
     if !validator_fee_preferences.is_empty() {
         value["validator_fee_preferences"] = json!(validator_fee_preferences);
+    }
+    if !validator_fee_preference_log.is_empty() {
+        value["validator_fee_preference_log"] = json!(validator_fee_preference_log);
     }
     if !evm_state.is_empty() {
         value["evm_state"] = json!(evm_state);
@@ -10104,6 +10206,9 @@ fn snapshot_root(snapshot: &RuntimeSnapshot) -> String {
     }
     if !snapshot.validator_fee_preferences.is_empty() {
         value["validator_fee_preferences"] = json!(snapshot.validator_fee_preferences);
+    }
+    if !snapshot.validator_fee_preference_log.is_empty() {
+        value["validator_fee_preference_log"] = json!(snapshot.validator_fee_preference_log);
     }
     if !snapshot.evm_state.is_empty() {
         value["evm_state"] = json!(snapshot.evm_state);
@@ -10419,6 +10524,7 @@ mod tests {
             &snapshot.nullifiers,
             &snapshot.bridge_bonds,
             &snapshot.validator_fee_preferences,
+            &snapshot.validator_fee_preference_log,
             &snapshot.evm_state,
         );
         let latest = snapshot
@@ -10728,6 +10834,7 @@ mod tests {
             &snapshot.nullifiers,
             &snapshot.bridge_bonds,
             &snapshot.validator_fee_preferences,
+            &snapshot.validator_fee_preference_log,
             &snapshot.evm_state,
         )
     }
@@ -12450,7 +12557,90 @@ mod tests {
         });
         refresh_default_signed_snapshot_roots(&mut snapshot);
         let error = validate_snapshot(&snapshot).unwrap_err();
-        assert!(error.contains("not proven"), "{error}");
+        assert!(error.contains("no active authorization"), "{error}");
+    }
+
+    #[test]
+    fn validator_can_switch_fee_preference_back_and_forth_and_snapshot_stays_valid() {
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        signed_fee_preference(&mut runtime, VALIDATOR_FEE_PREFERENCE_NXMR, 1).unwrap();
+        let nxmr_block_a = runtime.produce_block();
+        signed_fee_preference(&mut runtime, VALIDATOR_FEE_PREFERENCE_NBLA, 2).unwrap();
+        let nbla_block = runtime.produce_block();
+        signed_fee_preference(&mut runtime, VALIDATOR_FEE_PREFERENCE_NXMR, 3).unwrap();
+        let nxmr_block_b = runtime.produce_block();
+
+        assert_eq!(
+            nxmr_block_a.fee_preference.as_deref(),
+            Some(VALIDATOR_FEE_PREFERENCE_NXMR)
+        );
+        assert!(nbla_block.fee_preference.is_none());
+        assert_eq!(
+            nxmr_block_b.fee_preference.as_deref(),
+            Some(VALIDATOR_FEE_PREFERENCE_NXMR)
+        );
+        assert_eq!(
+            nxmr_block_b
+                .fee_preference_authorization
+                .as_ref()
+                .unwrap()
+                .sequence,
+            3
+        );
+
+        let snapshot = runtime.export_snapshot();
+        validate_snapshot(&snapshot).unwrap();
+        NebulaRuntime::from_snapshot(RuntimeConfig::public_testnet_default(), snapshot).unwrap();
+    }
+
+    #[test]
+    fn validate_snapshot_rejects_replayed_fee_preference_after_revocation() {
+        // Validator opts into nxmr (seq 1), then revokes to nbla (seq 2). A sequencer
+        // that later replays the still-signature-valid seq-1 authorization in a new block
+        // must be rejected, because the active preference at that height is nbla.
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        signed_fee_preference(&mut runtime, VALIDATOR_FEE_PREFERENCE_NXMR, 1).unwrap();
+        runtime.produce_block();
+        let nxmr_authorization = runtime
+            .export_snapshot()
+            .blocks
+            .last()
+            .unwrap()
+            .fee_preference_authorization
+            .clone()
+            .expect("nxmr block carries its authorization");
+        signed_fee_preference(&mut runtime, VALIDATOR_FEE_PREFERENCE_NBLA, 2).unwrap();
+        runtime.produce_block();
+
+        let mut snapshot = runtime.export_snapshot();
+        let parent = snapshot.blocks.last().unwrap();
+        let mut forged = RuntimeBlock {
+            height: parent.height + 1,
+            parent_hash: parent.block_hash.clone(),
+            timestamp_unix_ms: parent.timestamp_unix_ms + 1,
+            producer: runtime.config().validator_id.clone(),
+            producer_public_key: runtime.config().sequencer_public_key_hex.clone(),
+            transactions: Vec::new(),
+            rejected_tx_ids: Vec::new(),
+            tx_root: transaction_root(&[], &[]),
+            state_root: snapshot.state_root.clone(),
+            block_hash: String::new(),
+            signature: String::new(),
+            co_signatures: Vec::new(),
+            fee_preference: Some(VALIDATOR_FEE_PREFERENCE_NXMR.to_string()),
+            fee_preference_authorization: Some(nxmr_authorization),
+        };
+        forged.block_hash = block_root(&forged);
+        forged.signature =
+            sign_block_hash(&forged.block_hash, DEFAULT_DEV_SEQUENCER_SECRET_KEY_HEX).unwrap();
+        snapshot.blocks.push(forged);
+        snapshot.root = snapshot_root(&snapshot);
+
+        let error = validate_snapshot(&snapshot).unwrap_err();
+        assert!(
+            error.contains("not the one active") || error.contains("active preference is"),
+            "{error}"
+        );
     }
 
     #[test]
