@@ -55,6 +55,17 @@ Run the test suite:
 cargo test --workspace -- --test-threads=1
 ```
 
+## Security
+
+Nebula is **experimental testnet software — unaudited, with no mainnet and no real value**, and
+the Monero bridge runs with live value disabled by design. Before relying on anything here, read
+the honest, code-derived [security model](SECURITY.md) and [threat model](THREAT_MODEL.md): they
+document what is cryptographically verified versus merely trusted (a single sequencer whose signed
+state followers re-execute for the nXMR and validator-point columns; a partially-trusted, bonded
+M-of-N Monero bridge), the known limitations (public shielded graph, opt-in and classically-default
+signatures via the unaudited `ml-dsa` 0.1.1 crate), and the scope an external security audit must
+cover.
+
 ## License
 
 This project is licensed under the Nebula Source License. See [LICENSE](https://github.com/pompompur1nn/nebula/blob/master/LICENSE) for details.
