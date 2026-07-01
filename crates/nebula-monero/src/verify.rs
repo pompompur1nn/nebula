@@ -156,12 +156,18 @@ pub trait MoneroRpc {
 
     /// Fetch the raw `tx_extra` bytes of transaction `txid`. Mirrors monerod `get_transactions`.
     fn tx_extra(&self, txid: &str) -> Result<Vec<u8>, String>;
+
+    /// The custody wallet's confirmed, unlocked balance in atomic units (piconero). Mirrors
+    /// monero-wallet-rpc `get_balance` (`unlocked_balance`). Lets the runtime prove the bridge
+    /// multisig actually holds the XMR backing outstanding nXMR, rather than trusting the ledger's
+    /// internal double-entry alone.
+    fn custody_unlocked_balance(&self) -> Result<u128, String>;
 }
 
 /// Verify a deposit by fetching its proof and `tx_extra` through `rpc`, then applying
 /// [`verify_deposit`]. Transport errors are surfaced as `Err(String)`; a well-formed but invalid
 /// deposit is surfaced as `Ok(Err(DepositRejection))`.
-pub fn verify_deposit_via<R: MoneroRpc>(
+pub fn verify_deposit_via<R: MoneroRpc + ?Sized>(
     rpc: &R,
     txid: &str,
     tx_key: &str,
@@ -295,6 +301,9 @@ mod tests {
         }
         fn tx_extra(&self, _: &str) -> Result<Vec<u8>, String> {
             Ok(self.tx_extra.clone())
+        }
+        fn custody_unlocked_balance(&self) -> Result<u128, String> {
+            Ok(0)
         }
     }
 

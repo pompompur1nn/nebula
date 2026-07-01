@@ -494,8 +494,11 @@ name = "nebula-monero"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "rustls",
  "serde_json",
+ "sha2",
  "sha3",
+ "webpki-roots",
 ]
 
 [[package]]

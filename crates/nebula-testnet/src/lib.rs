@@ -8268,6 +8268,7 @@ fn live_bridge_deposit(seed: u8, amount_nxmr_units: u128) -> Value {
         observer_evidence: Vec::new(),
         observed_at_unix_ms: unix_ms(),
         monero_tx_extra_hex: None,
+        monero_tx_key: None,
     };
     let observer_a = live_observer_evidence(&deposit, "observer-us-east-1", 0xb1);
     let observer_b = live_observer_evidence(&deposit, "observer-eu-west-1", 0xb2);

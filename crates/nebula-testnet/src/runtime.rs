@@ -508,6 +508,11 @@ pub struct RuntimeBridgeDeposit {
     /// before crediting nXMR. Absent for legacy deposits (then no binding is required).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub monero_tx_extra_hex: Option<String>,
+    /// Optional Monero transaction secret key for the wallet-rpc `check_tx_key` view-key proof.
+    /// Required when the runtime has a live Monero bridge verifier configured; absent for legacy
+    /// / evidence-only deposits (then the root is unchanged and no node proof is demanded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monero_tx_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -998,6 +1003,47 @@ pub struct AccountabilityReportReceipt {
     pub sequencer_accountability_clean: bool,
 }
 
+/// A live Monero bridge verifier injected into the runtime. When present, every bridge deposit
+/// must be confirmed against a real Monero node (amount, node-sourced confirmations, custody
+/// address, and `tx_extra` account binding) before nXMR is credited — turning the credit path from
+/// trust-by-signature into trust-by-verification. Absent on the evidence-only testnet default.
+#[derive(Clone)]
+pub struct MoneroBridgeVerifier {
+    rpc: Arc<dyn nebula_monero::verify::MoneroRpc + Send + Sync>,
+    custody_address: String,
+}
+
+impl MoneroBridgeVerifier {
+    pub fn new(
+        rpc: Arc<dyn nebula_monero::verify::MoneroRpc + Send + Sync>,
+        custody_address: impl Into<String>,
+    ) -> Self {
+        Self {
+            rpc,
+            custody_address: custody_address.into(),
+        }
+    }
+}
+
+impl std::fmt::Debug for MoneroBridgeVerifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MoneroBridgeVerifier")
+            .field("custody_address", &self.custody_address)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The result of comparing outstanding nXMR liabilities against the live Monero custody balance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustodyOnChainReport {
+    /// nXMR that must be backed (accounts + reserved withdrawals + collected fees), atomic units.
+    pub required_units: u128,
+    /// The custody wallet's confirmed unlocked balance, atomic units.
+    pub on_chain_unlocked_units: u128,
+    /// Whether the on-chain balance covers the required backing.
+    pub sufficient: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct NebulaRuntime {
     config: RuntimeConfig,
@@ -1017,6 +1063,9 @@ pub struct NebulaRuntime {
     accountability_reports: Vec<RuntimeAccountabilityReport>,
     /// Unspent shielded-note commitments (hex). Hidden-amount notes in the confidential pool.
     shielded_notes: BTreeSet<String>,
+    /// Optional live Monero-node deposit verifier. When set, bridge deposits are verified against
+    /// the node before nXMR is credited. Not part of consensus state (excluded from snapshots).
+    monero_bridge: Option<MoneroBridgeVerifier>,
 }
 
 #[derive(Debug, Clone)]
@@ -3028,6 +3077,7 @@ impl NebulaRuntime {
             sequencer_key_rotations: Vec::new(),
             accountability_reports: Vec::new(),
             shielded_notes: BTreeSet::new(),
+            monero_bridge: None,
         };
         runtime.accounts.insert(
             runtime.config.validator_reward_account(),
@@ -3118,6 +3168,7 @@ impl NebulaRuntime {
             sequencer_key_rotations: snapshot.sequencer_key_rotations,
             accountability_reports: snapshot.accountability_reports,
             shielded_notes: snapshot.shielded_notes,
+            monero_bridge: None,
         })
     }
 
@@ -3389,6 +3440,41 @@ impl NebulaRuntime {
         self.receipts.get(tx_id).cloned()
     }
 
+    /// Attach a live Monero bridge verifier so that every subsequent bridge deposit is confirmed
+    /// against a real Monero node (amount, confirmations, custody address, tx_extra account
+    /// binding) before nXMR is credited. Consumes and returns `self` for builder-style setup.
+    pub fn with_monero_bridge(mut self, verifier: MoneroBridgeVerifier) -> Self {
+        self.monero_bridge = Some(verifier);
+        self
+    }
+
+    /// Whether a live Monero-node bridge verifier is configured.
+    pub fn has_monero_bridge(&self) -> bool {
+        self.monero_bridge.is_some()
+    }
+
+    /// Prove, against the live Monero custody wallet, that the bridge holds enough XMR to back all
+    /// outstanding nXMR (accounts + reserved withdrawals + collected fees). Complements the internal
+    /// double-entry reconciliation with a real on-chain balance check. Requires a live bridge.
+    pub fn verify_on_chain_custody(&self) -> Result<CustodyOnChainReport, String> {
+        let verifier = self
+            .monero_bridge
+            .as_ref()
+            .ok_or_else(|| "no live Monero bridge verifier configured".to_string())?;
+        let reconciliation = nxmr_custody_reconciliation(
+            &self.accounts,
+            &self.bridge_deposits,
+            &self.withdrawals,
+            self.total_nxmr_fees_units,
+        )?;
+        let on_chain_unlocked_units = verifier.rpc.custody_unlocked_balance()?;
+        Ok(CustodyOnChainReport {
+            required_units: reconciliation.nxmr_custody_required_units,
+            on_chain_unlocked_units,
+            sufficient: on_chain_unlocked_units >= reconciliation.nxmr_custody_required_units,
+        })
+    }
+
     pub fn observe_bridge_deposit(
         &mut self,
         deposit: RuntimeBridgeDeposit,
@@ -3409,7 +3495,41 @@ impl NebulaRuntime {
                 "bridge deposit requires at least {MIN_BRIDGE_CONFIRMATIONS} confirmations"
             ));
         }
-        if let Some(tx_extra_hex) = &deposit.monero_tx_extra_hex {
+        if let Some(verifier) = &self.monero_bridge {
+            // Live bridge: confirm the deposit against a real Monero node before crediting — the
+            // amount, node-sourced confirmations, custody address, and the tx_extra account binding
+            // must all check out. This replaces trust-by-signature on the mint path.
+            let tx_key = deposit.monero_tx_key.as_deref().ok_or_else(|| {
+                "live Monero bridge requires monero_tx_key for the deposit view-key proof"
+                    .to_string()
+            })?;
+            let claim = nebula_monero::verify::DepositClaim {
+                expected_atomic: deposit.amount_nxmr_units,
+                min_confirmations: MIN_BRIDGE_CONFIRMATIONS,
+                bridge_address: &verifier.custody_address,
+                required_account_binding: Some(deposit.account.as_str()),
+            };
+            match nebula_monero::verify::verify_deposit_via(
+                verifier.rpc.as_ref(),
+                &deposit.monero_tx_id,
+                tx_key,
+                &claim,
+            ) {
+                Ok(Ok(_info)) => {}
+                Ok(Err(rejection)) => {
+                    return Err(format!(
+                        "bridge deposit {} rejected by Monero node: {rejection}",
+                        deposit.monero_tx_id
+                    ));
+                }
+                Err(transport) => {
+                    return Err(format!(
+                        "bridge deposit {} could not be verified against the Monero node: {transport}",
+                        deposit.monero_tx_id
+                    ));
+                }
+            }
+        } else if let Some(tx_extra_hex) = &deposit.monero_tx_extra_hex {
             verify_deposit_account_binding(tx_extra_hex, &deposit.account)?;
         }
         let account = self
@@ -3518,6 +3638,7 @@ impl NebulaRuntime {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn finalize_withdrawal(
         &mut self,
         withdrawal_id: &str,
@@ -3526,6 +3647,7 @@ impl NebulaRuntime {
         operator_approval_ids: Vec<String>,
         operator_approval_roots: Vec<String>,
         operator_approvals: Vec<RuntimeWithdrawalOperatorApproval>,
+        finalized_monero_tx_key: Option<&str>,
     ) -> Result<WithdrawalFinalizationReport, String> {
         self.ensure_accountability_clean()?;
         validate_fixed_hex(finalized_monero_tx_id, "finalized_monero_tx_id", 64)?;
@@ -3567,6 +3689,44 @@ impl NebulaRuntime {
             return Err(format!(
                 "withdrawal finalization proof {finalization_proof_root} already used"
             ));
+        }
+        if let Some(verifier) = self.monero_bridge.clone() {
+            // Live bridge: prove the payout Monero tx actually paid this withdrawal's address the
+            // requested amount (with enough confirmations) before marking it finalized — so a
+            // quorum cannot mark a withdrawal complete without a real, sufficient on-chain payout.
+            let key = finalized_monero_tx_key.ok_or_else(|| {
+                "live Monero bridge requires a finalized_monero_tx_key to prove the payout"
+                    .to_string()
+            })?;
+            let withdrawal = self
+                .withdrawals
+                .get(withdrawal_id)
+                .ok_or_else(|| format!("withdrawal {withdrawal_id} not found"))?;
+            let proof = verifier
+                .rpc
+                .check_tx_key(finalized_monero_tx_id, key, &withdrawal.monero_address)
+                .map_err(|error| {
+                    format!(
+                        "withdrawal payout could not be verified against the Monero node: {error}"
+                    )
+                })?;
+            if proof.in_pool {
+                return Err(format!(
+                    "withdrawal payout tx {finalized_monero_tx_id} is still in the mempool"
+                ));
+            }
+            if proof.confirmations < MIN_BRIDGE_CONFIRMATIONS {
+                return Err(format!(
+                    "withdrawal payout tx {finalized_monero_tx_id} has {} confirmations, needs {MIN_BRIDGE_CONFIRMATIONS}",
+                    proof.confirmations
+                ));
+            }
+            if proof.received_atomic < withdrawal.amount_nxmr_units {
+                return Err(format!(
+                    "withdrawal payout tx {finalized_monero_tx_id} paid {} atomic units, needs at least {}",
+                    proof.received_atomic, withdrawal.amount_nxmr_units
+                ));
+            }
         }
         let launch_binding = self.config.launch_binding.clone();
         let withdrawal = self
@@ -5415,6 +5575,10 @@ fn dispatch_json_rpc_method(
                 &params,
                 "operator_approvals",
             )?;
+            let finalized_monero_tx_key = params
+                .get("finalized_monero_tx_key")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
             let report = {
                 let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
                 runtime.finalize_withdrawal(
@@ -5424,6 +5588,7 @@ fn dispatch_json_rpc_method(
                     operator_approval_ids,
                     operator_approval_roots,
                     operator_approvals,
+                    finalized_monero_tx_key.as_deref(),
                 )?
             };
             state.commit_direct_state_mutation()?;
@@ -8339,6 +8504,7 @@ mod tests {
             observer_evidence: Vec::new(),
             observed_at_unix_ms: 1,
             monero_tx_extra_hex: None,
+            monero_tx_key: None,
         }
     }
 
@@ -10710,6 +10876,211 @@ mod tests {
     }
 
     #[test]
+    fn live_monero_bridge_enforces_node_deposit_verification() {
+        use nebula_monero::verify::{MoneroRpc, WalletTxProof};
+
+        #[derive(Debug)]
+        struct StubRpc {
+            proof: WalletTxProof,
+            tx_extra: Vec<u8>,
+        }
+        impl MoneroRpc for StubRpc {
+            fn check_tx_key(&self, _: &str, _: &str, _: &str) -> Result<WalletTxProof, String> {
+                Ok(self.proof.clone())
+            }
+            fn tx_extra(&self, _: &str) -> Result<Vec<u8>, String> {
+                Ok(self.tx_extra.clone())
+            }
+            fn custody_unlocked_balance(&self) -> Result<u128, String> {
+                Ok(u128::MAX)
+            }
+        }
+
+        // A valid testnet Monero custody address (prefix 53).
+        const CUSTODY: &str = "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY";
+        let account = test_account_id();
+        let make_runtime = |proof: WalletTxProof| {
+            let rpc = std::sync::Arc::new(StubRpc {
+                proof,
+                tx_extra: tx_extra_with_binding(&account),
+            });
+            NebulaRuntime::new(RuntimeConfig::public_testnet_default())
+                .unwrap()
+                .with_monero_bridge(MoneroBridgeVerifier::new(rpc, CUSTODY))
+        };
+        let good_proof = WalletTxProof {
+            received_atomic: 5_000,
+            confirmations: 12,
+            in_pool: false,
+        };
+
+        // The node confirms amount, confirmations, custody address, and account binding: credited.
+        let mut runtime = make_runtime(good_proof.clone());
+        let mut deposit = test_bridge_deposit('5', '6');
+        deposit.account = account.clone();
+        deposit.monero_tx_key = Some("aa".repeat(32));
+        runtime.observe_bridge_deposit(deposit).unwrap();
+
+        // Missing the view-key proof key: the live bridge refuses to credit.
+        let mut runtime = make_runtime(good_proof);
+        let mut no_key = test_bridge_deposit('7', '8');
+        no_key.account = account.clone();
+        assert!(runtime.observe_bridge_deposit(no_key).is_err());
+
+        // The node reports a different amount: rejected, so no phantom nXMR is minted.
+        let mut runtime = make_runtime(WalletTxProof {
+            received_atomic: 999,
+            confirmations: 12,
+            in_pool: false,
+        });
+        let mut wrong_amount = test_bridge_deposit('9', 'a');
+        wrong_amount.account = account.clone();
+        wrong_amount.monero_tx_key = Some("bb".repeat(32));
+        assert!(runtime.observe_bridge_deposit(wrong_amount).is_err());
+    }
+
+    #[test]
+    fn live_monero_bridge_verifies_withdrawal_payout() {
+        use nebula_monero::verify::{MoneroRpc, WalletTxProof};
+
+        #[derive(Debug)]
+        struct PayoutStub {
+            proof: WalletTxProof,
+        }
+        impl MoneroRpc for PayoutStub {
+            fn check_tx_key(&self, _: &str, _: &str, _: &str) -> Result<WalletTxProof, String> {
+                Ok(self.proof.clone())
+            }
+            fn tx_extra(&self, _: &str) -> Result<Vec<u8>, String> {
+                Ok(Vec::new())
+            }
+            fn custody_unlocked_balance(&self) -> Result<u128, String> {
+                Ok(u128::MAX)
+            }
+        }
+
+        const ADDR: &str = "9spAQWBqoTv3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ3rZwuSi5uqJ2vgNZzY";
+
+        // Build a launch-bound runtime with a pending withdrawal, then attach a live bridge whose
+        // node returns `proof` for the payout `check_tx_key`.
+        let setup = |proof: WalletTxProof| {
+            let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
+            runtime
+                .observe_bridge_deposit(signed_test_bridge_deposit('7', '8'))
+                .unwrap();
+            let withdrawal = runtime
+                .request_withdrawal(
+                    &test_account_id(),
+                    ADDR,
+                    2_000,
+                    0,
+                    &test_withdrawal_signature(ADDR, 2_000, 0),
+                )
+                .unwrap()
+                .withdrawal;
+            let finalized_tx_id = "f".repeat(64);
+            let proof_root = "1".repeat(64);
+            let (ids, roots, apprs) =
+                test_operator_approval_quorum(&withdrawal, &finalized_tx_id, &proof_root);
+            let runtime = runtime.with_monero_bridge(MoneroBridgeVerifier::new(
+                std::sync::Arc::new(PayoutStub { proof }),
+                ADDR,
+            ));
+            (
+                runtime,
+                withdrawal.withdrawal_id,
+                finalized_tx_id,
+                proof_root,
+                ids,
+                roots,
+                apprs,
+            )
+        };
+        let key = "cc".repeat(32);
+
+        // A node-confirmed payout of at least the requested amount finalizes.
+        let (mut runtime, id, tx, pr, ids, roots, apprs) = setup(WalletTxProof {
+            received_atomic: 2_000,
+            confirmations: 12,
+            in_pool: false,
+        });
+        let report = runtime
+            .finalize_withdrawal(&id, &tx, &pr, ids, roots, apprs, Some(&key))
+            .unwrap();
+        assert!(report.finalized);
+
+        // A payout that underpays the user is rejected.
+        let (mut runtime, id, tx, pr, ids, roots, apprs) = setup(WalletTxProof {
+            received_atomic: 1_999,
+            confirmations: 12,
+            in_pool: false,
+        });
+        assert!(runtime
+            .finalize_withdrawal(&id, &tx, &pr, ids, roots, apprs, Some(&key))
+            .is_err());
+
+        // Without the payout proof key the live bridge refuses to finalize.
+        let (mut runtime, id, tx, pr, ids, roots, apprs) = setup(WalletTxProof {
+            received_atomic: 2_000,
+            confirmations: 12,
+            in_pool: false,
+        });
+        assert!(runtime
+            .finalize_withdrawal(&id, &tx, &pr, ids, roots, apprs, None)
+            .is_err());
+    }
+
+    #[test]
+    fn verify_on_chain_custody_compares_against_wallet_balance() {
+        use nebula_monero::verify::{MoneroRpc, WalletTxProof};
+
+        #[derive(Debug)]
+        struct BalanceStub {
+            balance: u128,
+        }
+        impl MoneroRpc for BalanceStub {
+            fn check_tx_key(&self, _: &str, _: &str, _: &str) -> Result<WalletTxProof, String> {
+                Ok(WalletTxProof {
+                    received_atomic: 0,
+                    confirmations: 0,
+                    in_pool: false,
+                })
+            }
+            fn tx_extra(&self, _: &str) -> Result<Vec<u8>, String> {
+                Ok(Vec::new())
+            }
+            fn custody_unlocked_balance(&self) -> Result<u128, String> {
+                Ok(self.balance)
+            }
+        }
+
+        // Without a live bridge, on-chain custody cannot be verified.
+        let runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        assert!(runtime.verify_on_chain_custody().is_err());
+
+        // Credit 5_000 nXMR of liabilities, then attach a bridge whose custody wallet holds `bal`.
+        let build = |bal: u128| {
+            let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+            let mut deposit = test_bridge_deposit('5', '6');
+            deposit.account = test_account_id();
+            runtime.observe_bridge_deposit(deposit).unwrap();
+            runtime.with_monero_bridge(MoneroBridgeVerifier::new(
+                std::sync::Arc::new(BalanceStub { balance: bal }),
+                "custody",
+            ))
+        };
+
+        let report = build(10_000).verify_on_chain_custody().unwrap();
+        assert_eq!(report.required_units, 5_000);
+        assert_eq!(report.on_chain_unlocked_units, 10_000);
+        assert!(report.sufficient);
+
+        // An underfunded custody wallet is caught (would-be uncollateralized nXMR).
+        let short = build(4_999).verify_on_chain_custody().unwrap();
+        assert!(!short.sufficient);
+    }
+
+    #[test]
     fn configurable_quorum_overrides_defaults() {
         let mut binding = test_launch_binding();
         // Absent policy → the safe defaults; None binding → defaults too.
@@ -11666,6 +12037,7 @@ mod tests {
                 vec!["operator-a".to_string()],
                 vec!["2".repeat(64)],
                 Vec::new(),
+                None,
             )
             .unwrap_err()
             .contains("operator_approval_ids"));
@@ -11678,6 +12050,7 @@ mod tests {
                 vec!["operator-a".to_string(), "operator-a".to_string()],
                 vec!["2".repeat(64), "3".repeat(64)],
                 Vec::new(),
+                None,
             )
             .unwrap_err()
             .contains("operator_approval_ids[1] duplicates"));
@@ -11690,6 +12063,7 @@ mod tests {
                 vec!["operator-a".to_string(), "operator-b".to_string()],
                 vec!["2".repeat(64)],
                 Vec::new(),
+                None,
             )
             .unwrap_err()
             .contains("operator_approval_ids length"));
@@ -11702,6 +12076,7 @@ mod tests {
                 vec!["operator-a".to_string(), "operator-b".to_string()],
                 vec!["2".repeat(64), "3".repeat(64)],
                 Vec::new(),
+                None,
             )
             .unwrap();
         assert!(report.finalized);
@@ -11738,6 +12113,7 @@ mod tests {
                 vec!["operator-c".to_string(), "operator-d".to_string()],
                 vec!["7".repeat(64), "8".repeat(64)],
                 Vec::new(),
+                None,
             )
             .unwrap_err()
             .contains("already finalized"));
@@ -11749,6 +12125,7 @@ mod tests {
                 vec!["operator-c".to_string(), "operator-d".to_string()],
                 vec!["7".repeat(64), "8".repeat(64)],
                 Vec::new(),
+                None,
             )
             .unwrap_err()
             .contains("already used"));
@@ -11785,6 +12162,7 @@ mod tests {
                 vec!["operator-a".to_string(), "operator-b".to_string()],
                 vec!["2".repeat(64), "3".repeat(64)],
                 Vec::new(),
+                None,
             )
             .unwrap_err()
             .contains("operator_approvals"));
@@ -11804,6 +12182,7 @@ mod tests {
                 operator_ids.clone(),
                 stale_approval_roots,
                 stale_approvals,
+                None,
             )
             .unwrap_err()
             .contains(
@@ -11818,6 +12197,7 @@ mod tests {
                 operator_ids,
                 approval_roots,
                 approvals,
+                None,
             )
             .unwrap();
         assert!(report.finalized);
@@ -11856,6 +12236,7 @@ mod tests {
                 operator_ids,
                 approval_roots,
                 approvals,
+                None,
             )
             .unwrap_err()
             .contains("Ed25519"));
