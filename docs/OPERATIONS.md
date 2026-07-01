@@ -52,6 +52,12 @@ non-development deployment.
   investigate before producing further blocks.
 - `GET /metrics` — Prometheus text format for scraping.
 - Docker's `HEALTHCHECK` polls `/health` every 15s; `docker compose ps` shows the rollup.
+- `nebula_mainnetReadiness` (public RPC) — machine-readable mainnet gate assessment: the
+  code-checkable `blocking_gaps` (post-quantum sequencer key, live Monero verifier, quorum policy,
+  challenge window, operator/observer bonds, plus every public-ops gate) and the `external_gates`
+  that cannot be satisfied by code (external cryptographic audit, HSM/multisig custody ceremony,
+  deployment soak, live-value flip authorization). `code_gates_ready` must be `true` and every
+  external gate signed off before flipping `live_value_enabled`.
 
 ## Backup and restore
 

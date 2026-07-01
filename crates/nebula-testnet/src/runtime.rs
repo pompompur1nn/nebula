@@ -963,6 +963,18 @@ pub struct RuntimeOpsStatus {
     pub ops_root: String,
 }
 
+pub struct RuntimeMainnetReadinessFacts {
+    pub launch_binding_present: bool,
+    pub quorum_policy_present: bool,
+    pub withdrawal_challenge_window_ms: u128,
+    pub live_monero_verifier_configured: bool,
+    pub bridge_operator_count: usize,
+    pub bridge_observer_count: usize,
+    pub bonded_operator_count: usize,
+    pub bonded_observer_count: usize,
+    pub sequencer_key_scheme: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeBackupManifest {
     pub manifest_version: u32,
@@ -2470,6 +2482,66 @@ impl RuntimeRpcState {
         }))
     }
 
+    fn mainnet_readiness_json(&self) -> Result<Value, String> {
+        let ops = self.ops_status()?;
+        let facts = {
+            let runtime = self
+                .runtime
+                .lock()
+                .map_err(|_| "runtime mutex poisoned".to_string())?;
+            runtime.mainnet_readiness_facts()
+        };
+        let mut blocking_gaps: Vec<String> = ops
+            .blocking_gaps
+            .iter()
+            .filter(|gap| gap.as_str() != "bridge-live-value-enabled")
+            .cloned()
+            .collect();
+        if facts.sequencer_key_scheme != "hybrid-ed25519-mldsa65" {
+            blocking_gaps.push("sequencer-key-not-post-quantum".to_string());
+        }
+        if !facts.live_monero_verifier_configured {
+            blocking_gaps.push("live-monero-verifier-not-configured".to_string());
+        }
+        if facts.launch_binding_present && !facts.quorum_policy_present {
+            blocking_gaps.push("quorum-policy-not-configured".to_string());
+        }
+        if !facts.live_monero_verifier_configured && facts.withdrawal_challenge_window_ms == 0 {
+            blocking_gaps.push("withdrawal-challenge-window-not-configured".to_string());
+        }
+        if facts.launch_binding_present && facts.bonded_operator_count < facts.bridge_operator_count
+        {
+            blocking_gaps.push("bridge-operator-bonds-missing".to_string());
+        }
+        if facts.launch_binding_present && facts.bonded_observer_count < facts.bridge_observer_count
+        {
+            blocking_gaps.push("bridge-observer-bonds-missing".to_string());
+        }
+        Ok(json!({
+            "generated_at_unix_ms": ops.generated_at_unix_ms,
+            "chain_id": ops.chain_id,
+            "runtime_version": ops.runtime_version,
+            "node_role": ops.node_role,
+            "sequencer_key_scheme": facts.sequencer_key_scheme,
+            "live_monero_verifier_configured": facts.live_monero_verifier_configured,
+            "quorum_policy_present": facts.quorum_policy_present,
+            "withdrawal_challenge_window_ms": facts.withdrawal_challenge_window_ms,
+            "bridge_operator_count": facts.bridge_operator_count,
+            "bonded_operator_count": facts.bonded_operator_count,
+            "bridge_observer_count": facts.bridge_observer_count,
+            "bonded_observer_count": facts.bonded_observer_count,
+            "live_value_enabled": bridge_policy().live_value_enabled,
+            "code_gates_ready": blocking_gaps.is_empty(),
+            "blocking_gaps": blocking_gaps,
+            "external_gates": [
+                "external-cryptographic-audit",
+                "hsm-multisig-custody-ceremony",
+                "public-deployment-soak-and-readiness-review",
+                "live-value-flip-authorization",
+            ],
+        }))
+    }
+
     fn metrics_text(&self) -> Result<String, String> {
         let ops_status = self.ops_status()?;
         let status = {
@@ -3598,6 +3670,32 @@ impl NebulaRuntime {
             required_units,
             on_chain_unlocked_units,
         })
+    }
+
+    pub fn mainnet_readiness_facts(&self) -> RuntimeMainnetReadinessFacts {
+        let binding = self.config.launch_binding.as_ref();
+        let active_bonds = |role: &str| {
+            self.bridge_bonds
+                .values()
+                .filter(|bond| bond.role == role && bond.status == "active")
+                .count()
+        };
+        RuntimeMainnetReadinessFacts {
+            launch_binding_present: binding.is_some(),
+            quorum_policy_present: binding.map(|b| b.quorum_policy.is_some()).unwrap_or(false),
+            withdrawal_challenge_window_ms: withdrawal_challenge_window_ms(binding),
+            live_monero_verifier_configured: self.monero_bridge.is_some(),
+            bridge_operator_count: binding.map(|b| b.bridge_operator_keys.len()).unwrap_or(0),
+            bridge_observer_count: binding.map(|b| b.bridge_observer_keys.len()).unwrap_or(0),
+            bonded_operator_count: active_bonds("operator"),
+            bonded_observer_count: active_bonds("observer"),
+            sequencer_key_scheme: nebula_crypto::scheme_tag_for_public(
+                &self.config.sequencer_public_key_hex,
+                "sequencer_public_key",
+            )
+            .unwrap_or("unknown")
+            .to_string(),
+        }
     }
 
     pub fn post_bridge_bond(
@@ -5929,6 +6027,7 @@ fn dispatch_json_rpc_method(
     let result = match method {
         "nebula_status" => state.status_json(),
         "nebula_opsStatus" => state.ops_status().map(|status| json!(status)),
+        "nebula_mainnetReadiness" => state.mainnet_readiness_json(),
         "nebula_backupManifest" => state.backup_manifest().map(|manifest| json!(manifest)),
         "nebula_chainHead" => {
             let runtime = state.runtime.lock().expect("runtime mutex poisoned");
@@ -11264,6 +11363,53 @@ mod tests {
         assert_eq!(rpc_backup["rpc_client_identity_proxy_aware"], true);
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mainnet_readiness_reports_code_gates_and_external_gates() {
+        let mut runtime = NebulaRuntime::new(runtime_config_with_launch_binding()).unwrap();
+        rotate_runtime_off_default_dev_key(&mut runtime);
+        runtime.produce_block();
+        let state = test_rpc_state_with_limits(
+            runtime,
+            DEFAULT_MAX_REQUEST_BYTES,
+            DEFAULT_MAX_REQUESTS_PER_MINUTE,
+        );
+
+        let readiness =
+            dispatch_json_rpc_method(&state, "nebula_mainnetReadiness", json!({})).unwrap();
+
+        assert_eq!(readiness["code_gates_ready"], false);
+        assert_eq!(readiness["live_value_enabled"], false);
+        let gaps: Vec<&str> = readiness["blocking_gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|gap| gap.as_str().unwrap())
+            .collect();
+        assert!(gaps.contains(&"sequencer-key-not-post-quantum"));
+        assert!(gaps.contains(&"live-monero-verifier-not-configured"));
+        assert!(gaps.contains(&"bridge-operator-bonds-missing"));
+        assert!(gaps.contains(&"bridge-observer-bonds-missing"));
+        assert!(!gaps.contains(&"bridge-live-value-enabled"));
+        let external: Vec<&str> = readiness["external_gates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|gate| gate.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            external,
+            vec![
+                "external-cryptographic-audit",
+                "hsm-multisig-custody-ceremony",
+                "public-deployment-soak-and-readiness-review",
+                "live-value-flip-authorization",
+            ]
+        );
+        assert!(readiness["bridge_operator_count"].as_u64().unwrap() > 0);
+        assert_eq!(readiness["bonded_operator_count"], 0);
+        assert_eq!(readiness["sequencer_key_scheme"], "ed25519");
     }
 
     #[test]

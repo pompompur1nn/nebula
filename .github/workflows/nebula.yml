@@ -427,3 +427,28 @@ jobs:
 
       - name: Verify Nebula guide mirror
         run: cmp docs/NEBULA_LAYER2.md README.md
+
+  docker-image:
+    name: Nebula Docker packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose file
+        run: docker compose config -q
+
+      - name: Build node image
+        run: docker build -t nebula-node:ci .
+
+      - name: Smoke test node container health surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --rm --name nebula-ci -p 9944:9944 nebula-node:ci
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:9944/health >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:9944/health | python3 -c "import json,sys; payload = json.load(sys.stdin); assert payload['ok'] is True; assert payload['latest_height'] >= 0"
+          curl -sf http://127.0.0.1:9944/metrics | grep -q nebula
+          docker stop nebula-ci
