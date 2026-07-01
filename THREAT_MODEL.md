@@ -48,8 +48,10 @@ with the mitigations Nebula implements and the residual gaps. Read alongside
   points) so silent nXMR/point forgery is caught (`reexecute_replayable_state`); equivocation and
   mis-sign evidence halt all mutations fail-closed (`ensure_accountability_clean`). An equivocation
   report only wedges the chain if it carries **cryptographic proof** — the sequencer's signatures
-  over two *different* block hashes at the same height, verified against the key active at that
-  height (`validate_accountability_report`) — so a fabricated report cannot grief the chain. Key
+  over two *different* block hashes, verified against the key active at the reported height
+  (`validate_accountability_report`) — so a fabricated report cannot grief the chain (the proof
+  binds the key-era, not each opaque block hash's own height field; a full binding would carry the
+  two block headers, and reporting is admin-gated regardless). Key
   rotation is scheme-aware and quorum-gated; N-of-M block co-signing (when configured) requires
   validator attestations. **Residual:** NBLA balances, nonces, and the shielded-note set remain
   sequencer-attested (no in-block journal); chain-governed policy (fee floor, faucet rate, block/
