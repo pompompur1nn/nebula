@@ -4,15 +4,15 @@ use nebula_testnet::{
     build_operator_acceptance_json_pretty, build_operator_handoff_json_pretty,
     build_runtime_launch_binding_from_jsons, build_runtime_surface_evidence_json_pretty,
     runtime::{
-        bridge_observer_deposit_payload_root, bridge_observer_evidence_root,
+        block_hash_for, bridge_observer_deposit_payload_root, bridge_observer_evidence_root,
         sequencer_key_rotation_approval_root, sequencer_key_rotation_payload_root,
         serve_runtime_rpc_with_options, sign_runtime_root, withdrawal_authorization_root,
         withdrawal_operator_approval_root, withdrawal_operator_finalization_payload_root,
-        NebulaRuntime, RuntimeBridgeDeposit, RuntimeBridgeObserverEvidence, RuntimeConfig,
-        RuntimeLaunchBinding, RuntimeNodeOptions, RuntimePublicTestnetPeerManifestBinding,
-        RuntimeSequencerKeyRotationApproval, RuntimeStorage, RuntimeTransaction,
-        RuntimeWithdrawalOperatorApproval, RuntimeWithdrawalRequest,
-        DEFAULT_DEV_SEQUENCER_SECRET_KEY_HEX, MIN_BRIDGE_CONFIRMATIONS,
+        NebulaRuntime, RuntimeBlock, RuntimeBridgeDeposit, RuntimeBridgeObserverEvidence,
+        RuntimeConfig, RuntimeLaunchBinding, RuntimeNodeOptions,
+        RuntimePublicTestnetPeerManifestBinding, RuntimeSequencerKeyRotationApproval,
+        RuntimeStorage, RuntimeTransaction, RuntimeWithdrawalOperatorApproval,
+        RuntimeWithdrawalRequest, DEFAULT_DEV_SEQUENCER_SECRET_KEY_HEX, MIN_BRIDGE_CONFIRMATIONS,
     },
     sample_deployment_attestation_json_pretty, sample_public_probe_json_pretty,
     sample_public_status_manifest_json_pretty, sample_validator_set_json_pretty,
@@ -164,7 +164,8 @@ fn shielded_lifecycle_round_trips_over_rpc() {
     let b2 = Blinding::from_bytes([2u8; 32]);
     let b_in = b1.add(&b2);
     let note = commit(100, &b_in).to_hex();
-    let shield_root = nebula_testnet::runtime::shield_authorization_root(&account, 100, &note, 0);
+    let shield_root =
+        nebula_testnet::runtime::shield_authorization_root(CHAIN_ID, &account, 100, &note, 0);
     let shield = rpc_call(
         &rpc_addr,
         "nebula_shield",
@@ -1115,25 +1116,25 @@ fn launch_bound_accountability_report_blocks_public_ops_and_mutations() {
     let height = ops["latest_height"]
         .as_u64()
         .expect("latest height is numeric");
-    let first_block_hash = ops["latest_hash"]
-        .as_str()
-        .expect("latest hash is a string")
-        .to_string();
 
     let sequencer_secret = "3d".repeat(32);
-    let first_block_signature = sign_runtime_root(&sequencer_secret, &first_block_hash).unwrap();
-    let second_block_hash = hex_64("launch-bound-second-block");
-    let second_block_signature = sign_runtime_root(&sequencer_secret, &second_block_hash).unwrap();
+    let first_block: RuntimeBlock = serde_json::from_value(
+        rpc_result(&rpc_call(
+            &rpc_addr,
+            "nebula_getBlockByHeight",
+            json!({ "height": height }),
+        ))
+        .clone(),
+    )
+    .expect("latest block deserializes");
+    let second_block = conflicting_block(&first_block, &sequencer_secret);
     let report = rpc_call(
         &admin_addr,
         "nebula_reportEquivocation",
         json!({
             "admin_token": ADMIN_TOKEN,
-            "height": height,
-            "first_block_hash": first_block_hash,
-            "first_block_signature": first_block_signature,
-            "second_block_hash": second_block_hash,
-            "second_block_signature": second_block_signature,
+            "first_block": serde_json::to_value(&first_block).unwrap(),
+            "second_block": serde_json::to_value(&second_block).unwrap(),
             "reporter_id": "operator-a",
             "evidence_root": hex_64("launch-bound-equivocation"),
         }),
@@ -1191,26 +1192,16 @@ fn accountability_evidence_closes_admin_producer_mutations_but_remains_visible()
         json!({ "admin_token": ADMIN_TOKEN }),
     );
     let block = rpc_result(&block);
-    let height = block["height"].as_u64().expect("block height is a u64");
-    let first_block_hash = block["block_hash"]
-        .as_str()
-        .expect("block hash is a string");
-
-    let first_block_signature =
-        sign_runtime_root(DEFAULT_DEV_SEQUENCER_SECRET_KEY_HEX, first_block_hash).unwrap();
-    let second_block_hash = hex_64("second-block");
-    let second_block_signature =
-        sign_runtime_root(DEFAULT_DEV_SEQUENCER_SECRET_KEY_HEX, &second_block_hash).unwrap();
+    let first_block: RuntimeBlock =
+        serde_json::from_value(block.clone()).expect("produced block deserializes");
+    let second_block = conflicting_block(&first_block, DEFAULT_DEV_SEQUENCER_SECRET_KEY_HEX);
     let report = rpc_call(
         &admin_addr,
         "nebula_reportEquivocation",
         json!({
             "admin_token": ADMIN_TOKEN,
-            "height": height,
-            "first_block_hash": first_block_hash,
-            "first_block_signature": first_block_signature,
-            "second_block_hash": second_block_hash,
-            "second_block_signature": second_block_signature,
+            "first_block": serde_json::to_value(&first_block).unwrap(),
+            "second_block": serde_json::to_value(&second_block).unwrap(),
             "reporter_id": "operator-a",
             "evidence_root": hex_64("equivocation-evidence"),
         }),
@@ -1899,4 +1890,14 @@ fn hex_64(label: &str) -> String {
     let mut bytes = label.as_bytes().to_vec();
     bytes.resize(32, 0);
     hex::encode(bytes)
+}
+
+// Builds a second block at the SAME height as `base` with a distinct, validly-signed hash,
+// i.e. genuine equivocation evidence (the sequencer signing two conflicting height-H blocks).
+fn conflicting_block(base: &RuntimeBlock, sequencer_secret_key_hex: &str) -> RuntimeBlock {
+    let mut block = base.clone();
+    block.timestamp_unix_ms = base.timestamp_unix_ms.wrapping_add(1);
+    block.block_hash = block_hash_for(&block);
+    block.signature = sign_runtime_root(sequencer_secret_key_hex, &block.block_hash).unwrap();
+    block
 }

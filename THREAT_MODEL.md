@@ -48,11 +48,13 @@ with the mitigations Nebula implements and the residual gaps. Read alongside
   sequencer signature *and* re-execute the replayable columns (per-account nXMR + validator
   points) so silent nXMR/point forgery is caught (`reexecute_replayable_state`); equivocation and
   mis-sign evidence halt all mutations fail-closed (`ensure_accountability_clean`). An equivocation
-  report only wedges the chain if it carries **cryptographic proof** — the sequencer's signatures
-  over two *different* block hashes, verified against the key active at the reported height
-  (`validate_accountability_report`) — so a fabricated report cannot grief the chain (the proof
-  binds the key-era, not each opaque block hash's own height field; a full binding would carry the
-  two block headers, and reporting is admin-gated regardless). Key
+  report only wedges the chain if it carries **cryptographic proof** — the two conflicting block
+  headers, each re-hashed with `block_root` (which commits to height), whose recomputed hashes
+  match the signed hashes, whose heights both equal the reported height, and whose signatures
+  verify against the key active at that height (`validate_accountability_report`). Binding both
+  headers to a single height means two unrelated real block signatures (from different heights)
+  can no longer be replayed as a fabricated equivocation to grief a follower via snapshot import.
+  Key
   rotation is scheme-aware and quorum-gated; N-of-M block co-signing (when configured) requires
   validator attestations. **Residual:** NBLA balances, nonces, and the shielded-note set remain
   sequencer-attested (no in-block journal); chain-governed policy (fee floor, faucet rate, block/
@@ -99,7 +101,9 @@ with the mitigations Nebula implements and the residual gaps. Read alongside
 
 - **User ↔ sequencer:** users trust the sequencer for ordering, inclusion, and honest state.
 - **Sequencer ↔ followers:** followers trust the sequencer key for NBLA/nonce/shielded state;
-  they independently re-execute nXMR + points and can co-sign blocks.
+  they independently re-execute nXMR + points and can co-sign blocks. Snapshot validation binds
+  each block's `producer` to the configured sequencer validator id, so the per-account
+  nXMR/points re-execution cannot be redirected to an attacker-chosen validator id.
 - **Runtime ↔ bridge quorum:** the chain trusts the M-of-N quorum to report Monero facts
   honestly (reduced, not removed, by live node proofs + bonds).
 - **Bridge ↔ Monero node:** the observer trusts one operator-chosen node/wallet (pinned TLS).

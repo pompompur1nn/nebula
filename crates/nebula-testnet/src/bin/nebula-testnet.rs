@@ -411,8 +411,13 @@ fn build_shield(args: &[String], wants_json: bool) {
     });
     let blinding = nebula_privacy::Blinding::from_bytes(blinding_array);
     let commitment = nebula_privacy::commit(value, &blinding).to_hex();
-    let authorization_root =
-        nebula_testnet::runtime::shield_authorization_root(&account, amount, &commitment, nonce);
+    let authorization_root = nebula_testnet::runtime::shield_authorization_root(
+        nebula_testnet::CHAIN_ID,
+        &account,
+        amount,
+        &commitment,
+        nonce,
+    );
     let signature = nebula_crypto::scheme_sign_root(&secret_key, &authorization_root)
         .unwrap_or_else(|error| {
             eprintln!("shield signing failed: {error}");

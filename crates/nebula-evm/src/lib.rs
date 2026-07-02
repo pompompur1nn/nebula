@@ -236,6 +236,53 @@ impl EvmExecutor {
         )
     }
 
+    /// Read-only call that executes against a shared reference to the state database, so it
+    /// neither commits nor requires `&mut self` and — crucially — does not clone the whole
+    /// state. Callers can run it while holding only a shared borrow, avoiding an
+    /// O(total-state) copy per (potentially unauthenticated) view request.
+    pub fn view_ref(
+        &self,
+        caller_hex: &str,
+        contract_hex: &str,
+        calldata_hex: &str,
+        gas_limit: u64,
+    ) -> Result<EvmOutcome, String> {
+        let caller = parse_address(caller_hex, "caller")?;
+        let contract = parse_address(contract_hex, "contract")?;
+        let calldata = parse_bytes(calldata_hex, "calldata", MAX_CALLDATA_HEX_LEN)?;
+        let nonce = self
+            .db
+            .accounts
+            .get(&caller)
+            .map(|account| account.info.nonce)
+            .unwrap_or(0);
+        let mut evm = Evm::builder()
+            .with_ref_db(&self.db)
+            .modify_cfg_env(|cfg| {
+                cfg.chain_id = 6_874_269;
+            })
+            .modify_block_env(|block| {
+                block.basefee = U256::ZERO;
+                block.gas_limit = U256::from(gas_limit).max(U256::from(30_000_000u64));
+            })
+            .modify_tx_env(|tx| {
+                tx.caller = caller;
+                tx.transact_to = TxKind::Call(contract);
+                tx.data = calldata;
+                tx.value = U256::ZERO;
+                tx.gas_limit = gas_limit;
+                tx.gas_price = U256::ZERO;
+                tx.nonce = Some(nonce);
+            })
+            .build();
+        let result = evm
+            .transact()
+            .map_err(|error| format!("EVM execution failed: {error:?}"))?
+            .result;
+        drop(evm);
+        Ok(outcome_from_result(result))
+    }
+
     fn execute(
         &mut self,
         caller_hex: &str,

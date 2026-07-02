@@ -717,10 +717,8 @@ pub struct RuntimeSequencerKeyRotation {
 pub struct RuntimeAccountabilityReport {
     pub report_id: String,
     pub height: u64,
-    pub first_block_hash: String,
-    pub second_block_hash: String,
-    pub first_block_signature: String,
-    pub second_block_signature: String,
+    pub first_block: RuntimeBlock,
+    pub second_block: RuntimeBlock,
     pub reporter_id: String,
     pub evidence_root: String,
     pub reported_at_unix_ms: u128,
@@ -784,7 +782,7 @@ pub struct RuntimeSnapshotEconomics {
     pub nxmr_validator_reward_nebulai: u128,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeBlock {
     pub height: u64,
@@ -3261,7 +3259,9 @@ fn parse_blinding(blinding_hex: &str) -> Result<nebula_privacy::Blinding, String
     Ok(nebula_privacy::Blinding::from_bytes(bytes))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn evm_authorization_root(
+    chain_id: &str,
     account: &str,
     action: &str,
     target: &str,
@@ -3275,6 +3275,7 @@ pub fn evm_authorization_root(
     ));
     stable_runtime_root(&json!({
         "evm_domain": "nebula-runtime-evm-authorization-v1",
+        "chain_id": chain_id,
         "account": account,
         "action": action,
         "target": target.to_ascii_lowercase(),
@@ -3286,6 +3287,7 @@ pub fn evm_authorization_root(
 }
 
 pub fn shield_authorization_root(
+    chain_id: &str,
     account: &str,
     amount: u128,
     commitment_hex: &str,
@@ -3293,6 +3295,7 @@ pub fn shield_authorization_root(
 ) -> String {
     stable_runtime_root(&json!({
         "shield_domain": "nebula-runtime-shield-authorization-v1",
+        "chain_id": chain_id,
         "account": account,
         "amount": amount.to_string(),
         "commitment": commitment_hex,
@@ -3765,10 +3768,6 @@ impl NebulaRuntime {
         self.evm.storage_at(address_hex, slot_hex)
     }
 
-    pub fn evm_executor_snapshot(&self) -> nebula_evm::EvmExecutor {
-        self.evm.clone()
-    }
-
     pub fn evm_view(
         &self,
         caller_hex: &str,
@@ -3781,8 +3780,9 @@ impl NebulaRuntime {
                 "evm view gas_limit must be between 1 and {MAX_EVM_VIEW_GAS_LIMIT}"
             ));
         }
-        let mut executor = self.evm.clone();
-        executor.view(caller_hex, contract_hex, calldata_hex, gas_limit)
+        // Read-only, against a shared reference — no O(total-state) clone of the EVM db.
+        self.evm
+            .view_ref(caller_hex, contract_hex, calldata_hex, gas_limit)
     }
 
     fn evm_precheck_fee(
@@ -3896,6 +3896,7 @@ impl NebulaRuntime {
         }
         nebula_evm::validate_code_hex(init_code_hex, "init_code_hex")?;
         let authorization_root = evm_authorization_root(
+            &self.config.chain_id,
             account,
             "deploy",
             "",
@@ -3937,6 +3938,7 @@ impl NebulaRuntime {
         nebula_evm::validate_address_hex(contract_hex, "contract_hex")?;
         nebula_evm::validate_calldata_hex(calldata_hex, "calldata_hex")?;
         let authorization_root = evm_authorization_root(
+            &self.config.chain_id,
             account,
             "call",
             contract_hex,
@@ -3970,8 +3972,16 @@ impl NebulaRuntime {
         if amount == 0 {
             return Err("evm withdraw amount must be greater than zero".to_string());
         }
-        let authorization_root =
-            evm_authorization_root(account, "withdraw", "", "", amount, 0, nonce);
+        let authorization_root = evm_authorization_root(
+            &self.config.chain_id,
+            account,
+            "withdraw",
+            "",
+            "",
+            amount,
+            0,
+            nonce,
+        );
         verify_account_signature(account, &authorization_root, signature, "evm_signature")?;
         let caller_address = nebula_evm::evm_address_for_account(account);
         {
@@ -4765,28 +4775,32 @@ impl NebulaRuntime {
     #[allow(clippy::too_many_arguments)]
     pub fn report_equivocation(
         &mut self,
-        height: u64,
-        first_block_hash: &str,
-        first_block_signature: &str,
-        second_block_hash: &str,
-        second_block_signature: &str,
+        first_block: RuntimeBlock,
+        second_block: RuntimeBlock,
         reporter_id: &str,
         evidence_root: &str,
     ) -> Result<AccountabilityReportReceipt, String> {
-        if height == 0 {
+        if first_block.height == 0 {
             return Err("height must be greater than zero".to_string());
         }
-        let first_block_hash = normalize_fixed_hex(first_block_hash, "first_block_hash", 64)?;
-        let second_block_hash = normalize_fixed_hex(second_block_hash, "second_block_hash", 64)?;
-        if first_block_hash.eq_ignore_ascii_case(&second_block_hash) {
-            return Err("first_block_hash and second_block_hash must differ".to_string());
+        if first_block.height != second_block.height {
+            return Err(
+                "equivocation blocks must claim the same height to be conflicting".to_string(),
+            );
+        }
+        let height = first_block.height;
+        if first_block
+            .block_hash
+            .eq_ignore_ascii_case(&second_block.block_hash)
+        {
+            return Err("the two conflicting blocks must differ".to_string());
         }
         validate_account_id(reporter_id)?;
         let evidence_root = normalize_fixed_hex(evidence_root, "evidence_root", 64)?;
         let report_id = accountability_report_id(
             height,
-            &first_block_hash,
-            &second_block_hash,
+            &first_block.block_hash,
+            &second_block.block_hash,
             reporter_id,
             &evidence_root,
         );
@@ -4805,10 +4819,8 @@ impl NebulaRuntime {
         let mut report = RuntimeAccountabilityReport {
             report_id,
             height,
-            first_block_hash,
-            second_block_hash,
-            first_block_signature: first_block_signature.to_string(),
-            second_block_signature: second_block_signature.to_string(),
+            first_block,
+            second_block,
             reporter_id: reporter_id.to_string(),
             evidence_root,
             reported_at_unix_ms: unix_ms(),
@@ -5157,7 +5169,8 @@ impl NebulaRuntime {
         if self.shielded_notes.contains(&commitment) {
             return Err("shielded note commitment already exists".to_string());
         }
-        let authorization_root = shield_authorization_root(account, amount, &commitment, nonce);
+        let authorization_root =
+            shield_authorization_root(&self.config.chain_id, account, amount, &commitment, nonce);
         verify_account_signature(account, &authorization_root, signature, "shield_signature")?;
         let sender = self
             .accounts
@@ -6640,14 +6653,10 @@ fn dispatch_json_rpc_method(
             let gas_limit = optional_u64_param(&params, "gas_limit")?
                 .unwrap_or(nebula_evm::DEFAULT_GAS_LIMIT)
                 .min(MAX_EVM_VIEW_GAS_LIMIT);
-            nebula_evm::validate_address_hex(&caller, "caller")?;
-            nebula_evm::validate_address_hex(&contract, "contract")?;
-            nebula_evm::validate_calldata_hex(&calldata, "calldata")?;
-            let mut executor = {
+            let outcome = {
                 let runtime = state.runtime.lock().expect("runtime mutex poisoned");
-                runtime.evm_executor_snapshot()
+                runtime.evm_view(&caller, &contract, &calldata, gas_limit)?
             };
-            let outcome = executor.view(&caller, &contract, &calldata, gas_limit)?;
             Ok(json!(outcome))
         }
         "nebula_evmDeploy" => {
@@ -6959,21 +6968,27 @@ fn dispatch_json_rpc_method(
         }
         "nebula_reportEquivocation" => {
             ensure_admin_rpc(state, &params, method)?;
-            let height = required_u64_param(&params, "height")?;
-            let first_block_hash = required_str_param(&params, "first_block_hash")?;
-            let first_block_signature = required_str_param(&params, "first_block_signature")?;
-            let second_block_hash = required_str_param(&params, "second_block_hash")?;
-            let second_block_signature = required_str_param(&params, "second_block_signature")?;
+            let first_block: RuntimeBlock = serde_json::from_value(
+                params
+                    .get("first_block")
+                    .cloned()
+                    .ok_or_else(|| "missing first_block param".to_string())?,
+            )
+            .map_err(|error| format!("first_block is not a valid block: {error}"))?;
+            let second_block: RuntimeBlock = serde_json::from_value(
+                params
+                    .get("second_block")
+                    .cloned()
+                    .ok_or_else(|| "missing second_block param".to_string())?,
+            )
+            .map_err(|error| format!("second_block is not a valid block: {error}"))?;
             let reporter_id = required_str_param(&params, "reporter_id")?;
             let evidence_root = required_str_param(&params, "evidence_root")?;
             let report = {
                 let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
                 runtime.report_equivocation(
-                    height,
-                    &first_block_hash,
-                    &first_block_signature,
-                    &second_block_hash,
-                    &second_block_signature,
+                    first_block,
+                    second_block,
                     &reporter_id,
                     &evidence_root,
                 )?
@@ -7452,12 +7467,38 @@ fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<(), String> {
     validate_accountability_reports(snapshot)?;
     validate_validator_fee_preferences(snapshot)?;
 
+    // The producer id is the key input to follower re-execution of per-account nXMR and
+    // validator points (reexecute_replayable_state keys reward/point attribution off
+    // block.producer). It must be uniform across the chain and, when a launch binding pins the
+    // validator reward accounts, must be one of those launch-attested validators — otherwise a
+    // compromised sequencer could sign valid blocks that attribute rewards/points to an
+    // arbitrary account while keeping every conservation total consistent.
+    let chain_producer = snapshot.blocks[0].producer.clone();
+    if let Some(binding) = snapshot.config.launch_binding.as_ref() {
+        if !binding.validator_reward_accounts.is_empty()
+            && !binding
+                .validator_reward_accounts
+                .iter()
+                .any(|account| account.validator_id == chain_producer)
+        {
+            return Err(format!(
+                "block producer {chain_producer} is not a launch-attested validator"
+            ));
+        }
+    }
+
     let mut previous_hash: Option<String> = None;
     for (index, block) in snapshot.blocks.iter().enumerate() {
         if block.height != index as u64 {
             return Err(format!(
                 "block height gap at index {index}: got {}",
                 block.height
+            ));
+        }
+        if block.producer != chain_producer {
+            return Err(format!(
+                "block {} producer {} diverges from the chain producer {chain_producer}",
+                block.height, block.producer
             ));
         }
         if let Some(parent_hash) = &previous_hash {
@@ -8183,43 +8224,50 @@ fn validate_accountability_report(
         return Err("height must be greater than zero".to_string());
     }
     validate_fixed_hex(&report.report_id, "report_id", 64)?;
-    validate_fixed_hex(&report.first_block_hash, "first_block_hash", 64)?;
-    validate_fixed_hex(&report.second_block_hash, "second_block_hash", 64)?;
-    if report
-        .first_block_hash
-        .eq_ignore_ascii_case(&report.second_block_hash)
-    {
-        return Err("first_block_hash and second_block_hash must differ".to_string());
-    }
     validate_account_id(&report.reporter_id)?;
     validate_fixed_hex(&report.evidence_root, "evidence_root", 64)?;
-    if report.first_block_signature.trim().is_empty()
-        || report.second_block_signature.trim().is_empty()
-    {
-        return Err(
-            "accountability report must carry both conflicting-block signatures".to_string(),
-        );
+
+    // A sound equivocation proof must show the sequencer signed two DIFFERENT blocks that
+    // both claim report.height. Each conflicting block header is re-hashed with block_root
+    // (which commits to height), its recomputed hash must equal the stored block_hash, its
+    // height must equal report.height, and its signature must verify under the key active
+    // at that height. This binds the proof to a single height so two unrelated real block
+    // signatures (from different heights) can no longer be replayed as a fake equivocation.
+    for (label, block) in [
+        ("first_block", &report.first_block),
+        ("second_block", &report.second_block),
+    ] {
+        if block.height != report.height {
+            return Err(format!(
+                "{label} height {} does not match reported equivocation height {}",
+                block.height, report.height
+            ));
+        }
+        if block.block_hash != block_root(block) {
+            return Err(format!("{label} hash does not match its header contents"));
+        }
+        nebula_crypto::scheme_verify_root(
+            sequencer_public_key,
+            &block.block_hash,
+            &block.signature,
+        )
+        .map_err(|error| {
+            format!(
+                "{label} is not signed by the sequencer key active at the reported height: {error}"
+            )
+        })?;
     }
-    nebula_crypto::scheme_verify_root(
-        sequencer_public_key,
-        &report.first_block_hash,
-        &report.first_block_signature,
-    )
-    .map_err(|error| {
-        format!("first_block_signature is not a valid sequencer signature for the reported height: {error}")
-    })?;
-    nebula_crypto::scheme_verify_root(
-        sequencer_public_key,
-        &report.second_block_hash,
-        &report.second_block_signature,
-    )
-    .map_err(|error| {
-        format!("second_block_signature is not a valid sequencer signature for the reported height: {error}")
-    })?;
+    if report
+        .first_block
+        .block_hash
+        .eq_ignore_ascii_case(&report.second_block.block_hash)
+    {
+        return Err("the two conflicting blocks must differ".to_string());
+    }
     let expected_report_id = accountability_report_id(
         report.height,
-        &report.first_block_hash,
-        &report.second_block_hash,
+        &report.first_block.block_hash,
+        &report.second_block.block_hash,
         &report.reporter_id,
         &report.evidence_root,
     );
@@ -10112,10 +10160,10 @@ fn accountability_report_root(report: &RuntimeAccountabilityReport) -> String {
         "accountability_report_domain": "nebula-runtime-sequencer-accountability-report-v1",
         "report_id": report.report_id,
         "height": report.height,
-        "first_block_hash": report.first_block_hash,
-        "second_block_hash": report.second_block_hash,
-        "first_block_signature": report.first_block_signature,
-        "second_block_signature": report.second_block_signature,
+        "first_block_hash": report.first_block.block_hash,
+        "second_block_hash": report.second_block.block_hash,
+        "first_block_signature": report.first_block.signature,
+        "second_block_signature": report.second_block.signature,
         "reporter_id": report.reporter_id,
         "evidence_root": report.evidence_root,
         "reported_at_unix_ms": report.reported_at_unix_ms,
@@ -10220,6 +10268,13 @@ fn snapshot_root(snapshot: &RuntimeSnapshot) -> String {
         value["evm_state"] = json!(snapshot.evm_state);
     }
     stable_runtime_root(&value)
+}
+
+/// Recomputes a block's canonical hash (the value the sequencer signs). Exposed so that
+/// off-chain tooling assembling an equivocation report can bind a conflicting block header
+/// to its signed hash the same way `validate_accountability_report` does.
+pub fn block_hash_for(block: &RuntimeBlock) -> String {
+    block_root(block)
 }
 
 fn block_root(block: &RuntimeBlock) -> String {
@@ -12281,6 +12336,7 @@ mod tests {
         nonce: u64,
     ) -> String {
         sign_test_root(&evm_authorization_root(
+            CHAIN_ID,
             account,
             action,
             target,
@@ -12366,7 +12422,7 @@ mod tests {
                 700,
                 3,
                 &sign_test_root(&evm_authorization_root(
-                    &account, "withdraw", "", "", 700, 0, 3,
+                    CHAIN_ID, &account, "withdraw", "", "", 700, 0, 3,
                 )),
             )
             .unwrap();
@@ -12441,7 +12497,7 @@ mod tests {
                 50,
                 0,
                 &sign_test_root(&evm_authorization_root(
-                    &account, "withdraw", "", "", 50, 0, 0
+                    CHAIN_ID, &account, "withdraw", "", "", 50, 0, 0
                 )),
             )
             .is_err());
@@ -13646,7 +13702,8 @@ mod tests {
     ) -> String {
         let account = test_account_id();
         let commitment = nebula_privacy::commit(amount as u64, blinding).to_hex();
-        let authorization_root = shield_authorization_root(&account, amount, &commitment, nonce);
+        let authorization_root =
+            shield_authorization_root(CHAIN_ID, &account, amount, &commitment, nonce);
         let signature = sign_test_root(&authorization_root);
         runtime
             .shield(
@@ -13677,18 +13734,30 @@ mod tests {
 
         let wrong_sig = sign_root_with_seed(
             0xee,
-            &shield_authorization_root(&account, 50, &commitment, 0),
+            &shield_authorization_root(CHAIN_ID, &account, 50, &commitment, 0),
         );
         assert!(runtime
             .shield(&account, 50, &blinding_hex, 0, &wrong_sig)
             .is_err());
 
-        let stale_sig = sign_test_root(&shield_authorization_root(&account, 50, &commitment, 5));
+        let stale_sig = sign_test_root(&shield_authorization_root(
+            CHAIN_ID,
+            &account,
+            50,
+            &commitment,
+            5,
+        ));
         assert!(runtime
             .shield(&account, 50, &blinding_hex, 5, &stale_sig)
             .is_err());
 
-        let good_sig = sign_test_root(&shield_authorization_root(&account, 50, &commitment, 0));
+        let good_sig = sign_test_root(&shield_authorization_root(
+            CHAIN_ID,
+            &account,
+            50,
+            &commitment,
+            0,
+        ));
         runtime
             .shield(&account, 50, &blinding_hex, 0, &good_sig)
             .unwrap();
@@ -14588,38 +14657,54 @@ mod tests {
             .contains("operator_approvals"));
     }
 
+    fn conflicting_block_at_same_height(base: &RuntimeBlock, secret: &str) -> RuntimeBlock {
+        let mut block = base.clone();
+        block.timestamp_unix_ms = base.timestamp_unix_ms.wrapping_add(1);
+        block.block_hash = block_root(&block);
+        block.signature = sign_block_hash(&block.block_hash, secret).unwrap();
+        block
+    }
+
     #[test]
     fn runtime_records_equivocation_accountability_report() {
         let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
         runtime.produce_block();
         let first_block = runtime.latest_block();
-        let first_block_hash = first_block.block_hash.clone();
-        let first_block_signature = first_block.signature.clone();
         let secret = runtime.sequencer_secret_key_hex.clone().unwrap();
-        let second_block_hash = "e".repeat(64);
-        let second_block_signature = sign_block_hash(&second_block_hash, &secret).unwrap();
+        let second_block = conflicting_block_at_same_height(&first_block, &secret);
 
-        let forged = "1".repeat(64);
+        // A conflicting block whose signature does not verify is rejected.
+        let mut bad_second = second_block.clone();
+        bad_second.signature = sign_block_hash(&"1".repeat(64), &secret).unwrap();
         assert!(runtime
             .report_equivocation(
-                1,
-                &first_block_hash,
-                &forged,
-                &second_block_hash,
-                &second_block_signature,
+                first_block.clone(),
+                bad_second,
                 "observer-a",
                 &"c".repeat(64),
             )
             .unwrap_err()
-            .contains("first_block_signature"));
+            .contains("not signed by the sequencer"));
+
+        // Two blocks at different heights are not a valid equivocation proof.
+        let mut wrong_height = second_block.clone();
+        wrong_height.height = 2;
+        wrong_height.block_hash = block_root(&wrong_height);
+        wrong_height.signature = sign_block_hash(&wrong_height.block_hash, &secret).unwrap();
+        assert!(runtime
+            .report_equivocation(
+                first_block.clone(),
+                wrong_height,
+                "observer-a",
+                &"c".repeat(64),
+            )
+            .unwrap_err()
+            .contains("same height"));
 
         let receipt = runtime
             .report_equivocation(
-                1,
-                &first_block_hash,
-                &first_block_signature,
-                &second_block_hash,
-                &second_block_signature,
+                first_block.clone(),
+                second_block.clone(),
                 "observer-a",
                 &"c".repeat(64),
             )
@@ -14629,15 +14714,7 @@ mod tests {
         assert!(!receipt.sequencer_accountability_clean);
         assert_eq!(receipt.accountability_root.len(), 64);
         assert!(runtime
-            .report_equivocation(
-                1,
-                &second_block_hash,
-                &second_block_signature,
-                &first_block_hash,
-                &first_block_signature,
-                "observer-a",
-                &"c".repeat(64),
-            )
+            .report_equivocation(second_block, first_block, "observer-a", &"c".repeat(64),)
             .unwrap_err()
             .contains("already exists"));
 
@@ -14660,15 +14737,21 @@ mod tests {
 
     #[test]
     fn validate_snapshot_rejects_unproven_accountability_report() {
-        let runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        // An attacker cannot sign a conflicting block, so a report whose conflicting-block
+        // signature does not verify must be rejected on snapshot import.
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        runtime.produce_block();
+        let first_block = runtime.latest_block();
+        let secret = runtime.sequencer_secret_key_hex.clone().unwrap();
+        let mut second_block = conflicting_block_at_same_height(&first_block, &secret);
+        second_block.signature = "0".repeat(second_block.signature.len());
+
         let mut snapshot = runtime.export_snapshot();
         let mut report = RuntimeAccountabilityReport {
             report_id: String::new(),
-            height: 1,
-            first_block_hash: "a".repeat(64),
-            second_block_hash: "b".repeat(64),
-            first_block_signature: "0".repeat(128),
-            second_block_signature: "0".repeat(128),
+            height: first_block.height,
+            first_block: first_block.clone(),
+            second_block: second_block.clone(),
             reporter_id: "attacker".to_string(),
             evidence_root: "c".repeat(64),
             reported_at_unix_ms: 1,
@@ -14676,8 +14759,8 @@ mod tests {
         };
         report.report_id = accountability_report_id(
             report.height,
-            &report.first_block_hash,
-            &report.second_block_hash,
+            &report.first_block.block_hash,
+            &report.second_block.block_hash,
             &report.reporter_id,
             &report.evidence_root,
         );
@@ -14686,7 +14769,65 @@ mod tests {
         snapshot.root = snapshot_root(&snapshot);
 
         let error = validate_snapshot(&snapshot).unwrap_err();
-        assert!(error.contains("signature"), "{error}");
+        assert!(error.contains("not signed by the sequencer"), "{error}");
+    }
+
+    #[test]
+    fn validate_snapshot_rejects_block_producer_divergence() {
+        // A compromised sequencer that stamps a block with a different producer id (to redirect
+        // re-executed validator points/rewards to another account) must be rejected.
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        runtime.produce_block();
+        let mut snapshot = runtime.export_snapshot();
+        snapshot.blocks.last_mut().unwrap().producer = "attacker-validator".to_string();
+        refresh_default_signed_snapshot_roots(&mut snapshot);
+        let error = validate_snapshot(&snapshot).unwrap_err();
+        assert!(
+            error.contains("diverges from the chain producer"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn validate_snapshot_rejects_forged_equivocation_from_two_real_block_signatures() {
+        // The replay vector: a peer takes two genuinely-signed blocks at DIFFERENT heights
+        // and fabricates an equivocation report to permanently halt a follower. Binding the
+        // proof to a single height must reject it.
+        let mut runtime = NebulaRuntime::new(RuntimeConfig::public_testnet_default()).unwrap();
+        runtime.produce_block();
+        runtime.produce_block();
+        let snapshot_blocks = runtime.export_snapshot().blocks;
+        let block1 = snapshot_blocks[1].clone();
+        let block2 = snapshot_blocks[2].clone();
+        assert_ne!(block1.height, block2.height);
+
+        let mut snapshot = runtime.export_snapshot();
+        let mut report = RuntimeAccountabilityReport {
+            report_id: String::new(),
+            height: block1.height,
+            first_block: block1.clone(),
+            second_block: block2.clone(),
+            reporter_id: "attacker".to_string(),
+            evidence_root: "c".repeat(64),
+            reported_at_unix_ms: 1,
+            root: String::new(),
+        };
+        report.report_id = accountability_report_id(
+            report.height,
+            &report.first_block.block_hash,
+            &report.second_block.block_hash,
+            &report.reporter_id,
+            &report.evidence_root,
+        );
+        report.root = accountability_report_root(&report);
+        snapshot.accountability_reports.push(report);
+        snapshot.root = snapshot_root(&snapshot);
+
+        let error = validate_snapshot(&snapshot).unwrap_err();
+        assert!(
+            error.contains("does not match reported equivocation height"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -14731,19 +14872,18 @@ mod tests {
         assert_eq!(block["height"], 2);
         assert_eq!(block["producer_public_key"], new_public_key_hex);
 
-        let second_block_hash = "f".repeat(64);
-        let second_block_signature =
-            sign_block_hash(&second_block_hash, &new_secret_key_hex).unwrap();
+        let block2_json =
+            dispatch_json_rpc_method(&state, "nebula_getBlockByHeight", json!({"height": 2}))
+                .unwrap();
+        let first_block: RuntimeBlock = serde_json::from_value(block2_json).unwrap();
+        let second_block = conflicting_block_at_same_height(&first_block, &new_secret_key_hex);
         let receipt = dispatch_json_rpc_method(
             &state,
             "nebula_reportEquivocation",
             json!({
                 "admin_token": "admin",
-                "height": block["height"],
-                "first_block_hash": block["block_hash"].as_str().unwrap(),
-                "first_block_signature": block["signature"].as_str().unwrap(),
-                "second_block_hash": second_block_hash,
-                "second_block_signature": second_block_signature,
+                "first_block": serde_json::to_value(&first_block).unwrap(),
+                "second_block": serde_json::to_value(&second_block).unwrap(),
                 "reporter_id": "observer-a",
                 "evidence_root": "a".repeat(64),
             }),
@@ -15716,6 +15856,9 @@ mod tests {
                 .unwrap();
         peer_runtime.produce_block();
         let peer_snapshot = peer_runtime.export_snapshot();
+        // A second, distinct sync peer (distinct config.validator_id, which is how the quorum
+        // counts distinct peers) serving the same canonical chain tip. Its blocks still carry
+        // the chain's single producer id, which validate_snapshot requires to be uniform.
         let mut second_peer_snapshot = peer_snapshot.clone();
         second_peer_snapshot.config.validator_id = "validator-b".to_string();
         second_peer_snapshot.root = snapshot_root(&second_peer_snapshot);
