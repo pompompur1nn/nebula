@@ -92,7 +92,9 @@ Stateless signing/verification used by both signer and verifiers.
 - **Invariants (24 mapped):** no deposit double-mint incl. hex-case variants (`runtime.rs:4427`);
   withdrawal finalize replay guards on tx-id/proof-root reuse (`runtime.rs:4613`); reverted
   withdrawals excluded from custody (`runtime.rs:8289`); slashing burns the bond, never credits
-  (`runtime.rs:4386`); M-of-N observer/operator quorums with dedup (`runtime.rs:9326`); live-mode
+  (`runtime.rs:4386`); M-of-N observer/operator quorums with id/root dedup via
+  `validate_identity_root_quorum`/`validate_quorum_roots` (`runtime.rs:9337-9386`), invoked for
+  deposit observers (`runtime.rs:8560`) and withdrawal operators (`runtime.rs:4606`); live-mode
   deposit verified against a Monero node — exact amount, ≥10 confirmations, not-in-pool, custody
   address, `tx_extra` account binding (`runtime.rs:4443`, `nebula-monero/src/verify.rs:69`).
 - **Residual:** on the shipped default (no launch binding, no live verifier) observer/operator
@@ -164,7 +166,10 @@ Stateless signing/verification used by both signer and verifiers.
 - **Residual:** sync quorum counts distinct peers by **self-reported** `config.validator_id`
   (Sybil-able by one fork under many ids); `DEFAULT_SYNC_PEER_QUORUM = 1` unless a manifest raises
   it; the initial-bootstrap path does not enforce quorum; without a launch binding, rotations
-  require **zero** operator approvals.
+  require zero **signed** operator approvals — the signed `operator_approvals` vector may be empty
+  (`runtime.rs:9084-9092`); ≥2 unsigned, sequencer-authored approval id/root strings are still
+  structurally required (`rotation_quorum(None) = 2`) but carry no cryptographic authority, so the
+  effective authorization barrier is nil.
 - **Focus:** the key-rotation approval chain and `resolve_sequencer_public_key_for_height`
   boundary behavior across activation heights (an off-by-one checks a block against the wrong key).
 
@@ -213,12 +218,15 @@ Arbitrary-input never-panic and property harnesses (deterministic LCG-seeded, no
 - `nebula-evm`: `parse_address`/`parse_bytes`/`parse_u256`, every executor entry point, and
   `import_state` never-panic on arbitrary input; export/import round-trip.
 - `nebula-testnet`: HTTP framing + param helpers never-panic; `quote_hybrid_fee` + in-kind split
-  property; custody + re-execution hold across random fee/preference/deposit/withdrawal mixes;
+  property; custody + re-execution hold across random fee-asset / fee-preference mixes (single
+  fixed deposit, transfers only — see recommended additions for withdrawal/revert coverage);
   out-of-range-`u128` rejection; `note_owners` fold.
 
 **Recommended additions before/for the audit:** coverage-guided fuzzing (`cargo-fuzz`) on
 `validate_snapshot` and the crypto verify paths; ML-DSA known-answer differential vectors; a
-`cargo-deny` supply-chain gate.
+`cargo-deny` supply-chain gate; a custody property test that exercises bridge withdrawals
+including the reverted-withdrawal path (needs a launch-bound runtime with a non-zero challenge
+window, so it is not covered by the transfers-only custody harness above).
 
 ## 7. Out of scope for this testnet (documented design limits, not defects)
 
